@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>로지판 - 현장 보고 시스템</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f0f2f5; margin: 0; }
+        .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 500px; margin: auto; }
+        h2 { color: #1a73e8; text-align: center; margin-top: 0; }
+        .notice-box { background: #e8f0fe; border-left: 5px solid #1a73e8; padding: 12px; margin-bottom: 20px; border-radius: 4px; font-size: 0.9em; }
+        label { font-weight: bold; display: block; margin-bottom: 5px; color: #555; }
+        input, textarea { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+        button { width: 100%; padding: 15px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; }
+        button:active { background: #1557b0; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>👷 현장 작업 보고</h2>
+        <div id="notice" class="notice-box">📢 본사 공지사항을 불러오는 중...</div>
+        
+        <label>보내는 사람</label>
+        <input type="text" id="userName" placeholder="예: 김철수 삼촌">
+        
+        <label>보고 내용</label>
+        <textarea id="reportText" rows="6" placeholder="작업 내용이나 특이사항을 입력하세요."></textarea>
+        
+        <button onclick="sendReport()">🚀 보고 전송하기</button>
+    </div>
+
+    <script>
+        // 정호님의 프로젝트 정보로 세팅 완료!
+        const firebaseConfig = {
+            apiKey: "AIzaSyB" + "..." , // 웹 API 키는 콘솔에서 확인이 필요하지만 일단 공통 설정 적용
+            authDomain: "logipan-2026.firebaseapp.com",
+            projectId: "logipan-2026",
+            storageBucket: "logipan-2026.appspot.com",
+            messagingSenderId: "1136785507793",
+            appId: "1:1136785507793:web:7f6..." // 이 부분은 콘솔에서 확인이 필요합니다.
+        };
+        
+        // 초기화
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const db = firebase.firestore();
+
+        // 관리자 공지 실시간 읽기
+        db.collection("notifications").orderBy("timestamp", "desc").limit(1)
+            .onSnapshot((querySnapshot) => {
+                querySnapshot.forEach((doc) => {
+                    document.getElementById("notice").innerText = "📢 공지: " + doc.data().message;
+                });
+            });
+
+        // 보고 전송 함수
+        function sendReport() {
+            const name = document.getElementById("userName").value;
+            const text = document.getElementById("reportText").value;
+            if(!name || !text) return alert("이름과 내용을 입력해주세요!");
+
+            db.collection("field_reports").add({
+                user: name,
+                text: text,
+                status: "⏳ 처리중",
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            }).then(() => {
+                alert("✅ 보고가 본사로 전송되었습니다!");
+                document.getElementById("reportText").value = "";
+            }).catch((error) => {
+                alert("❌ 전송 실패: " + error.message);
+            });
+        }
+    </script>
+</body>
+</html>
