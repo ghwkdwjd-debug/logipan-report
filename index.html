@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로지판 - 현장 보고</title>
+    <title>로지판 - 현장 보고 시스템</title>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
@@ -22,6 +22,9 @@
         .done { background: #e8f5e9; color: #2e7d32; }
         .reply-area { margin-top: 12px; padding: 10px; background: #f1f8ff; border-radius: 6px; border-left: 4px solid #1a73e8; font-size: 14px; display: none; }
         .user-display { background: #eee; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 15px; font-size: 14px; cursor: pointer; }
+        .re-reply-box { margin-top: 10px; display: flex; gap: 5px; }
+        .re-reply-input { flex: 1; padding: 8px !important; margin-bottom: 0 !important; font-size: 13px !important; }
+        .re-reply-btn { width: 60px !important; padding: 8px !important; font-size: 13px !important; background: #007bff !important; }
     </style>
 </head>
 <body>
@@ -30,12 +33,15 @@
         
         <div id="userDisplay" class="user-display" onclick="askName()">👤 이름을 등록해주세요 (클릭)</div>
         <input type="hidden" id="userName"> 
+
+        <label>📌 보고 제목</label>
+        <input type="text" id="reportTitle" placeholder="예: 3번 구역 하차 요청">
         
         <label>📸 현장 사진 촬영</label>
         <input type="file" id="photoInput" accept="image/*" capture="camera">
         
-        <label>보고 및 확인요청</label>
-        <textarea id="reportText" rows="4" placeholder="사장님께 전달할 내용을 입력하세요"></textarea>
+        <label>📝 상세 내용</label>
+        <textarea id="reportText" rows="4" placeholder="상세한 내용을 입력하세요"></textarea>
         
         <button onclick="uploadAndSend()">🚀 확인요청 보내기</button>
 
@@ -48,6 +54,7 @@
     </div>
 
     <script>
+        // 정호님 파이어베이스 키값 (유지)
         const firebaseConfig = {
             apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", 
             authDomain: "logipan-2026.firebaseapp.com",
@@ -60,7 +67,6 @@
         const db = firebase.firestore();
         const storage = firebase.storage();
 
-        // [새 기능] 이름 묻는 팝업 함수
         function askName() {
             const name = prompt("성함을 입력해주세요 (예: 홍길동)");
             if (name && name.trim() !== "") {
@@ -70,30 +76,25 @@
             }
         }
 
-        // UI에 이름 표시 업데이트
         function updateUserUI(name) {
             document.getElementById("userName").value = name;
             document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (클릭시 변경)";
         }
 
-        // 페이지 로드 시 실행
         window.onload = function() {
             const savedName = localStorage.getItem("logipan_user_name");
-            if (!savedName) {
-                askName(); // 이름 없으면 팝업 띄움
-            } else {
-                updateUserUI(savedName);
-                loadMyBoard(savedName);
-            }
+            if (!savedName) { askName(); } 
+            else { updateUserUI(savedName); loadMyBoard(savedName); }
         };
 
         async function uploadAndSend() {
             const name = document.getElementById('userName').value;
+            const title = document.getElementById('reportTitle').value;
             const text = document.getElementById('reportText').value;
             const file = document.getElementById('photoInput').files[0];
 
             if(!name) return askName();
-            if(!text) return alert("보고 내용을 입력해주세요!");
+            if(!title || !text) return alert("제목과 내용을 입력해주세요!");
 
             let imageUrl = "";
             try {
@@ -105,12 +106,14 @@
 
                 await db.collection("field_reports").add({
                     user: name,
+                    title: title, // 제목 추가
                     text: text,
                     imageUrl: imageUrl,
                     status: "⏳ 처리중",
                     timestamp: firebase.firestore.FieldValue.serverTimestamp()
                 });
                 alert("성공적으로 전달되었습니다!");
+                document.getElementById('reportTitle').value = "";
                 document.getElementById('reportText').value = "";
                 document.getElementById('photoInput').value = "";
             } catch (e) { alert("전송 실패: " + e.message); }
@@ -119,7 +122,6 @@
         function loadMyBoard(userName) {
             db.collection("field_reports")
               .where("user", "==", userName)
-              // .orderBy("timestamp", "desc")
               .limit(10)
               .onSnapshot(snap => {
                 const listDiv = document.getElementById("reportList");
@@ -135,11 +137,11 @@
                     item.className = "report-item";
                     item.innerHTML = `
                         <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
-                        <div style="font-size:15px;">${data.text}</div>
-                        ${data.imageUrl ? '<p style="font-size:12px; color:blue;">🖼️ 사진 첨부됨</p>' : ''}
+                        <div style="font-weight:bold; font-size:16px; margin-bottom:5px;">${data.title || '제목 없음'}</div>
+                        <div style="font-size:14px; color:#555;">${data.text}</div>
+                        ${data.imageUrl ? '<p style="font-size:12px; color:blue; margin-top:5px;">🖼️ 사진 첨부됨</p>' : ''}
                         <div id="reply-${doc.id}" class="reply-area">
-                            <strong>💡 사장님 지시:</strong> <span class="reply-content"></span>
-                        </div>`;
+                            </div>`;
                     listDiv.appendChild(item);
                     watchAdminReply(doc.id);
                 });
@@ -148,12 +150,33 @@
 
         function watchAdminReply(docId) {
             db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "desc").limit(1).onSnapshot(snap => {
+                const replyBox = document.getElementById(`reply-${docId}`);
                 if(!snap.empty) {
-                    const replyBox = document.getElementById(`reply-${docId}`);
+                    const replyData = snap.docs[0].data();
                     replyBox.style.display = "block";
-                    replyBox.querySelector(".reply-content").innerText = snap.docs[0].data().text;
+                    replyBox.innerHTML = `
+                        <strong>💡 사장님 지시:</strong> <span>${replyData.text}</span>
+                        <div class="re-reply-box">
+                            <input type="text" id="re-input-${docId}" class="re-reply-input" placeholder="답장을 적으세요">
+                            <button onclick="sendReReply('${docId}')" class="re-reply-btn">전송</button>
+                        </div>
+                    `;
                 }
             });
+        }
+
+        async function sendReReply(docId) {
+            const input = document.getElementById(`re-input-${docId}`);
+            const name = document.getElementById('userName').value;
+            if(!input.value) return alert("내용을 입력하세요");
+
+            await db.collection("field_reports").doc(docId).collection("comments").add({
+                user: name,
+                text: "[답장] " + input.value,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            alert("답장이 전송되었습니다!");
+            input.value = "";
         }
     </script>
 </body>
