@@ -119,7 +119,7 @@
         function loadMyBoard(userName) {
             db.collection("field_reports")
               .where("user", "==", userName)
-              .orderBy("timestamp", "desc")
+              // .orderBy("timestamp", "desc")
               .limit(10)
               .onSnapshot(snap => {
                 const listDiv = document.getElementById("reportList");
