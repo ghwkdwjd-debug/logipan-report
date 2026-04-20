@@ -21,13 +21,15 @@
         .wait { background: #fff3e0; color: #ef6c00; } 
         .done { background: #e8f5e9; color: #2e7d32; }
         .reply-area { margin-top: 12px; padding: 10px; background: #f1f8ff; border-radius: 6px; border-left: 4px solid #1a73e8; font-size: 14px; display: none; }
+        .user-display { background: #eee; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 15px; font-size: 14px; cursor: pointer; }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>👷 현장 작업 보고</h2>
-        <label>작성자 성함</label>
-        <input type="text" id="userName" placeholder="예: 홍길동">
+        
+        <div id="userDisplay" class="user-display" onclick="askName()">👤 이름을 등록해주세요 (클릭)</div>
+        <input type="hidden" id="userName"> 
         
         <label>📸 현장 사진 촬영</label>
         <input type="file" id="photoInput" accept="image/*" capture="camera">
@@ -46,36 +48,54 @@
     </div>
 
     <script>
-        // 정호님의 실제 키값을 적용했습니다.
         const firebaseConfig = {
-            apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", // 정호님 API 키
+            apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", 
             authDomain: "logipan-2026.firebaseapp.com",
             projectId: "logipan-2026",
             storageBucket: "logipan-2026.appspot.com",
             messagingSenderId: "1136785507793",
-            appId: "1:1136785507793:web:786543210abcd1234" // 정호님 App ID (확인된 값으로 적용)
+            appId: "1:1136785507793:web:786543210abcd1234"
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const storage = firebase.storage();
 
+        // [새 기능] 이름 묻는 팝업 함수
+        function askName() {
+            const name = prompt("성함을 입력해주세요 (예: 홍길동)");
+            if (name && name.trim() !== "") {
+                localStorage.setItem("logipan_user_name", name);
+                updateUserUI(name);
+                loadMyBoard(name);
+            }
+        }
+
+        // UI에 이름 표시 업데이트
+        function updateUserUI(name) {
+            document.getElementById("userName").value = name;
+            document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (클릭시 변경)";
+        }
+
+        // 페이지 로드 시 실행
         window.onload = function() {
             const savedName = localStorage.getItem("logipan_user_name");
-            if(savedName) {
-                document.getElementById("userName").value = savedName;
+            if (!savedName) {
+                askName(); // 이름 없으면 팝업 띄움
+            } else {
+                updateUserUI(savedName);
                 loadMyBoard(savedName);
             }
         };
 
         async function uploadAndSend() {
-            const file = document.getElementById('photoInput').files[0];
             const name = document.getElementById('userName').value;
             const text = document.getElementById('reportText').value;
-            if(!name || !text) return alert("성함과 내용을 입력해주세요!");
+            const file = document.getElementById('photoInput').files[0];
 
-            localStorage.setItem("logipan_user_name", name);
+            if(!name) return askName();
+            if(!text) return alert("보고 내용을 입력해주세요!");
+
             let imageUrl = "";
-            
             try {
                 if (file) {
                     const storageRef = storage.ref('photos/' + Date.now() + "_" + file.name);
@@ -92,7 +112,7 @@
                 });
                 alert("성공적으로 전달되었습니다!");
                 document.getElementById('reportText').value = "";
-                loadMyBoard(name);
+                document.getElementById('photoInput').value = "";
             } catch (e) { alert("전송 실패: " + e.message); }
         }
 
@@ -104,6 +124,10 @@
               .onSnapshot(snap => {
                 const listDiv = document.getElementById("reportList");
                 listDiv.innerHTML = "";
+                if(snap.empty) {
+                    listDiv.innerHTML = '<p style="text-align:center; color:#bbb; font-size: 14px; margin-top: 20px;">보낸 요청이 없습니다.</p>';
+                    return;
+                }
                 snap.forEach(doc => {
                     const data = doc.data();
                     const isDone = data.status === "✅ 완료";
