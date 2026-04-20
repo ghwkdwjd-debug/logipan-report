@@ -146,7 +146,6 @@
         function loadMyBoard(userName) {
             db.collection("field_reports")
               .where("user", "==", userName)
-              .orderBy("timestamp", "desc") // 최신순 정렬 추가
               .limit(10)
               .onSnapshot(snap => {
                 const listDiv = document.getElementById("reportList");
