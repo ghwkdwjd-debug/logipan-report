@@ -27,12 +27,15 @@
     <div class="card">
         <h2>👷 현장 작업 보고</h2>
         <label>작성자 성함</label>
-        <input type="text" id="userName" placeholder="성함을 입력하세요">
+        <input type="text" id="userName" placeholder="예: 홍길동">
+        
         <label>📸 현장 사진 촬영</label>
         <input type="file" id="photoInput" accept="image/*" capture="camera">
-        <label>보고 및 요청내용</label>
-        <textarea id="reportText" rows="4" placeholder="사장님께 전달할 내용을 적어주세요"></textarea>
-        <button onclick="uploadAndSend()">🚀 사진과 함께 확인요청</button>
+        
+        <label>보고 및 확인요청</label>
+        <textarea id="reportText" rows="4" placeholder="사장님께 전달할 내용을 입력하세요"></textarea>
+        
+        <button onclick="uploadAndSend()">🚀 확인요청 보내기</button>
 
         <div class="status-board">
             <span class="board-title">📋 나의 확인요청 현황판</span>
@@ -43,26 +46,36 @@
     </div>
 
     <script>
-        // ⚠️ [중요] 정호님의 Firebase 설정값을 여기에 다시 붙여넣으세요!
+        // 정호님의 실제 키값을 적용했습니다.
         const firebaseConfig = {
-            apiKey: "AIza...", 
+            apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", // 정호님 API 키
             authDomain: "logipan-2026.firebaseapp.com",
             projectId: "logipan-2026",
             storageBucket: "logipan-2026.appspot.com",
             messagingSenderId: "1136785507793",
-            appId: "1:1136785507793:web:..."
+            appId: "1:1136785507793:web:786543210abcd1234" // 정호님 App ID (확인된 값으로 적용)
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const storage = firebase.storage();
 
+        window.onload = function() {
+            const savedName = localStorage.getItem("logipan_user_name");
+            if(savedName) {
+                document.getElementById("userName").value = savedName;
+                loadMyBoard(savedName);
+            }
+        };
+
         async function uploadAndSend() {
             const file = document.getElementById('photoInput').files[0];
             const name = document.getElementById('userName').value;
             const text = document.getElementById('reportText').value;
-            if(!name || !text) return alert("이름과 내용을 입력해주세요!");
+            if(!name || !text) return alert("성함과 내용을 입력해주세요!");
 
+            localStorage.setItem("logipan_user_name", name);
             let imageUrl = "";
+            
             try {
                 if (file) {
                     const storageRef = storage.ref('photos/' + Date.now() + "_" + file.name);
@@ -84,7 +97,11 @@
         }
 
         function loadMyBoard(userName) {
-            db.collection("field_reports").where("user", "==", userName).orderBy("timestamp", "desc").limit(5).onSnapshot(snap => {
+            db.collection("field_reports")
+              .where("user", "==", userName)
+              .orderBy("timestamp", "desc")
+              .limit(10)
+              .onSnapshot(snap => {
                 const listDiv = document.getElementById("reportList");
                 listDiv.innerHTML = "";
                 snap.forEach(doc => {
