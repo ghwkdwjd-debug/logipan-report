@@ -3,206 +3,234 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로지판 - 현장 보고 시스템 (무료버전)</title>
+    <title>로지판 - 현장 보고 시스템</title>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <style>
-        body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f8f9fa; margin: 0; }
-        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); max-width: 500px; margin: auto; }
-        h2 { color: #333; text-align: center; margin-bottom: 20px; }
-        label { font-size: 14px; font-weight: bold; color: #666; display: block; margin-bottom: 5px; }
-        input, textarea { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
-        button { width: 100%; padding: 16px; background: #222; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; }
-        .status-board { margin-top: 30px; padding-top: 20px; border-top: 2px dashed #eee; }
-        .board-title { font-size: 18px; font-weight: bold; color: #1a73e8; margin-bottom: 15px; display: block; }
-        .report-item { background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 10px; margin-bottom: 12px; }
-        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-bottom: 10px; }
+        body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
+        .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
+        h2 { text-align: center; font-size: 20px; margin-bottom: 20px; color: #222; }
+        
+        label { font-size: 13px; font-weight: bold; color: #555; display: block; margin-top: 15px; margin-bottom: 5px; }
+        input, textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 15px; outline: none; }
+        input:focus, textarea:focus { border-color: #1a73e8; }
+        
+        button.main-btn { width: 100%; padding: 16px; background: #222; color: white; border: none; border-radius: 8px; font-size: 17px; font-weight: bold; cursor: pointer; margin-top: 20px; }
+        
+        .status-board { margin-top: 35px; border-top: 1px solid #eee; padding-top: 20px; }
+        .board-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .board-title { font-weight: bold; font-size: 16px; }
+
+        /* 필터 탭 */
+        .tab-menu { display: flex; gap: 8px; margin-bottom: 15px; }
+        .tab-btn { flex: 1; padding: 10px; border: 1px solid #ddd; background: white; border-radius: 8px; font-size: 13px; cursor: pointer; color: #666; transition: 0.2s; }
+        .tab-btn.active { background: #1a73e8; color: white; border-color: #1a73e8; font-weight: bold; }
+
+        /* 보고 내역 아이템 */
+        .report-item { background: #fff; border: 1px solid #eef0f2; padding: 15px; border-radius: 12px; margin-bottom: 12px; position: relative; transition: 0.2s; }
+        .report-item.done { opacity: 0.65; transform: scale(0.97); background: #fcfcfc; border-style: dashed; }
+        
+        .status-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-bottom: 8px; }
         .wait { background: #fff3e0; color: #ef6c00; } 
         .done { background: #e8f5e9; color: #2e7d32; }
-        .reply-area { margin-top: 12px; padding: 10px; background: #f1f8ff; border-radius: 6px; border-left: 4px solid #1a73e8; font-size: 14px; display: none; }
-        .user-display { background: #eee; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 15px; font-size: 14px; cursor: pointer; }
-        .re-reply-box { margin-top: 10px; display: flex; gap: 5px; }
-        .re-reply-input { flex: 1; padding: 8px !important; margin-bottom: 0 !important; font-size: 13px !important; }
-        .re-reply-btn { width: 60px !important; padding: 8px !important; font-size: 13px !important; background: #007bff !important; }
-        #loadingOverlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); color: white; text-align: center; padding-top: 200px; z-index: 1000; }
+
+        /* 대화 내역 영역 */
+        .comment-section { margin-top: 12px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; }
+        .comment-bubble { padding: 6px 0; border-bottom: 1px dotted #ddd; display: flex; flex-direction: column; }
+        .comment-bubble:last-child { border-bottom: none; }
+        .comment-user { font-weight: bold; font-size: 12px; margin-bottom: 2px; }
+        .user-tag { color: #1a73e8; } /* 작업자색 */
+        .admin-tag { color: #d32f2f; } /* 관리자색 */
+
+        .re-reply-box { display: flex; gap: 5px; margin-top: 12px; }
+        .re-reply-input { flex: 1; padding: 8px !important; margin: 0 !important; font-size: 13px !important; height: 35px; }
+        .re-reply-btn { width: 55px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; }
+
+        #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); color: white; text-align: center; padding-top: 250px; z-index: 1000; }
     </style>
 </head>
 <body>
-    <div id="loadingOverlay">⏳ 사진 전송 중입니다...</div>
 
-    <div class="card">
-        <h2>👷 현장 작업 보고</h2>
-        
-        <div id="userDisplay" class="user-display" onclick="askName()">👤 이름을 등록해주세요 (클릭)</div>
-        <input type="hidden" id="userName"> 
+<div id="loading">🚀 보고서를 전송하고 있습니다...</div>
 
-        <label>📌 보고 제목</label>
-        <input type="text" id="reportTitle" placeholder="예: 3번 구역 하차 요청">
-        
-        <label>📸 현장 사진 촬영 (카드등록 없이 전송)</label>
-        <input type="file" id="photoInput" accept="image/*" capture="camera">
-        
-        <label>📝 상세 내용</label>
-        <textarea id="reportText" rows="4" placeholder="상세한 내용을 입력하세요"></textarea>
-        
-        <button onclick="uploadAndSend()">🚀 확인요청 보내기</button>
+<div class="card">
+    <h2>👷 현장 작업 보고</h2>
+    
+    <div id="userDisplay" style="background:#eee; padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin-bottom:15px; font-size:14px; cursor:pointer;" onclick="askName()">👤 작업자 등록 (클릭)</div>
+    <input type="hidden" id="userName"> 
 
-        <div class="status-board">
-            <span class="board-title">📋 나의 확인요청 현황판</span>
-            <div id="reportList">
-                <p style="text-align:center; color:#bbb; font-size: 14px; margin-top: 20px;">보낸 요청이 여기에 표시됩니다.</p>
-            </div>
+    <label>📌 제목</label>
+    <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다 / 브랜드 확인요청 드립니다">
+    
+    <label>📸 사진 촬영 / 첨부 (앨범 선택 가능)</label>
+    <input type="file" id="photoInput" accept="image/*">
+    
+    <label>📝 상세 내용</label>
+    <textarea id="reportText" rows="4" placeholder="상세 내용을 입력하세요"></textarea>
+    
+    <button class="main-btn" onclick="uploadAndSend()">🚀 확인요청 보내기</button>
+
+    <div class="status-board">
+        <div class="board-header">
+            <span class="board-title">📋 확인요청 내역</span>
         </div>
+        
+        <div class="tab-menu">
+            <button id="tabAll" class="tab-btn active" onclick="changeTab('all')">전체보기</button>
+            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중만</button>
+        </div>
+
+        <div id="reportList"></div>
     </div>
+</div>
 
-    <script>
-        // 정호님 파이어베이스 설정 (기존 유지)
-        const firebaseConfig = {
-            apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", 
-            authDomain: "logipan-2026.firebaseapp.com",
-            projectId: "logipan-2026",
-            storageBucket: "logipan-2026.appspot.com",
-            messagingSenderId: "1136785507793",
-            appId: "1:1136785507793:web:786543210abcd1234"
-        };
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
+<script>
+    const firebaseConfig = {
+        apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", 
+        authDomain: "logipan-2026.firebaseapp.com",
+        projectId: "logipan-2026",
+        storageBucket: "logipan-2026.appspot.com",
+        messagingSenderId: "1136785507793",
+        appId: "1:1136785507793:web:786543210abcd1234"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
 
-        // ⚠️ 정호님의 ImgBB API 키
-        const IMGBB_API_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
+    let currentFilter = 'all';
 
-        function askName() {
-            const name = prompt("성함을 입력해주세요 (예: 홍길동)");
-            if (name && name.trim() !== "") {
-                localStorage.setItem("logipan_user_name", name);
-                updateUserUI(name);
-                loadMyBoard(name);
-            }
+    function askName() {
+        const name = prompt("성함을 입력해주세요 (예: 홍길동)");
+        if (name) {
+            localStorage.setItem("logipan_user_name", name);
+            location.reload();
         }
+    }
 
-        function updateUserUI(name) {
+    window.onload = function() {
+        const name = localStorage.getItem("logipan_user_name");
+        if (!name) askName();
+        else {
             document.getElementById("userName").value = name;
-            document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (클릭시 변경)";
+            document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (변경)";
+            loadReports();
         }
+    };
 
-        window.onload = function() {
-            const savedName = localStorage.getItem("logipan_user_name");
-            if (!savedName) { askName(); } 
-            else { updateUserUI(savedName); loadMyBoard(savedName); }
-        };
+    async function uploadAndSend() {
+        const name = document.getElementById('userName').value;
+        const title = document.getElementById('reportTitle').value;
+        const text = document.getElementById('reportText').value;
+        const file = document.getElementById('photoInput').files[0];
 
-        async function uploadAndSend() {
-            const name = document.getElementById('userName').value;
-            const title = document.getElementById('reportTitle').value;
-            const text = document.getElementById('reportText').value;
-            const fileInput = document.getElementById('photoInput');
-            const file = fileInput.files[0];
+        if(!title || !text) return alert("제목과 내용을 입력해주세요!");
 
-            if(!name) return askName();
-            if(!title || !text) return alert("제목과 내용을 입력해주세요!");
+        document.getElementById('loading').style.display = "block";
+        let imageUrl = "";
 
-            let imageUrl = "";
-            document.getElementById('loadingOverlay').style.display = "block";
-
-            try {
-                // [루트 수정] 구글 Storage 대신 ImgBB로 사진 전송 (무료)
-                if (file) {
-                    let formData = new FormData();
-                    formData.append("image", file);
-                    
-                    const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
-                        method: "POST",
-                        body: formData
-                    });
-                    const result = await response.json();
-                    if(result.success) {
-                        imageUrl = result.data.url;
-                    } else {
-                        throw new Error("사진 서버 전송 실패");
-                    }
-                }
-
-                // 파이어베이스 Firestore에 저장
-                await db.collection("field_reports").add({
-                    user: name,
-                    title: title,
-                    text: text,
-                    imageUrl: imageUrl,
-                    status: "⏳ 처리중",
-                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
-                });
-
-                alert("성공적으로 전달되었습니다!");
-                document.getElementById('reportTitle').value = "";
-                document.getElementById('reportText').value = "";
-                fileInput.value = "";
-            } catch (e) { 
-                alert("전송 실패: " + e.message); 
-            } finally {
-                document.getElementById('loadingOverlay').style.display = "none";
+        try {
+            if (file) {
+                let formData = new FormData();
+                formData.append("image", file);
+                const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
+                const json = await res.json();
+                imageUrl = json.data.url;
             }
-        }
 
-        function loadMyBoard(userName) {
-            db.collection("field_reports")
-              .where("user", "==", userName)
-              .limit(10)
-              .onSnapshot(snap => {
-                const listDiv = document.getElementById("reportList");
-                listDiv.innerHTML = "";
-                if(snap.empty) {
-                    listDiv.innerHTML = '<p style="text-align:center; color:#bbb; font-size: 14px; margin-top: 20px;">보낸 요청이 없습니다.</p>';
-                    return;
-                }
-                snap.forEach(doc => {
-                    const data = doc.data();
-                    const isDone = data.status === "✅ 완료";
-                    const item = document.createElement("div");
-                    item.className = "report-item";
-                    item.innerHTML = `
-                        <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
-                        <div style="font-weight:bold; font-size:16px; margin-bottom:5px;">${data.title || '제목 없음'}</div>
-                        <div style="font-size:14px; color:#555;">${data.text}</div>
-                        ${data.imageUrl ? `<p style="font-size:12px; color:blue; margin-top:5px;">🖼️ 사진 첨부됨</p>` : ''}
-                        <div id="reply-${doc.id}" class="reply-area"></div>`;
-                    listDiv.appendChild(item);
-                    watchAdminReply(doc.id);
-                });
-            });
-        }
-
-        function watchAdminReply(docId) {
-            db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "desc").limit(1).onSnapshot(snap => {
-                const replyBox = document.getElementById(`reply-${docId}`);
-                if(!snap.empty) {
-                    const replyData = snap.docs[0].data();
-                    if(replyData.user === "관리자" || replyData.admin === "본사 관리자") { // 사장님 답변인 경우만 표시
-                        replyBox.style.display = "block";
-                        replyBox.innerHTML = `
-                            <strong>💡 사장님 지시:</strong> <span>${replyData.text}</span>
-                            <div class="re-reply-box">
-                                <input type="text" id="re-input-${docId}" class="re-reply-input" placeholder="답장을 적으세요">
-                                <button onclick="sendReReply('${docId}')" class="re-reply-btn">전송</button>
-                            </div>
-                        `;
-                    }
-                }
-            });
-        }
-
-        async function sendReReply(docId) {
-            const input = document.getElementById(`re-input-${docId}`);
-            const name = document.getElementById('userName').value;
-            if(!input.value) return alert("내용을 입력하세요");
-
-            await db.collection("field_reports").doc(docId).collection("comments").add({
+            await db.collection("field_reports").add({
                 user: name,
-                text: "[답장] " + input.value,
+                title: title,
+                text: text,
+                imageUrl: imageUrl,
+                status: "⏳ 처리중",
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
-            alert("답장이 전송되었습니다!");
-            input.value = "";
-        }
-    </script>
+
+            alert("성공적으로 전송되었습니다!");
+            location.reload();
+        } catch (e) { alert("오류 발생: " + e.message); }
+        document.getElementById('loading').style.display = "none";
+    }
+
+    function changeTab(type) {
+        currentFilter = type;
+        document.getElementById('tabAll').classList.toggle('active', type === 'all');
+        document.getElementById('tabWait').classList.toggle('active', type === 'wait');
+        loadReports();
+    }
+
+    function loadReports() {
+        const name = localStorage.getItem("logipan_user_name");
+        db.collection("field_reports")
+          .where("user", "==", name)
+          .onSnapshot(snap => {
+            const listDiv = document.getElementById("reportList");
+            listDiv.innerHTML = "";
+            
+            // 데이터 배열화 후 최신순 정렬 (서버 인덱스 에러 방지용)
+            let reports = [];
+            snap.forEach(doc => reports.push({id: doc.id, ...doc.data()}));
+            reports.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+            reports.forEach(data => {
+                if (currentFilter === 'wait' && data.status === "✅ 완료") return;
+
+                const isDone = data.status === "✅ 완료";
+                const item = document.createElement("div");
+                item.className = `report-item ${isDone ? 'done' : ''}`;
+                item.innerHTML = `
+                    <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
+                    <div style="font-weight:bold; font-size:15px;">${data.title}</div>
+                    <div style="font-size:13px; color:#666; margin-top:5px; white-space: pre-wrap;">${data.text}</div>
+                    <div id="comments-${data.id}" class="comment-section">대화 내역을 불러오는 중...</div>
+                    <div class="re-reply-box">
+                        <input type="text" id="input-${data.id}" class="re-reply-input" placeholder="답장 입력...">
+                        <button class="re-reply-btn" onclick="sendReply('${data.id}')">전송</button>
+                    </div>
+                `;
+                listDiv.appendChild(item);
+                loadComments(data.id);
+            });
+        });
+    }
+
+    function loadComments(docId) {
+        db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "asc").onSnapshot(snap => {
+            const box = document.getElementById(`comments-${docId}`);
+            if (snap.empty) { box.style.display = "none"; return; }
+            box.style.display = "block";
+            box.innerHTML = "";
+            snap.forEach(c => {
+                const d = c.data();
+                const isReply = d.text.includes("[답장]");
+                const bubble = document.createElement("div");
+                bubble.className = "comment-bubble";
+                
+                // 답장이 아니면 관리자 지시로 판단하여 강조
+                const labelClass = isReply ? "user-tag" : "admin-tag";
+                const labelName = isReply ? d.user : "관리자 지시";
+
+                bubble.innerHTML = `
+                    <span class="comment-user ${labelClass}">[${labelName}]</span>
+                    <span>${d.text.replace("[답장] ", "")}</span>
+                `;
+                box.appendChild(bubble);
+            });
+        });
+    }
+
+    async function sendReply(docId) {
+        const input = document.getElementById(`input-${docId}`);
+        const name = document.getElementById('userName').value;
+        if (!input.value) return;
+
+        await db.collection("field_reports").doc(docId).collection("comments").add({
+            user: name,
+            text: "[답장] " + input.value,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        input.value = "";
+    }
+</script>
 </body>
 </html>
