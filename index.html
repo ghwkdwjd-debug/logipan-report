@@ -10,61 +10,42 @@
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
         h2 { text-align: center; font-size: 20px; margin-bottom: 20px; color: #222; }
-        
         label { font-size: 13px; font-weight: bold; color: #555; display: block; margin-top: 15px; margin-bottom: 5px; }
         input, textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 15px; outline: none; }
-        
         button.main-btn { width: 100%; padding: 16px; background: #222; color: white; border: none; border-radius: 8px; font-size: 17px; font-weight: bold; cursor: pointer; margin-top: 20px; }
-        
-        /* 현황판 탭 */
         .tab-menu { display: flex; gap: 8px; margin: 25px 0 15px 0; }
         .tab-btn { flex: 1; padding: 10px; border: 1px solid #ddd; background: white; border-radius: 8px; font-size: 13px; cursor: pointer; color: #666; }
         .tab-btn.active { background: #1a73e8; color: white; border-color: #1a73e8; font-weight: bold; }
-
-        /* 보고 아이템 */
         .report-item { background: #fff; border: 1px solid #eef0f2; padding: 15px; border-radius: 12px; margin-bottom: 12px; }
         .report-item.done { opacity: 0.65; transform: scale(0.98); background: #fafafa; }
-        
         .status-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-bottom: 8px; }
         .wait { background: #fff3e0; color: #ef6c00; } 
         .done { background: #e8f5e9; color: #2e7d32; }
-
-        /* 대화 내역 접기/펴기 스타일 */
         .toggle-comm-btn { background: none; border: none; color: #1a73e8; font-size: 13px; font-weight: bold; cursor: pointer; padding: 5px 0; margin-top: 10px; display: block; }
-        
-        .comment-section { 
-            display: none; /* 기본적으로 숨김 */
-            margin-top: 10px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; 
-        }
+        .comment-section { display: none; margin-top: 10px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; }
         .comment-bubble { padding: 6px 0; border-bottom: 1px dotted #ddd; }
-        .comment-bubble:last-child { border-bottom: none; }
-        .user-tag { color: #1a73e8; font-weight: bold; } /* 작업자 */
-        .admin-tag { color: #d32f2f; font-weight: bold; } /* 관리자 */
-
+        .user-tag { color: #1a73e8; font-weight: bold; }
+        .admin-tag { color: #d32f2f; font-weight: bold; }
         .re-reply-box { display: flex; gap: 5px; margin-top: 12px; }
         .re-reply-input { flex: 1; padding: 8px !important; margin: 0 !important; font-size: 13px !important; height: 36px; }
         .re-reply-btn { width: 55px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 12px; }
-
         #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); color: white; text-align: center; padding-top: 250px; z-index: 1000; }
     </style>
 </head>
 <body>
 
-<div id="loading">🚀 보고서를 전송하고 있습니다...</div>
+<div id="loading">🚀 <span id="loadingMsg">사진을 전송하고 있습니다...</span></div>
 
 <div class="card">
     <h2>👷 현장 작업 보고</h2>
-    
     <div id="userDisplay" style="background:#eee; padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin-bottom:15px; font-size:14px; cursor:pointer;" onclick="askName()">👤 작업자 등록 (클릭)</div>
     <input type="hidden" id="userName"> 
 
     <label>📌 제목</label>
-    <input type="text" id="reportTitle" placeholder="예: 브랜드명 입고 완료했습니다 / 브랜드명 확인요청 드립니다">
+    <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다">
     
-    <label>📸 사진 촬영 / 첨부</label>
-    <input type="file" id="photoInput" accept="image/*">
-    
-    <label>📝 상세 내용</label>
+    <label>📸 사진 촬영 / 첨부 (여러 장 선택 가능)</label>
+    <input type="file" id="photoInput" accept="image/*" multiple> <label>📝 상세 내용</label>
     <textarea id="reportText" rows="4" placeholder="상세 내용을 입력하세요"></textarea>
     
     <button class="main-btn" onclick="uploadAndSend()">🚀 확인요청 보내기</button>
@@ -72,7 +53,7 @@
     <div class="status-board">
         <div class="tab-menu">
             <button id="tabAll" class="tab-btn active" onclick="changeTab('all')">전체보기</button>
-            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중</button>
+            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중만</button>
         </div>
         <div id="reportList"></div>
     </div>
@@ -112,25 +93,36 @@
         const name = document.getElementById('userName').value;
         const title = document.getElementById('reportTitle').value;
         const text = document.getElementById('reportText').value;
-        const file = document.getElementById('photoInput').files[0];
+        const files = document.getElementById('photoInput').files;
         if(!title || !text) return alert("제목과 내용을 입력해주세요!");
 
-        document.getElementById('loading').style.display = "block";
-        let imageUrl = "";
+        const loading = document.getElementById('loading');
+        const loadingMsg = document.getElementById('loadingMsg');
+        loading.style.display = "block";
+        
+        let imageUrls = []; // 여러 장 주소를 담을 배열
+
         try {
-            if (file) {
-                let formData = new FormData();
-                formData.append("image", file);
-                const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
-                const json = await res.json();
-                imageUrl = json.data.url;
+            if (files.length > 0) {
+                for (let i = 0; i < files.length; i++) {
+                    loadingMsg.innerText = `사진 전송 중 (${i+1}/${files.length})`;
+                    let formData = new FormData();
+                    formData.append("image", files[i]);
+                    const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
+                    const json = await res.json();
+                    if(json.success) imageUrls.push(json.data.url);
+                }
             }
+            
+            // 파이어베이스에는 주소들을 쉼표(,)로 구분해서 한 문장으로 저장합니다.
             await db.collection("field_reports").add({
-                user: name, title: title, text: text, imageUrl: imageUrl, status: "⏳ 처리중", timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                user: name, title: title, text: text, 
+                imageUrl: imageUrls.join(","), // "주소1,주소2,주소3" 형태
+                status: "⏳ 처리중", timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("전송 완료!"); location.reload();
         } catch (e) { alert("오류: " + e.message); }
-        document.getElementById('loading').style.display = "none";
+        loading.style.display = "none";
     }
 
     function changeTab(type) {
@@ -152,15 +144,16 @@
             reports.forEach(data => {
                 if (currentFilter === 'wait' && data.status === "✅ 완료") return;
                 const isDone = data.status === "✅ 완료";
+                const imgCount = data.imageUrl ? data.imageUrl.split(",").length : 0;
                 const item = document.createElement("div");
                 item.className = `report-item ${isDone ? 'done' : ''}`;
                 item.innerHTML = `
                     <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
                     <div style="font-weight:bold; font-size:15px;">${data.title}</div>
                     <div style="font-size:13px; color:#666; margin-top:5px;">${data.text}</div>
+                    ${imgCount > 0 ? `<div style="font-size:12px; color:#1a73e8; margin-top:5px;">🖼️ 사진 ${imgCount}장 첨부됨</div>` : ''}
                     
                     <button class="toggle-comm-btn" onclick="toggleComments('${data.id}')" id="btn-${data.id}">💬 대화 보기 (클릭)</button>
-                    
                     <div id="sec-${data.id}" class="comment-section">
                         <div id="comments-${data.id}">불러오는 중...</div>
                         <div class="re-reply-box">
@@ -198,7 +191,6 @@
                 const labelClass = isReply ? "user-tag" : "admin-tag";
                 const labelName = isReply ? d.user : "관리자";
                 const cleanText = d.text.replace("[답장] ", "");
-                
                 const bubble = document.createElement("div");
                 bubble.className = "comment-bubble";
                 bubble.innerHTML = `<span class="${labelClass}">[${labelName}]</span> <span>${cleanText}</span>`;
