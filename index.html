@@ -59,7 +59,7 @@
     <input type="hidden" id="userName"> 
 
     <label>📌 제목</label>
-    <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다 / 확인요청 드립니다">
+    <input type="text" id="reportTitle" placeholder="예: 브랜드명 입고 완료했습니다 / 브랜드명 확인요청 드립니다">
     
     <label>📸 사진 촬영 / 첨부</label>
     <input type="file" id="photoInput" accept="image/*">
@@ -72,7 +72,7 @@
     <div class="status-board">
         <div class="tab-menu">
             <button id="tabAll" class="tab-btn active" onclick="changeTab('all')">전체보기</button>
-            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중만</button>
+            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중</button>
         </div>
         <div id="reportList"></div>
     </div>
