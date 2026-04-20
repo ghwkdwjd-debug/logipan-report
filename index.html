@@ -3,75 +3,115 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로지판 - 현장 보고 시스템</title>
+    <title>로지판 - 현장 보고</title>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-storage.js"></script>
     <style>
-        body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f0f2f5; margin: 0; }
-        .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 500px; margin: auto; }
-        h2 { color: #1a73e8; text-align: center; margin-top: 0; }
-        .notice-box { background: #e8f0fe; border-left: 5px solid #1a73e8; padding: 12px; margin-bottom: 20px; border-radius: 4px; font-size: 0.9em; }
-        label { font-weight: bold; display: block; margin-bottom: 5px; color: #555; }
+        body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f8f9fa; margin: 0; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); max-width: 500px; margin: auto; }
+        h2 { color: #333; text-align: center; margin-bottom: 20px; }
+        label { font-size: 14px; font-weight: bold; color: #666; display: block; margin-bottom: 5px; }
         input, textarea { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
-        button { width: 100%; padding: 15px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; }
-        button:active { background: #1557b0; }
+        button { width: 100%; padding: 16px; background: #222; color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer; }
+        .status-board { margin-top: 30px; padding-top: 20px; border-top: 2px dashed #eee; }
+        .board-title { font-size: 18px; font-weight: bold; color: #1a73e8; margin-bottom: 15px; display: block; }
+        .report-item { background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 10px; margin-bottom: 12px; }
+        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-bottom: 10px; }
+        .wait { background: #fff3e0; color: #ef6c00; } 
+        .done { background: #e8f5e9; color: #2e7d32; }
+        .reply-area { margin-top: 12px; padding: 10px; background: #f1f8ff; border-radius: 6px; border-left: 4px solid #1a73e8; font-size: 14px; display: none; }
     </style>
 </head>
 <body>
     <div class="card">
         <h2>👷 현장 작업 보고</h2>
-        <div id="notice" class="notice-box">📢 본사 공지사항을 불러오는 중...</div>
-        
-        <label>보내는 사람</label>
-        <input type="text" id="userName" placeholder="예: 김철수 삼촌">
-        
-        <label>보고 내용</label>
-        <textarea id="reportText" rows="6" placeholder="작업 내용이나 특이사항을 입력하세요."></textarea>
-        
-        <button onclick="sendReport()">🚀 보고 전송하기</button>
+        <label>작성자 성함</label>
+        <input type="text" id="userName" placeholder="성함을 입력하세요">
+        <label>📸 현장 사진 촬영</label>
+        <input type="file" id="photoInput" accept="image/*" capture="camera">
+        <label>보고 및 요청내용</label>
+        <textarea id="reportText" rows="4" placeholder="사장님께 전달할 내용을 적어주세요"></textarea>
+        <button onclick="uploadAndSend()">🚀 사진과 함께 확인요청</button>
+
+        <div class="status-board">
+            <span class="board-title">📋 나의 확인요청 현황판</span>
+            <div id="reportList">
+                <p style="text-align:center; color:#bbb; font-size: 14px; margin-top: 20px;">보낸 요청이 여기에 표시됩니다.</p>
+            </div>
+        </div>
     </div>
 
     <script>
-        // 정호님의 프로젝트 정보로 세팅 완료!
+        // ⚠️ [중요] 정호님의 Firebase 설정값을 여기에 다시 붙여넣으세요!
         const firebaseConfig = {
-            apiKey: "AIzaSyB" + "..." , // 웹 API 키는 콘솔에서 확인이 필요하지만 일단 공통 설정 적용
+            apiKey: "AIza...", 
             authDomain: "logipan-2026.firebaseapp.com",
             projectId: "logipan-2026",
             storageBucket: "logipan-2026.appspot.com",
             messagingSenderId: "1136785507793",
-            appId: "1:1136785507793:web:7f6..." // 이 부분은 콘솔에서 확인이 필요합니다.
+            appId: "1:1136785507793:web:..."
         };
-        
-        // 초기화
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
+        firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+        const storage = firebase.storage();
 
-        // 관리자 공지 실시간 읽기
-        db.collection("notifications").orderBy("timestamp", "desc").limit(1)
-            .onSnapshot((querySnapshot) => {
-                querySnapshot.forEach((doc) => {
-                    document.getElementById("notice").innerText = "📢 공지: " + doc.data().message;
-                });
-            });
-
-        // 보고 전송 함수
-        function sendReport() {
-            const name = document.getElementById("userName").value;
-            const text = document.getElementById("reportText").value;
+        async function uploadAndSend() {
+            const file = document.getElementById('photoInput').files[0];
+            const name = document.getElementById('userName').value;
+            const text = document.getElementById('reportText').value;
             if(!name || !text) return alert("이름과 내용을 입력해주세요!");
 
-            db.collection("field_reports").add({
-                user: name,
-                text: text,
-                status: "⏳ 처리중",
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
-            }).then(() => {
-                alert("✅ 보고가 본사로 전송되었습니다!");
-                document.getElementById("reportText").value = "";
-            }).catch((error) => {
-                alert("❌ 전송 실패: " + error.message);
+            let imageUrl = "";
+            try {
+                if (file) {
+                    const storageRef = storage.ref('photos/' + Date.now() + "_" + file.name);
+                    const snapshot = await storageRef.put(file);
+                    imageUrl = await snapshot.ref.getDownloadURL();
+                }
+
+                await db.collection("field_reports").add({
+                    user: name,
+                    text: text,
+                    imageUrl: imageUrl,
+                    status: "⏳ 처리중",
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                alert("성공적으로 전달되었습니다!");
+                document.getElementById('reportText').value = "";
+                loadMyBoard(name);
+            } catch (e) { alert("전송 실패: " + e.message); }
+        }
+
+        function loadMyBoard(userName) {
+            db.collection("field_reports").where("user", "==", userName).orderBy("timestamp", "desc").limit(5).onSnapshot(snap => {
+                const listDiv = document.getElementById("reportList");
+                listDiv.innerHTML = "";
+                snap.forEach(doc => {
+                    const data = doc.data();
+                    const isDone = data.status === "✅ 완료";
+                    const item = document.createElement("div");
+                    item.className = "report-item";
+                    item.innerHTML = `
+                        <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
+                        <div style="font-size:15px;">${data.text}</div>
+                        ${data.imageUrl ? '<p style="font-size:12px; color:blue;">🖼️ 사진 첨부됨</p>' : ''}
+                        <div id="reply-${doc.id}" class="reply-area">
+                            <strong>💡 사장님 지시:</strong> <span class="reply-content"></span>
+                        </div>`;
+                    listDiv.appendChild(item);
+                    watchAdminReply(doc.id);
+                });
+            });
+        }
+
+        function watchAdminReply(docId) {
+            db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "desc").limit(1).onSnapshot(snap => {
+                if(!snap.empty) {
+                    const replyBox = document.getElementById(`reply-${docId}`);
+                    replyBox.style.display = "block";
+                    replyBox.querySelector(".reply-content").innerText = snap.docs[0].data().text;
+                }
             });
         }
     </script>
