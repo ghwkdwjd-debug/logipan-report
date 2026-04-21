@@ -23,9 +23,12 @@
         .done { background: #e8f5e9; color: #2e7d32; }
         .toggle-comm-btn { background: none; border: none; color: #1a73e8; font-size: 13px; font-weight: bold; cursor: pointer; padding: 5px 0; margin-top: 10px; display: block; }
         .comment-section { display: none; margin-top: 10px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; }
-        .comment-bubble { padding: 6px 0; border-bottom: 1px dotted #ddd; }
-        .user-tag { color: #1a73e8; font-weight: bold; }
-        .admin-tag { color: #d32f2f; font-weight: bold; }
+        /* [수정] 말풍선 스타일 개선 */
+        .comment-bubble { padding: 8px; border-radius: 6px; margin-bottom: 5px; line-height: 1.4; }
+        .admin-msg { background: #e7f3ff; border-left: 4px solid #1a73e8; } /* 관리자용 색상 */
+        .user-msg { background: #eee; border-left: 4px solid #999; } /* 작업자용 색상 */
+        .user-tag { color: #555; font-weight: bold; font-size: 11px; display: block; margin-bottom: 2px; }
+        .admin-tag { color: #1a73e8; font-weight: bold; font-size: 11px; display: block; margin-bottom: 2px; }
         .re-reply-box { display: flex; gap: 5px; margin-top: 12px; }
         .re-reply-input { flex: 1; padding: 8px !important; margin: 0 !important; font-size: 13px !important; height: 36px; }
         .re-reply-btn { width: 55px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 12px; }
@@ -53,13 +56,14 @@
     <div class="status-board">
         <div class="tab-menu">
             <button id="tabAll" class="tab-btn active" onclick="changeTab('all')">전체보기</button>
-            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중</button>
+            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중만</button>
         </div>
         <div id="reportList"></div>
     </div>
 </div>
 
 <script>
+    // 파이어베이스 설정 (기존과 동일)
     const firebaseConfig = {
         apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", 
         authDomain: "logipan-2026.firebaseapp.com",
@@ -100,7 +104,7 @@
         const loadingMsg = document.getElementById('loadingMsg');
         loading.style.display = "block";
         
-        let imageUrls = []; // 여러 장 주소를 담을 배열
+        let imageUrls = []; 
 
         try {
             if (files.length > 0) {
@@ -114,10 +118,9 @@
                 }
             }
             
-            // 파이어베이스에는 주소들을 쉼표(,)로 구분해서 한 문장으로 저장합니다.
             await db.collection("field_reports").add({
                 user: name, title: title, text: text, 
-                imageUrl: imageUrls.join(","), // "주소1,주소2,주소3" 형태
+                imageUrl: imageUrls.join(","), 
                 status: "⏳ 처리중", timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("전송 완료!"); location.reload();
@@ -180,20 +183,30 @@
         }
     }
 
+    // [중요 수정] 댓글 로드 로직: 누가 썼는지 판단하여 색상 구분
     function loadComments(docId) {
+        const myName = localStorage.getItem("logipan_user_name"); // 작업자 본인 이름
+        
         db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "asc").onSnapshot(snap => {
             const box = document.getElementById(`comments-${docId}`);
             if (snap.empty) { box.innerHTML = "<p style='color:#bbb; margin:0;'>대화 내역이 없습니다.</p>"; return; }
             box.innerHTML = "";
+            
             snap.forEach(c => {
                 const d = c.data();
-                const isReply = d.text.includes("[답장]");
-                const labelClass = isReply ? "user-tag" : "admin-tag";
-                const labelName = isReply ? d.user : "관리자";
+                const sender = d.user;
                 const cleanText = d.text.replace("[답장] ", "");
+                
+                // [수정 로직] 내가 쓴 글([답장])이 아니면 무조건 '관리자'의 지시로 간주
+                const isAdmin = !d.text.includes("[답장]");
+                
                 const bubble = document.createElement("div");
-                bubble.className = "comment-bubble";
-                bubble.innerHTML = `<span class="${labelClass}">[${labelName}]</span> <span>${cleanText}</span>`;
+                bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
+                
+                const tagClass = isAdmin ? "admin-tag" : "user-tag";
+                const tagName = isAdmin ? `📢 ${sender}` : `👤 ${sender}`;
+                
+                bubble.innerHTML = `<span class="${tagClass}">${tagName}</span> <span>${cleanText}</span>`;
                 box.appendChild(bubble);
             });
         });
