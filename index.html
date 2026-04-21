@@ -43,6 +43,9 @@
         .user-msg { background: #eee; border-left: 4px solid #999; }
         
         #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); color: white; text-align: center; padding-top: 250px; z-index: 1000; }
+
+        /* [추가] 답변 박스 스타일 */
+        .reply-box { margin-top: 10px; background: #e7f3ff; padding: 10px; border-radius: 8px; border-left: 4px solid #1877f2; font-size: 13px; }
     </style>
 </head>
 <body>
@@ -93,6 +96,11 @@
         <label>📝 내용</label>
         <textarea id="boardText" rows="5" placeholder="전달하실 내용을 입력하세요"></textarea>
         <button class="main-btn" style="background:#1877F2;" onclick="submitBoard()">💬 글 올리기</button>
+
+        <div style="margin-top:30px;">
+            <h3 style="font-size:16px; border-bottom:2px solid #eee; padding-bottom:10px;">💬 내 문의 현황</h3>
+            <div id="my-board-list"></div>
+        </div>
     </div>
 </div>
 
@@ -109,16 +117,14 @@
     const db = firebase.firestore();
     const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
 
-    // 탭 전환 함수
     function switchTab(type) {
         document.getElementById('section-report').style.display = type === 'report' ? 'block' : 'none';
         document.getElementById('section-board').style.display = type === 'board' ? 'block' : 'none';
         document.getElementById('tab-report').className = 'tab-btn' + (type === 'report' ? ' active' : '');
         document.getElementById('tab-board').className = 'tab-btn' + (type === 'board' ? ' active' : '');
-        if(type === 'board') loadNotice();
+        if(type === 'board') { loadNotice(); loadMyBoardPosts(); }
     }
 
-    // 이름 관리
     function askName() {
         const name = prompt("성함을 입력해주세요");
         if (name) { localStorage.setItem("logipan_user_name", name); location.reload(); }
@@ -132,19 +138,58 @@
             document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (변경)";
             loadActiveReports();
             loadNotice();
+            loadMyBoardPosts(); // 내 문의 내역 불러오기
         }
     };
 
-    // --- 공지/소통 전용 함수 ---
     function loadNotice() {
+        db.collection("board_posts").where("category", "==", "공지").orderBy("timestamp", "desc").limit(1).onSnapshot(snap => {
+            const box = document.getElementById("notice-content");
+            if(snap.empty) box.innerText = "현재 등록된 공지가 없습니다.";
+            else snap.forEach(doc => box.innerText = doc.data().text);
+        });
+    }
+
+    // [추가] 내 문의 내역 실시간 리스너
+    function loadMyBoardPosts() {
+        const name = localStorage.getItem("logipan_user_name");
         db.collection("board_posts")
-          .where("category", "==", "공지")
+          .where("user", "==", name)
           .orderBy("timestamp", "desc")
-          .limit(1)
           .onSnapshot(snap => {
-              const box = document.getElementById("notice-content");
-              if(snap.empty) box.innerText = "현재 등록된 공지가 없습니다.";
-              else snap.forEach(doc => box.innerText = doc.data().text);
+              const listDiv = document.getElementById("my-board-list");
+              listDiv.innerHTML = "";
+              if(snap.empty) {
+                  listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>문의 내역이 없습니다.</p>";
+                  return;
+              }
+              snap.forEach(doc => {
+                  const d = doc.data();
+                  if(d.category === "공지") return;
+
+                  const item = document.createElement("div");
+                  item.className = "report-item";
+                  item.style.border = "1px solid #ddd";
+                  
+                  let html = `
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                          <span style="font-weight:bold; color:#1877f2;">[${d.category}]</span>
+                          <span class="status-badge ${d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status}</span>
+                      </div>
+                      <div style="font-size:14px; margin-bottom:5px;">${d.text}</div>
+                  `;
+
+                  if(d.reply) {
+                      html += `
+                          <div class="reply-box">
+                              <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
+                              ${d.reply}
+                          </div>
+                      `;
+                  }
+                  item.innerHTML = html;
+                  listDiv.appendChild(item);
+              });
           });
     }
 
@@ -158,11 +203,7 @@
         loading.style.display = "block";
         try {
             await db.collection("board_posts").add({
-                user: name,
-                category: category, // 여기서 이모지 빼고 '개인사정'만 보내게 HTML <option> 수정
-                text: text,
-                status: "신규", // 이모지 빼기
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                user: name, category: category, text: text, status: "신규", timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("메시지가 전송되었습니다!");
             document.getElementById('boardText').value = "";
@@ -170,7 +211,7 @@
         loading.style.display = "none";
     }
 
-    // --- 기존 현장보고 함수 (그대로 유지) ---
+    // --- 기존 현장보고 로직 ---
     let reportListener = null;
     function getFormattedDate() {
         const now = new Date();
