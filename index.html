@@ -13,11 +13,14 @@
         label { font-size: 13px; font-weight: bold; color: #555; display: block; margin-top: 15px; margin-bottom: 5px; }
         input, textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 15px; outline: none; }
         button.main-btn { width: 100%; padding: 16px; background: #222; color: white; border: none; border-radius: 8px; font-size: 17px; font-weight: bold; cursor: pointer; margin-top: 20px; }
-        .tab-menu { display: flex; gap: 8px; margin: 25px 0 15px 0; }
-        .tab-btn { flex: 1; padding: 10px; border: 1px solid #ddd; background: white; border-radius: 8px; font-size: 13px; cursor: pointer; color: #666; }
-        .tab-btn.active { background: #1a73e8; color: white; border-color: #1a73e8; font-weight: bold; }
+        
+        /* 검색창 스타일 */
+        .search-box { display: flex; gap: 8px; margin-top: 20px; margin-bottom: 10px; }
+        .search-input { flex: 1; padding: 10px !important; font-size: 13px !important; }
+        .search-btn { width: 70px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+
         .report-item { background: #fff; border: 1px solid #eef0f2; padding: 15px; border-radius: 12px; margin-bottom: 12px; }
-        .report-item.done { opacity: 0.65; transform: scale(0.98); background: #fafafa; }
+        .report-item.done { opacity: 0.8; background: #f9f9f9; border: 1px solid #ddd; }
         .status-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-bottom: 8px; }
         .wait { background: #fff3e0; color: #ef6c00; } 
         .done { background: #e8f5e9; color: #2e7d32; }
@@ -47,16 +50,22 @@
     <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다">
     
     <label>📸 사진 촬영 / 첨부 (여러 장 선택 가능)</label>
-    <input type="file" id="photoInput" accept="image/*" multiple> <label>📝 상세 내용</label>
+    <input type="file" id="photoInput" accept="image/*" multiple>
+    
+    <label>📝 상세 내용</label>
     <textarea id="reportText" rows="4" placeholder="상세 내용을 입력하세요"></textarea>
     
     <button class="main-btn" onclick="uploadAndSend()">🚀 확인요청 보내기</button>
 
+    <hr style="margin-top:25px; border:0; border-top:1px solid #eee;">
+
+    <div class="search-box">
+        <input type="text" id="searchKeyword" class="search-input" placeholder="날짜(260421) 또는 제목 검색">
+        <button class="search-btn" onclick="searchReports()">조회</button>
+    </div>
+
     <div class="status-board">
-        <div class="tab-menu">
-            <button id="tabAll" class="tab-btn active" onclick="changeTab('all')">전체보기</button>
-            <button id="tabWait" class="tab-btn" onclick="changeTab('wait')">⏳ 처리중만</button>
-        </div>
+        <div id="listTitle" style="font-size:13px; font-weight:bold; color:#666; margin-bottom:10px;">⏳ 현재 진행 중인 작업</div>
         <div id="reportList"></div>
     </div>
 </div>
@@ -74,9 +83,8 @@
     const db = firebase.firestore();
     const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
 
-    let currentFilter = 'all';
+    let reportListener = null; 
 
-    // [수정] 날짜 형식을 26/04/21 형태로 만드는 함수 추가
     function getFormattedDate() {
         const now = new Date();
         const year = String(now.getFullYear()).slice(-2);
@@ -96,9 +104,93 @@
         else {
             document.getElementById("userName").value = name;
             document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (변경)";
-            loadReports();
+            loadActiveReports(); // 기본적으로 처리중인 것만 로드
         }
     };
+
+    // [중요] 기본 리스트: 완료된 건 아예 가져오지 않음 (데이터 절약)
+    function loadActiveReports() {
+        const name = localStorage.getItem("logipan_user_name");
+        document.getElementById("listTitle").innerText = "⏳ 현재 진행 중인 작업";
+        
+        if(reportListener) reportListener(); // 기존 감시 종료
+
+        // status가 "✅ 완료"가 아닌 것만 실시간으로 가져옴
+        reportListener = db.collection("field_reports")
+            .where("user", "==", name)
+            .where("status", "==", "⏳ 처리중")
+            .onSnapshot(snap => {
+                renderList(snap);
+            });
+    }
+
+    // [중요] 검색 기능: 과거 데이터(완료 포함)를 필요할 때만 가져옴
+    async function searchReports() {
+        const name = localStorage.getItem("logipan_user_name");
+        let keyword = document.getElementById("searchKeyword").value.trim();
+        
+        if (!keyword) {
+            loadActiveReports(); // 검색어 없으면 다시 기본 리스트로
+            return;
+        }
+
+        if(reportListener) reportListener(); // 실시간 감시 잠시 중단
+        document.getElementById("listTitle").innerText = `🔍 '${keyword}' 검색 결과`;
+        
+        // 날짜 형식 변환 (260421 -> 26/04/21)
+        if (keyword.length === 6 && !isNaN(keyword)) {
+            keyword = `${keyword.slice(0,2)}/${keyword.slice(2,4)}/${keyword.slice(4,6)}`;
+        }
+
+        const listDiv = document.getElementById("reportList");
+        listDiv.innerHTML = "조회 중...";
+
+        // 검색은 단발성(get)으로 처리하여 데이터 소모 방지
+        const snap = await db.collection("field_reports").where("user", "==", name).get();
+        renderList(snap, keyword);
+    }
+
+    function renderList(snap, keyword = null) {
+        const listDiv = document.getElementById("reportList");
+        listDiv.innerHTML = "";
+        let docs = [];
+        snap.forEach(doc => docs.push({id: doc.id, ...doc.data()}));
+        docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+        let count = 0;
+        docs.forEach(data => {
+            // 검색 키워드가 있는 경우 필터링
+            if (keyword) {
+                const combined = (data.date + data.title + data.text).toLowerCase();
+                if (!combined.includes(keyword.toLowerCase())) return;
+            }
+
+            count++;
+            const isDone = data.status === "✅ 완료";
+            const imgCount = data.imageUrl ? data.imageUrl.split(",").length : 0;
+            const item = document.createElement("div");
+            item.className = `report-item ${isDone ? 'done' : ''}`;
+            item.innerHTML = `
+                <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
+                <div style="font-weight:bold; font-size:15px;">${data.title}</div>
+                <div style="font-size:13px; color:#666; margin-top:5px;">${data.text}</div>
+                ${imgCount > 0 ? `<div style="font-size:12px; color:#1a73e8; margin-top:5px;">🖼️ 사진 ${imgCount}장 첨부됨</div>` : ''}
+                
+                <button class="toggle-comm-btn" onclick="toggleComments('${data.id}')" id="btn-${data.id}">💬 대화 보기 (클릭)</button>
+                <div id="sec-${data.id}" class="comment-section">
+                    <div id="comments-${data.id}">불러오는 중...</div>
+                    <div class="re-reply-box">
+                        <input type="text" id="input-${data.id}" class="re-reply-input" placeholder="답장 입력">
+                        <button class="re-reply-btn" onclick="sendReply('${data.id}')">전송</button>
+                    </div>
+                </div>
+            `;
+            listDiv.appendChild(item);
+            loadComments(data.id);
+        });
+
+        if(count === 0) listDiv.innerHTML = "<p style='color:#999; text-align:center; padding:20px;'>내역이 없습니다.</p>";
+    }
 
     async function uploadAndSend() {
         const name = document.getElementById('userName').value;
@@ -108,15 +200,12 @@
         if(!title || !text) return alert("제목과 내용을 입력해주세요!");
 
         const loading = document.getElementById('loading');
-        const loadingMsg = document.getElementById('loadingMsg');
         loading.style.display = "block";
-        
         let imageUrls = []; 
 
         try {
             if (files.length > 0) {
                 for (let i = 0; i < files.length; i++) {
-                    loadingMsg.innerText = `사진 전송 중 (${i+1}/${files.length})`;
                     let formData = new FormData();
                     formData.append("image", files[i]);
                     const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
@@ -125,11 +214,8 @@
                 }
             }
             
-            // [수정] date 필드에 26/04/21 형식의 날짜 추가
             await db.collection("field_reports").add({
-                user: name, 
-                title: title, 
-                text: text, 
+                user: name, title: title, text: text, 
                 date: getFormattedDate(), 
                 imageUrl: imageUrls.join(","), 
                 status: "⏳ 처리중", 
@@ -138,49 +224,6 @@
             alert("전송 완료!"); location.reload();
         } catch (e) { alert("오류: " + e.message); }
         loading.style.display = "none";
-    }
-
-    function changeTab(type) {
-        currentFilter = type;
-        document.getElementById('tabAll').classList.toggle('active', type === 'all');
-        document.getElementById('tabWait').classList.toggle('active', type === 'wait');
-        loadReports();
-    }
-
-    function loadReports() {
-        const name = localStorage.getItem("logipan_user_name");
-        db.collection("field_reports").where("user", "==", name).onSnapshot(snap => {
-            const listDiv = document.getElementById("reportList");
-            listDiv.innerHTML = "";
-            let reports = [];
-            snap.forEach(doc => reports.push({id: doc.id, ...doc.data()}));
-            reports.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
-
-            reports.forEach(data => {
-                if (currentFilter === 'wait' && data.status === "✅ 완료") return;
-                const isDone = data.status === "✅ 완료";
-                const imgCount = data.imageUrl ? data.imageUrl.split(",").length : 0;
-                const item = document.createElement("div");
-                item.className = `report-item ${isDone ? 'done' : ''}`;
-                item.innerHTML = `
-                    <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
-                    <div style="font-weight:bold; font-size:15px;">${data.title}</div>
-                    <div style="font-size:13px; color:#666; margin-top:5px;">${data.text}</div>
-                    ${imgCount > 0 ? `<div style="font-size:12px; color:#1a73e8; margin-top:5px;">🖼️ 사진 ${imgCount}장 첨부됨</div>` : ''}
-                    
-                    <button class="toggle-comm-btn" onclick="toggleComments('${data.id}')" id="btn-${data.id}">💬 대화 보기 (클릭)</button>
-                    <div id="sec-${data.id}" class="comment-section">
-                        <div id="comments-${data.id}">불러오는 중...</div>
-                        <div class="re-reply-box">
-                            <input type="text" id="input-${data.id}" class="re-reply-input" placeholder="답장 입력">
-                            <button class="re-reply-btn" onclick="sendReply('${data.id}')">전송</button>
-                        </div>
-                    </div>
-                `;
-                listDiv.appendChild(item);
-                loadComments(data.id);
-            });
-        });
     }
 
     function toggleComments(docId) {
@@ -196,25 +239,16 @@
     }
 
     function loadComments(docId) {
-        const myName = localStorage.getItem("logipan_user_name");
         db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "asc").onSnapshot(snap => {
             const box = document.getElementById(`comments-${docId}`);
             if (snap.empty) { box.innerHTML = "<p style='color:#bbb; margin:0;'>대화 내역이 없습니다.</p>"; return; }
             box.innerHTML = "";
-            
             snap.forEach(c => {
                 const d = c.data();
-                const sender = d.user;
-                const cleanText = d.text.replace("[답장] ", "");
                 const isAdmin = !d.text.includes("[답장]");
-                
                 const bubble = document.createElement("div");
                 bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
-                
-                const tagClass = isAdmin ? "admin-tag" : "user-tag";
-                const tagName = isAdmin ? `📢 ${sender}` : `👤 ${sender}`;
-                
-                bubble.innerHTML = `<span class="${tagClass}">${tagName}</span> <span>${cleanText}</span>`;
+                bubble.innerHTML = `<span class="${isAdmin ? 'admin-tag' : 'user-tag'}">${isAdmin ? '📢 관리자' : '👤 ' + d.user}</span> <span>${d.text.replace("[답장] ", "")}</span>`;
                 box.appendChild(bubble);
             });
         });
