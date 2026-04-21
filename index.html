@@ -44,10 +44,7 @@
         
         #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); color: white; text-align: center; padding-top: 250px; z-index: 1000; }
 
-        /* [추가] 답변 박스 스타일 */
-        .reply-box { margin-top: 10px; background: #e7f3ff; padding: 10px; border-radius: 8px; border-left: 4px solid #1877f2; font-size: 13px; }
-        
-        /* [추가] 관리자 답변용 파란색 박스 디자인 */
+        /* 관리자 답변용 파란색 박스 디자인 */
         .reply-box { 
             margin-top: 10px; 
             background: #e7f3ff; 
@@ -56,7 +53,6 @@
             border-left: 4px solid #1877f2; 
             font-size: 13px; 
         }
-        
     </style>
 </head>
 <body>
@@ -97,15 +93,8 @@
             <div id="notice-content">불러오는 중...</div>
         </div>
         <hr>
-        <label>📂 구분 선택</label>
-        <select id="boardCategory">
-            <option value="⏰ 지각/근태">⏰ 지각/근태 보고</option>
-            <option value="🏠 개인사정">🏠 개인사정</option>
-            <option value="💡 건의사항">💡 건의사항</option>
-            <option value="❓ 기타문의">❓ 기타문의</option>
-        </select>
-        <label>📝 내용</label>
-        <textarea id="boardText" rows="5" placeholder="전달하실 내용을 입력하세요"></textarea>
+        <label>📝 전달할 내용</label>
+        <textarea id="boardText" rows="6" placeholder="지각 보고, 건의사항 등 관리자에게 전달할 내용을 입력하세요"></textarea>
         <button class="main-btn" style="background:#1877F2;" onclick="submitBoard()">💬 글 올리기</button>
 
         <div style="margin-top:30px;">
@@ -149,7 +138,7 @@
             document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (변경)";
             loadActiveReports();
             loadNotice();
-            loadMyBoardPosts(); // 내 문의 내역 불러오기
+            loadMyBoardPosts();
         }
     };
 
@@ -161,7 +150,6 @@
         });
     }
 
-    // [추가] 내 문의 내역 실시간 리스너
     function loadMyBoardPosts() {
         const name = localStorage.getItem("logipan_user_name");
         db.collection("board_posts")
@@ -174,37 +162,34 @@
                   listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>문의 내역이 없습니다.</p>";
                   return;
               }
-              // snap.forEach 내부 수정
-            snap.forEach(doc => {
-                const d = doc.data();
-                if(d.category === "공지") return;
-                
-                const item = document.createElement("div");
-                item.className = "report-item";
-                item.style.border = "1px solid #ddd";
+              snap.forEach(doc => {
+                  const d = doc.data();
+                  if(d.category === "공지") return;
+                  
+                  const item = document.createElement("div");
+                  item.className = "report-item";
+                  item.style.border = "1px solid #ddd";
 
-                // 1. 본문 내용 (여기까지는 기존과 동일)
-                let html = `
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                        <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
-                        <span class="status-badge ${d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status}</span>
-                    </div>
-                    <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
-                `;
+                  let html = `
+                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                          <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
+                          <span class="status-badge ${d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status}</span>
+                      </div>
+                      <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
+                  `;
 
-                // 2. [중요] 관리자 답변(reply)이 있으면 박스 추가
-                if(d.reply) {
-                    html += `
-                        <div class="reply-box">
-                            <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
-                            ${d.reply}
-                        </div>
-                    `;
-                }
+                  if(d.reply) {
+                      html += `
+                          <div class="reply-box">
+                              <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
+                              ${d.reply}
+                          </div>
+                      `;
+                  }
 
-                item.innerHTML = html;
-                listDiv.appendChild(item);
-            });
+                  item.innerHTML = html;
+                  listDiv.appendChild(item);
+              });
           });
     }
 
@@ -217,7 +202,11 @@
         loading.style.display = "block";
         try {
             await db.collection("board_posts").add({
-                user: name, category: "문의", text: text, status: "신규", timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                user: name,
+                category: "문의",
+                text: text,
+                status: "신규",
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("메시지가 전송되었습니다!");
             document.getElementById('boardText').value = "";
@@ -225,7 +214,7 @@
         loading.style.display = "none";
     }
 
-    // --- 기존 현장보고 로직 ---
+    /* --- 여기서부터 현장보고 로직 (수정 금지 영역) --- */
     let reportListener = null;
     function getFormattedDate() {
         const now = new Date();
