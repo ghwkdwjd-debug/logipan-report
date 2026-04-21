@@ -46,6 +46,17 @@
 
         /* [추가] 답변 박스 스타일 */
         .reply-box { margin-top: 10px; background: #e7f3ff; padding: 10px; border-radius: 8px; border-left: 4px solid #1877f2; font-size: 13px; }
+        
+        /* [추가] 관리자 답변용 파란색 박스 디자인 */
+        .reply-box { 
+            margin-top: 10px; 
+            background: #e7f3ff; 
+            padding: 10px; 
+            border-radius: 8px; 
+            border-left: 4px solid #1877f2; 
+            font-size: 13px; 
+        }
+        
     </style>
 </head>
 <body>
@@ -163,39 +174,42 @@
                   listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>문의 내역이 없습니다.</p>";
                   return;
               }
-              snap.forEach(doc => {
-                  const d = doc.data();
-                  if(d.category === "공지") return;
+              // snap.forEach 내부 수정
+            snap.forEach(doc => {
+                const d = doc.data();
+                if(d.category === "공지") return;
+                
+                const item = document.createElement("div");
+                item.className = "report-item";
+                item.style.border = "1px solid #ddd";
 
-                  const item = document.createElement("div");
-                  item.className = "report-item";
-                  item.style.border = "1px solid #ddd";
-                  
-                  let html = `
-                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                          <span style="font-weight:bold; color:#1877f2;">[${d.category}]</span>
-                          <span class="status-badge ${d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status}</span>
-                      </div>
-                      <div style="font-size:14px; margin-bottom:5px;">${d.text}</div>
-                  `;
+                // 1. 본문 내용 (여기까지는 기존과 동일)
+                let html = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
+                        <span class="status-badge ${d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status}</span>
+                    </div>
+                    <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
+                `;
 
-                  if(d.reply) {
-                      html += `
-                          <div class="reply-box">
-                              <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
-                              ${d.reply}
-                          </div>
-                      `;
-                  }
-                  item.innerHTML = html;
-                  listDiv.appendChild(item);
-              });
+                // 2. [중요] 관리자 답변(reply)이 있으면 박스 추가
+                if(d.reply) {
+                    html += `
+                        <div class="reply-box">
+                            <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
+                            ${d.reply}
+                        </div>
+                    `;
+                }
+
+                item.innerHTML = html;
+                listDiv.appendChild(item);
+            });
           });
     }
 
     async function submitBoard() {
         const name = document.getElementById('userName').value;
-        const category = document.getElementById('boardCategory').value;
         const text = document.getElementById('boardText').value;
         if(!text) return alert("내용을 입력해주세요!");
 
@@ -203,7 +217,7 @@
         loading.style.display = "block";
         try {
             await db.collection("board_posts").add({
-                user: name, category: category, text: text, status: "신규", timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                user: name, category: "문의", text: text, status: "신규", timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("메시지가 전송되었습니다!");
             document.getElementById('boardText').value = "";
