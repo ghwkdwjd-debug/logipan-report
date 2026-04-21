@@ -23,10 +23,9 @@
         .done { background: #e8f5e9; color: #2e7d32; }
         .toggle-comm-btn { background: none; border: none; color: #1a73e8; font-size: 13px; font-weight: bold; cursor: pointer; padding: 5px 0; margin-top: 10px; display: block; }
         .comment-section { display: none; margin-top: 10px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; }
-        /* [수정] 말풍선 스타일 개선 */
         .comment-bubble { padding: 8px; border-radius: 6px; margin-bottom: 5px; line-height: 1.4; }
-        .admin-msg { background: #e7f3ff; border-left: 4px solid #1a73e8; } /* 관리자용 색상 */
-        .user-msg { background: #eee; border-left: 4px solid #999; } /* 작업자용 색상 */
+        .admin-msg { background: #e7f3ff; border-left: 4px solid #1a73e8; }
+        .user-msg { background: #eee; border-left: 4px solid #999; }
         .user-tag { color: #555; font-weight: bold; font-size: 11px; display: block; margin-bottom: 2px; }
         .admin-tag { color: #1a73e8; font-weight: bold; font-size: 11px; display: block; margin-bottom: 2px; }
         .re-reply-box { display: flex; gap: 5px; margin-top: 12px; }
@@ -63,7 +62,6 @@
 </div>
 
 <script>
-    // 파이어베이스 설정 (기존과 동일)
     const firebaseConfig = {
         apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", 
         authDomain: "logipan-2026.firebaseapp.com",
@@ -77,6 +75,15 @@
     const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
 
     let currentFilter = 'all';
+
+    // [수정] 날짜 형식을 26/04/21 형태로 만드는 함수 추가
+    function getFormattedDate() {
+        const now = new Date();
+        const year = String(now.getFullYear()).slice(-2);
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        return `${year}/${month}/${day}`;
+    }
 
     function askName() {
         const name = prompt("성함을 입력해주세요");
@@ -118,10 +125,15 @@
                 }
             }
             
+            // [수정] date 필드에 26/04/21 형식의 날짜 추가
             await db.collection("field_reports").add({
-                user: name, title: title, text: text, 
+                user: name, 
+                title: title, 
+                text: text, 
+                date: getFormattedDate(), 
                 imageUrl: imageUrls.join(","), 
-                status: "⏳ 처리중", timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                status: "⏳ 처리중", 
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("전송 완료!"); location.reload();
         } catch (e) { alert("오류: " + e.message); }
@@ -183,10 +195,8 @@
         }
     }
 
-    // [중요 수정] 댓글 로드 로직: 누가 썼는지 판단하여 색상 구분
     function loadComments(docId) {
-        const myName = localStorage.getItem("logipan_user_name"); // 작업자 본인 이름
-        
+        const myName = localStorage.getItem("logipan_user_name");
         db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "asc").onSnapshot(snap => {
             const box = document.getElementById(`comments-${docId}`);
             if (snap.empty) { box.innerHTML = "<p style='color:#bbb; margin:0;'>대화 내역이 없습니다.</p>"; return; }
@@ -196,8 +206,6 @@
                 const d = c.data();
                 const sender = d.user;
                 const cleanText = d.text.replace("[답장] ", "");
-                
-                // [수정 로직] 내가 쓴 글([답장])이 아니면 무조건 '관리자'의 지시로 간주
                 const isAdmin = !d.text.includes("[답장]");
                 
                 const bubble = document.createElement("div");
