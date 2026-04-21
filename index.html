@@ -138,7 +138,7 @@
     // --- 공지/소통 전용 함수 ---
     function loadNotice() {
         db.collection("board_posts")
-          .where("category", "==", "📢공지")
+          .where("category", "==", "공지")
           .orderBy("timestamp", "desc")
           .limit(1)
           .onSnapshot(snap => {
