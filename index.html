@@ -3,17 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로지판 - 현장 보고 시스템</title>
+    <title>로지판 - 통합 현장 관리</title>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
+        
+        /* 탭 메뉴 스타일 */
+        .tabs { display: flex; gap: 5px; margin-bottom: 20px; }
+        .tab-btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; background: #eee; color: #666; }
+        .tab-btn.active { background: #222; color: white; }
+
         h2 { text-align: center; font-size: 20px; margin-bottom: 20px; color: #222; }
         label { font-size: 13px; font-weight: bold; color: #555; display: block; margin-top: 15px; margin-bottom: 5px; }
-        input, textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 15px; outline: none; }
+        input, textarea, select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 15px; outline: none; }
         button.main-btn { width: 100%; padding: 16px; background: #222; color: white; border: none; border-radius: 8px; font-size: 17px; font-weight: bold; cursor: pointer; margin-top: 20px; }
         
+        /* 공지사항 스타일 */
+        .notice-box { background: #fff9c4; padding: 15px; border-radius: 10px; border-left: 5px solid #fbc02d; margin-bottom: 20px; font-size: 14px; line-height: 1.5; }
+        .notice-box small { display: block; color: #7f8c8d; margin-bottom: 5px; font-size: 11px; }
+
         .search-box { display: flex; gap: 8px; margin-top: 20px; margin-bottom: 10px; }
         .search-input { flex: 1; padding: 10px !important; font-size: 13px !important; }
         .search-btn { width: 70px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
@@ -24,58 +34,65 @@
         .wait { background: #fff3e0; color: #ef6c00; } 
         .done { background: #e8f5e9; color: #2e7d32; }
 
-        /* [추가] 댓글 개수 및 NEW 배지 스타일 */
-        .comment-count-tag { font-size: 12px; color: #666; margin-left: 5px; font-weight: normal; }
-        .new-badge { 
-            background: #ff4d4f; color: white; padding: 2px 6px; border-radius: 10px; 
-            font-size: 10px; font-weight: bold; margin-left: 5px; vertical-align: middle;
-            animation: blink 1.5s infinite; 
-        }
+        .new-badge { background: #ff4d4f; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; margin-left: 5px; animation: blink 1.5s infinite; }
         @keyframes blink { 0% {opacity: 1;} 50% {opacity: 0.5;} 100% {opacity: 1;} }
 
-        .toggle-comm-btn { background: none; border: none; color: #1a73e8; font-size: 13px; font-weight: bold; cursor: pointer; padding: 5px 0; margin-top: 10px; display: block; text-align: left; width: 100%; }
         .comment-section { display: none; margin-top: 10px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; }
-        .comment-bubble { padding: 8px; border-radius: 6px; margin-bottom: 5px; line-height: 1.4; }
+        .comment-bubble { padding: 8px; border-radius: 6px; margin-bottom: 5px; }
         .admin-msg { background: #e7f3ff; border-left: 4px solid #1a73e8; }
         .user-msg { background: #eee; border-left: 4px solid #999; }
-        .user-tag { color: #555; font-weight: bold; font-size: 11px; display: block; margin-bottom: 2px; }
-        .admin-tag { color: #1a73e8; font-weight: bold; font-size: 11px; display: block; margin-bottom: 2px; }
-        .re-reply-box { display: flex; gap: 5px; margin-top: 12px; }
-        .re-reply-input { flex: 1; padding: 8px !important; margin: 0 !important; font-size: 13px !important; height: 36px; }
-        .re-reply-btn { width: 55px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 12px; }
+        
         #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); color: white; text-align: center; padding-top: 250px; z-index: 1000; }
     </style>
 </head>
 <body>
 
-<div id="loading">🚀 <span id="loadingMsg">사진을 전송하고 있습니다...</span></div>
+<div id="loading">🚀 <span id="loadingMsg">데이터를 처리 중입니다...</span></div>
 
 <div class="card">
-    <h2>👷 현장 작업 보고</h2>
-    <div id="userDisplay" style="background:#eee; padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin-bottom:15px; font-size:14px; cursor:pointer;" onclick="askName()">👤 작업자 등록 (클릭)</div>
-    <input type="hidden" id="userName"> 
-
-    <label>📌 제목</label>
-    <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다">
-    
-    <label>📸 사진 촬영 / 첨부 (여러 장 선택 가능)</label>
-    <input type="file" id="photoInput" accept="image/*" multiple>
-    
-    <label>📝 상세 내용</label>
-    <textarea id="reportText" rows="4" placeholder="상세 내용을 입력하세요"></textarea>
-    
-    <button class="main-btn" onclick="uploadAndSend()">🚀 확인요청 보내기</button>
-
-    <hr style="margin-top:25px; border:0; border-top:1px solid #eee;">
-
-    <div class="search-box">
-        <input type="text" id="searchKeyword" class="search-input" placeholder="날짜(260421) 또는 제목 검색">
-        <button class="search-btn" onclick="searchReports()">조회</button>
+    <div class="tabs">
+        <button id="tab-report" class="tab-btn active" onclick="switchTab('report')">📷 현장보고</button>
+        <button id="tab-board" class="tab-btn" onclick="switchTab('board')">📢 공지/소통</button>
     </div>
 
-    <div class="status-board">
+    <div id="userDisplay" style="background:#f0f2f5; padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin-bottom:15px; font-size:14px; cursor:pointer;" onclick="askName()">👤 작업자 등록 (클릭)</div>
+    <input type="hidden" id="userName">
+
+    <div id="section-report">
+        <h2>👷 현장 작업 보고</h2>
+        <label>📌 제목</label>
+        <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다">
+        <label>📸 사진 촬영 / 첨부</label>
+        <input type="file" id="photoInput" accept="image/*" multiple>
+        <label>📝 상세 내용</label>
+        <textarea id="reportText" rows="4" placeholder="상세 내용을 입력하세요"></textarea>
+        <button class="main-btn" onclick="uploadAndSend()">🚀 확인요청 보내기</button>
+        <hr style="margin-top:25px; border:0; border-top:1px solid #eee;">
+        <div class="search-box">
+            <input type="text" id="searchKeyword" class="search-input" placeholder="날짜 또는 제목 검색">
+            <button class="search-btn" onclick="searchReports()">조회</button>
+        </div>
         <div id="listTitle" style="font-size:13px; font-weight:bold; color:#666; margin-bottom:10px;">⏳ 현재 진행 중인 작업</div>
         <div id="reportList"></div>
+    </div>
+
+    <div id="section-board" style="display:none;">
+        <h2>📢 공지사항 및 소통</h2>
+        <div class="notice-box">
+            <small>최근 관리자 공지</small>
+            <div id="notice-content">불러오는 중...</div>
+        </div>
+        <hr>
+        <label>📂 구분 선택</label>
+        <select id="boardCategory">
+            <option value="⏰ 지각/근태">⏰ 지각/근태 보고</option>
+            <option value="🏠 개인사정">🏠 개인사정</option>
+            <option value="💡 건의사항">💡 건의사항</option>
+            <option value="❓ 기타문의">❓ 기타문의</option>
+        </select>
+        <label>📝 내용</label>
+        <textarea id="boardText" rows="5" placeholder="전달하실 내용을 입력하세요"></textarea>
+        <button class="main-btn" style="background:#1877F2;" onclick="submitBoard()">💬 글 올리기</button>
     </div>
 </div>
 
@@ -92,16 +109,16 @@
     const db = firebase.firestore();
     const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
 
-    let reportListener = null; 
-
-    function getFormattedDate() {
-        const now = new Date();
-        const year = String(now.getFullYear()).slice(-2);
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        return `${year}/${month}/${day}`;
+    // 탭 전환 함수
+    function switchTab(type) {
+        document.getElementById('section-report').style.display = type === 'report' ? 'block' : 'none';
+        document.getElementById('section-board').style.display = type === 'board' ? 'block' : 'none';
+        document.getElementById('tab-report').className = 'tab-btn' + (type === 'report' ? ' active' : '');
+        document.getElementById('tab-board').className = 'tab-btn' + (type === 'board' ? ' active' : '');
+        if(type === 'board') loadNotice();
     }
 
+    // 이름 관리
     function askName() {
         const name = prompt("성함을 입력해주세요");
         if (name) { localStorage.setItem("logipan_user_name", name); location.reload(); }
@@ -114,46 +131,77 @@
             document.getElementById("userName").value = name;
             document.getElementById("userDisplay").innerText = "👤 작업자: " + name + " (변경)";
             loadActiveReports();
+            loadNotice();
         }
     };
 
+    // --- 공지/소통 전용 함수 ---
+    function loadNotice() {
+        db.collection("board_posts")
+          .where("category", "==", "📢공지")
+          .orderBy("timestamp", "desc")
+          .limit(1)
+          .onSnapshot(snap => {
+              const box = document.getElementById("notice-content");
+              if(snap.empty) box.innerText = "현재 등록된 공지가 없습니다.";
+              else snap.forEach(doc => box.innerText = doc.data().text);
+          });
+    }
+
+    async function submitBoard() {
+        const name = document.getElementById('userName').value;
+        const category = document.getElementById('boardCategory').value;
+        const text = document.getElementById('boardText').value;
+        if(!text) return alert("내용을 입력해주세요!");
+
+        const loading = document.getElementById('loading');
+        loading.style.display = "block";
+        try {
+            await db.collection("board_posts").add({
+                user: name,
+                category: category,
+                text: text,
+                status: "🆕 신규",
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            alert("메시지가 전송되었습니다!");
+            document.getElementById('boardText').value = "";
+        } catch(e) { alert("오류: " + e.message); }
+        loading.style.display = "none";
+    }
+
+    // --- 기존 현장보고 함수 (그대로 유지) ---
+    let reportListener = null;
+    function getFormattedDate() {
+        const now = new Date();
+        return `${String(now.getFullYear()).slice(-2)}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
+    }
+
     function loadActiveReports() {
         const name = localStorage.getItem("logipan_user_name");
-        document.getElementById("listTitle").innerText = "⏳ 현재 진행 중인 작업";
         if(reportListener) reportListener();
-        reportListener = db.collection("field_reports")
-            .where("user", "==", name)
-            .where("status", "==", "⏳ 처리중")
-            .onSnapshot(snap => { renderList(snap); });
+        reportListener = db.collection("field_reports").where("user", "==", name).where("status", "==", "⏳ 처리중").onSnapshot(snap => renderList(snap));
     }
 
     async function searchReports() {
         const name = localStorage.getItem("logipan_user_name");
-        let keyword = document.getElementById("searchKeyword").value.trim();
-        if (!keyword) { loadActiveReports(); return; }
+        let kw = document.getElementById("searchKeyword").value.trim();
+        if (!kw) { loadActiveReports(); return; }
         if(reportListener) reportListener();
-        document.getElementById("listTitle").innerText = `🔍 '${keyword}' 검색 결과`;
-        if (keyword.length === 6 && !isNaN(keyword)) {
-            keyword = `${keyword.slice(0,2)}/${keyword.slice(2,4)}/${keyword.slice(4,6)}`;
-        }
+        if (kw.length === 6 && !isNaN(kw)) kw = `${kw.slice(0,2)}/${kw.slice(2,4)}/${kw.slice(4,6)}`;
         const snap = await db.collection("field_reports").where("user", "==", name).get();
-        renderList(snap, keyword);
+        renderList(snap, kw);
     }
 
-    function renderList(snap, keyword = null) {
+    function renderList(snap, kw = null) {
         const listDiv = document.getElementById("reportList");
         listDiv.innerHTML = "";
         let docs = [];
         snap.forEach(doc => docs.push({id: doc.id, ...doc.data()}));
         docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
 
-        let count = 0;
         docs.forEach(data => {
-            if (keyword) {
-                const combined = (data.date + data.title + data.text).toLowerCase();
-                if (!combined.includes(keyword.toLowerCase())) return;
-            }
-            count++;
+            if (kw && !(data.date + data.title + data.text).toLowerCase().includes(kw.toLowerCase())) return;
             const isDone = data.status === "✅ 완료";
             const imgCount = data.imageUrl ? data.imageUrl.split(",").length : 0;
             const item = document.createElement("div");
@@ -163,63 +211,41 @@
                 <div style="font-weight:bold; font-size:15px;">${data.title}</div>
                 <div style="font-size:13px; color:#666; margin-top:5px;">${data.text}</div>
                 ${imgCount > 0 ? `<div style="font-size:12px; color:#1a73e8; margin-top:5px;">🖼️ 사진 ${imgCount}장 첨부됨</div>` : ''}
-                
-                <button class="toggle-comm-btn" onclick="toggleComments('${data.id}')" id="btn-${data.id}">
-                    💬 대화 보기 <span id="count-${data.id}" class="comment-count-tag"></span><span id="new-${data.id}"></span>
+                <button onclick="toggleComments('${data.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block;">
+                    💬 대화 보기 <span id="count-${data.id}"></span><span id="new-${data.id}"></span>
                 </button>
-
                 <div id="sec-${data.id}" class="comment-section">
                     <div id="comments-${data.id}">불러오는 중...</div>
-                    <div class="re-reply-box">
-                        <input type="text" id="input-${data.id}" class="re-reply-input" placeholder="답장 입력">
-                        <button class="re-reply-btn" onclick="sendReply('${data.id}')">전송</button>
+                    <div style="display:flex; gap:5px; margin-top:10px;">
+                        <input type="text" id="input-${data.id}" placeholder="답장 입력" style="flex:1; padding:8px; font-size:13px;">
+                        <button onclick="sendReply('${data.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 10px;">전송</button>
                     </div>
                 </div>
             `;
             listDiv.appendChild(item);
-            loadComments(data.id); // 여기서 실시간으로 댓글수와 NEW 체크
+            loadComments(data.id);
         });
-        if(count === 0) listDiv.innerHTML = "<p style='color:#999; text-align:center; padding:20px;'>내역이 없습니다.</p>";
     }
 
-    // [수정] 댓글을 불러오면서 개수와 마지막 발신자를 확인하여 NEW 배지 표시
     function loadComments(docId) {
         db.collection("field_reports").doc(docId).collection("comments").orderBy("timestamp", "asc").onSnapshot(snap => {
             const box = document.getElementById(`comments-${docId}`);
             const countTag = document.getElementById(`count-${docId}`);
             const newBadge = document.getElementById(`new-${docId}`);
-            
-            if (snap.empty) { 
-                box.innerHTML = "<p style='color:#bbb; margin:0;'>대화 내역이 없습니다.</p>"; 
-                if(countTag) countTag.innerText = "(0)";
-                return; 
-            }
-
-            if(countTag) countTag.innerText = `(${snap.size})`;
+            if (snap.empty) { box.innerHTML = "대화 없음"; countTag.innerText = "(0)"; return; }
+            countTag.innerText = `(${snap.size})`;
             box.innerHTML = "";
             let lastIsAdmin = false;
-
             snap.forEach(c => {
                 const d = c.data();
                 const isAdmin = !d.text.includes("[답장]"); 
                 lastIsAdmin = isAdmin;
-
                 const bubble = document.createElement("div");
                 bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
-                
-                // [수정 포인트] '📢 관리자' 대신 실제 DB에 저장된 d.user(발신자 이름)를 출력합니다.
-                const displayName = isAdmin ? `📢 ${d.user}` : `👤 ${d.user}`;
-                
-                bubble.innerHTML = `
-                    <span class="${isAdmin ? 'admin-tag' : 'user-tag'}">${displayName}</span> 
-                    <span>${d.text.replace("[답장] ", "")}</span>
-                `;
+                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin?'📢 '+d.user:'👤 '+d.user}</span><br>${d.text.replace("[답장] ", "")}`;
                 box.appendChild(bubble);
             });
-
-            if(newBadge) {
-                newBadge.innerHTML = lastIsAdmin ? '<span class="new-badge">NEW</span>' : '';
-            }
+            if(newBadge) newBadge.innerHTML = lastIsAdmin ? '<span class="new-badge">NEW</span>' : '';
         });
     }
 
@@ -233,24 +259,17 @@
         const loading = document.getElementById('loading');
         loading.style.display = "block";
         let imageUrls = []; 
-
         try {
-            if (files.length > 0) {
-                for (let i = 0; i < files.length; i++) {
-                    let formData = new FormData();
-                    formData.append("image", files[i]);
-                    const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
-                    const json = await res.json();
-                    if(json.success) imageUrls.push(json.data.url);
-                }
+            for (let i = 0; i < files.length; i++) {
+                let formData = new FormData();
+                formData.append("image", files[i]);
+                const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
+                const json = await res.json();
+                if(json.success) imageUrls.push(json.data.url);
             }
-            
             await db.collection("field_reports").add({
-                user: name, title: title, text: text, 
-                date: getFormattedDate(), 
-                imageUrl: imageUrls.join(","), 
-                status: "⏳ 처리중", 
-                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                user: name, title: title, text: text, date: getFormattedDate(), 
+                imageUrl: imageUrls.join(","), status: "⏳ 처리중", timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("전송 완료!"); location.reload();
         } catch (e) { alert("오류: " + e.message); }
@@ -259,15 +278,7 @@
 
     function toggleComments(docId) {
         const sec = document.getElementById(`sec-${docId}`);
-        const btn = document.getElementById(`btn-${docId}`);
-        if (sec.style.display === "block") {
-            sec.style.display = "none";
-        } else {
-            sec.style.display = "block";
-            // [추가] 대화를 열면 NEW 배지 제거 (선택 사항)
-            const newBadge = document.getElementById(`new-${docId}`);
-            if(newBadge) newBadge.innerHTML = "";
-        }
+        sec.style.display = sec.style.display === "block" ? "none" : "block";
     }
 
     async function sendReply(docId) {
