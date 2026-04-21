@@ -159,9 +159,9 @@
         try {
             await db.collection("board_posts").add({
                 user: name,
-                category: category,
+                category: category, // 여기서 이모지 빼고 '개인사정'만 보내게 HTML <option> 수정
                 text: text,
-                status: "🆕 신규",
+                status: "신규", // 이모지 빼기
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             alert("메시지가 전송되었습니다!");
