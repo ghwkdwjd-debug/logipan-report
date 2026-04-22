@@ -91,8 +91,8 @@
         <div class="notice-box">
         <small>최근 관리자 공지</small>
         <div id="notice-content" style="font-weight:bold;">불러오는 중...</div>
-        <button onclick="toggleNoticeList()" style="margin-top:10px; background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
-            📜 이전 공지 전체보기 ▼
+        <button onclick="handleNoticeStep()" id="notice-step-btn" style="margin-top:10px; background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
+            📜 이전 공지 보기 (최근 5개) ▼
         </button>
     </div>
 
@@ -237,41 +237,59 @@
         loading.style.display = "none";
     }
 
-        // 공지 리스트 열고 닫기
-    function toggleNoticeList() {
+    // --- [공지 단계별 보기 로직] ---
+    let noticeStep = 0; // 0:닫힘, 1:5개, 2:7일치
+
+    function handleNoticeStep() {
         const listDiv = document.getElementById("notice-list-all");
-        if (listDiv.style.display === "none") {
+        const btn = document.getElementById("notice-step-btn");
+        
+        noticeStep++;
+
+        if (noticeStep === 1) {
             listDiv.style.display = "block";
-            loadAllNotices(); // 열 때 전체 공지 불러오기
-        } else {
+            btn.innerText = "📅 최근 7일 내역 더보기 ▼";
+            loadNoticesByStep(5);
+        } 
+        else if (noticeStep === 2) {
+            btn.innerText = "▲ 공지 닫기";
+            loadNoticesByStep('7days');
+        } 
+        else {
             listDiv.style.display = "none";
+            btn.innerText = "📜 이전 공지 보기 (최근 5개) ▼";
+            noticeStep = 0;
         }
     }
 
-    // 이전 공지 전체 불러오기 함수
-    function loadAllNotices() {
-        db.collection("board_posts")
-        .where("category", "==", "공지")
-        .orderBy("timestamp", "desc")
-        .get()
-        .then(snap => {
-            const container = document.getElementById("all-notices");
+    function loadNoticesByStep(mode) {
+        const container = document.getElementById("all-notices");
+        let query = db.collection("board_posts")
+                    .where("category", "==", "공지")
+                    .orderBy("timestamp", "desc");
+
+        if (mode === 5) {
+            query = query.limit(5); 
+        } else if (mode === '7days') {
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            query = query.where("timestamp", ">=", sevenDaysAgo); 
+        }
+
+        query.get().then(snap => {
             container.innerHTML = "";
-            
             if(snap.empty) {
-                container.innerHTML = "<p style='color:#999; text-align:center;'>공지가 없습니다.</p>";
+                container.innerHTML = "<p style='color:#999; text-align:center; padding:10px;'>해당하는 공지가 없습니다.</p>";
                 return;
             }
-
             snap.forEach(doc => {
                 const d = doc.data();
-                const date = d.timestamp ? new Date(d.timestamp.seconds * 1000).toLocaleDateString() : "";
-                
+                const date = d.timestamp ? new Date(d.timestamp.seconds * 1000).toLocaleDateString() : "날짜미상";
                 const item = document.createElement("div");
-                item.style = "padding:8px 0; border-bottom:1px solid #eee;";
+                item.style = "padding:12px 0; border-bottom:1px solid #eee;";
                 item.innerHTML = `
-                    <div style="font-size:11px; color:#f39c12; font-weight:bold;">📌 ${date}</div>
-                    <div style="color:#444; line-height:1.4;">${d.text}</div>
+                    <div style="font-size:11px; color:#f39c12; font-weight:bold; margin-bottom:4px;">📌 ${date}</div>
+                    <div style="color:#444; line-height:1.5; white-space: pre-wrap;">${d.text}</div>
                 `;
                 container.appendChild(item);
             });
