@@ -355,7 +355,7 @@
         if(!confirm("작성하신 메시지를 삭제하시겠습니까?")) return;
         
         try {
-            await db.collection("board_posts").document(docId).delete();
+            await db.collection("board_posts").doc(docId).delete();
             alert("삭제되었습니다.");
         } catch (e) {
             alert("삭제 중 오류가 발생했습니다: " + e.message);
