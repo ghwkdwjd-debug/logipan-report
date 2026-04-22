@@ -238,8 +238,14 @@
 
     function loadActiveReports() {
         const name = localStorage.getItem("logipan_user_name");
+        document.getElementById("listTitle").innerText = "⏳ 전체 작업 내역"; // 제목도 변경
+        
         if(reportListener) reportListener();
-        reportListener = db.collection("field_reports").where("user", "==", name).where("status", "==", "⏳ 처리중").onSnapshot(snap => renderList(snap));
+        
+        // 여기서 .where("status", "==", "⏳ 처리중") 이 줄을 삭제했습니다.
+        reportListener = db.collection("field_reports")
+            .where("user", "==", name)
+            .onSnapshot(snap => { renderList(snap); });
     }
 
     async function searchReports() {
