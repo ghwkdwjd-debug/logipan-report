@@ -151,47 +151,57 @@
     }
 
     function loadMyBoardPosts() {
-        const name = localStorage.getItem("logipan_user_name");
-        db.collection("board_posts")
-          .where("user", "==", name)
-          .orderBy("timestamp", "desc")
-          .onSnapshot(snap => {
-              const listDiv = document.getElementById("my-board-list");
-              listDiv.innerHTML = "";
-              if(snap.empty) {
-                  listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>문의 내역이 없습니다.</p>";
-                  return;
-              }
-              snap.forEach(doc => {
-                  const d = doc.data();
-                  if(d.category === "공지") return;
-                  
-                  const item = document.createElement("div");
-                  item.className = "report-item";
-                  item.style.border = "1px solid #ddd";
+    const name = localStorage.getItem("logipan_user_name");
+    
+    // .orderBy("timestamp", "desc") 이 부분을 잠시 지워보세요 (색인 생성 전까지)
+    db.collection("board_posts")
+      .where("user", "==", name)
+      .onSnapshot(snap => {
+          const listDiv = document.getElementById("my-board-list");
+          listDiv.innerHTML = "";
+          
+          if(snap.empty) {
+              listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>문의 내역이 없습니다.</p>";
+              return;
+          }
 
-                  let html = `
-                      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                          <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
-                          <span class="status-badge ${d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status}</span>
+          // 데이터를 시간순으로 수동 정렬 (색인 오류 방지)
+          let docs = [];
+          snap.forEach(doc => docs.push({id: doc.id, ...doc.data()}));
+          docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+          docs.forEach(d => {
+              if(d.category === "공지") return;
+              
+              const item = document.createElement("div");
+              item.className = "report-item";
+              item.style.border = "1px solid #ddd";
+
+              let html = `
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                      <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
+                      <span class="status-badge ${d.status && d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status || '신규'}</span>
+                  </div>
+                  <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
+              `;
+
+              if(d.reply) {
+                  html += `
+                      <div class="reply-box">
+                          <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
+                          ${d.reply}
                       </div>
-                      <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
                   `;
+              }
 
-                  if(d.reply) {
-                      html += `
-                          <div class="reply-box">
-                              <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
-                              ${d.reply}
-                          </div>
-                      `;
-                  }
-
-                  item.innerHTML = html;
-                  listDiv.appendChild(item);
-              });
+              item.innerHTML = html;
+              listDiv.appendChild(item);
           });
-    }
+      }, err => {
+          console.error("데이터 불러오기 오류:", err);
+          // 여기서 "The query requires an index." 라는 메시지가 뜨면 링크를 클릭해서 색인을 만들어야 합니다.
+      });
+}
 
     async function submitBoard() {
         const name = document.getElementById('userName').value;
