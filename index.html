@@ -236,26 +236,42 @@
         return `${String(now.getFullYear()).slice(-2)}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
     }
 
+    // 1. 처음 접속 시 로직: 무조건 '처리중'만!
     function loadActiveReports() {
         const name = localStorage.getItem("logipan_user_name");
-        document.getElementById("listTitle").innerText = "⏳ 전체 작업 내역"; // 제목도 변경
+        document.getElementById("listTitle").innerText = "⏳ 현재 진행 중인 작업";
         
         if(reportListener) reportListener();
         
-        // 여기서 .where("status", "==", "⏳ 처리중") 이 줄을 삭제했습니다.
+        // 여기는 다시 .where("status", "==", "⏳ 처리중") 을 살려둡니다.
         reportListener = db.collection("field_reports")
             .where("user", "==", name)
+            .where("status", "==", "⏳ 처리중") 
             .onSnapshot(snap => { renderList(snap); });
     }
 
+    // 2. 검색 시 로직: 상태 상관없이 검색어만 맞으면 다 가져옴!
     async function searchReports() {
         const name = localStorage.getItem("logipan_user_name");
-        let kw = document.getElementById("searchKeyword").value.trim();
-        if (!kw) { loadActiveReports(); return; }
+        let keyword = document.getElementById("searchKeyword").value.trim();
+        
+        // 검색어가 없으면 다시 기본(처리중만) 로직으로 복귀
+        if (!keyword) { loadActiveReports(); return; }
+        
         if(reportListener) reportListener();
-        if (kw.length === 6 && !isNaN(kw)) kw = `${kw.slice(0,2)}/${kw.slice(2,4)}/${kw.slice(4,6)}`;
-        const snap = await db.collection("field_reports").where("user", "==", name).get();
-        renderList(snap, kw);
+        document.getElementById("listTitle").innerText = `🔍 '${keyword}' 검색 결과 (완료 포함)`;
+        
+        // 날짜 검색 대응 (260421 -> 26/04/21)
+        if (keyword.length === 6 && !isNaN(keyword)) {
+            keyword = `${keyword.slice(0,2)}/${keyword.slice(2,4)}/${keyword.slice(4,6)}`;
+        }
+        
+        // [핵심] 검색할 때는 status 조건 없이 유저의 '전체 데이터'를 가져와서 필터링
+        const snap = await db.collection("field_reports")
+            .where("user", "==", name)
+            .get();
+            
+        renderList(snap, keyword);
     }
 
     function renderList(snap, kw = null) {
