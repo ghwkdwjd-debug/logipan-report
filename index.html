@@ -171,32 +171,37 @@
           docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
 
           docs.forEach(d => {
-              if(d.category === "공지") return;
-              
-              const item = document.createElement("div");
-              item.className = "report-item";
-              item.style.border = "1px solid #ddd";
+            if(d.category === "공지") return;
+            
+            const item = document.createElement("div");
+            item.className = "report-item";
+            item.style.border = "1px solid #ddd";
 
-              let html = `
-                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                      <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
-                      <span class="status-badge ${d.status && d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status || '신규'}</span>
-                  </div>
-                  <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
-              `;
+            // 삭제 버튼 추가 (상태가 '신규'일 때만 보이게 하거나, 항상 보이게 할 수 있음)
+            // 여기서는 '신규'일 때만 삭제 버튼이 작동하도록 로직을 짭니다.
+            let html = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
+                    <div>
+                        <span class="status-badge ${d.status && d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status || '신규'}</span>
+                        ${!d.reply ? `<button onclick="deleteMyPost('${d.id}')" style="margin-left:8px; border:none; background:none; color:#ff4d4f; cursor:pointer; font-size:12px;">삭제</button>` : ''}
+                    </div>
+                </div>
+                <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
+            `;
 
-              if(d.reply) {
-                  html += `
-                      <div class="reply-box">
-                          <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
-                          ${d.reply}
-                      </div>
-                  `;
-              }
+            if(d.reply) {
+                html += `
+                    <div class="reply-box">
+                        <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
+                        ${d.reply}
+                    </div>
+                `;
+            }
 
-              item.innerHTML = html;
-              listDiv.appendChild(item);
-          });
+            item.innerHTML = html;
+            listDiv.appendChild(item);
+        });
       }, err => {
           console.error("데이터 불러오기 오류:", err);
           // 여기서 "The query requires an index." 라는 메시지가 뜨면 링크를 클릭해서 색인을 만들어야 합니다.
