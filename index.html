@@ -152,39 +152,13 @@
         }
     };
 
-function loadNotice() {
-    db.collection("board_posts")
-      .where("category", "==", "공지")
-      .orderBy("timestamp", "desc")
-      .limit(3) // 딱 3개만!
-      .onSnapshot(snap => {
-          const container = document.getElementById("notice-list-compact");
-          container.innerHTML = "";
-          
-          if(snap.empty) {
-              container.innerText = "현재 등록된 공지가 없습니다.";
-              return;
-          }
-
-          snap.forEach(doc => {
-              const d = doc.data();
-              const item = document.createElement("div");
-              item.style = "margin-bottom:10px; padding-bottom:5px; border-bottom:1px dashed #ffe082;";
-              
-              // 내용이 너무 길면 잘라내기 (약 50자 기준)
-              const isLong = d.text.length > 50;
-              const displayText = isLong ? d.text.substring(0, 50) + "..." : d.text;
-
-              item.innerHTML = `
-                  <div style="font-size:14px; line-height:1.5;">
-                      ${displayText.replace(/\n/g, '<br>')}
-                      ${isLong ? `<span style="color:#1a73e8; font-size:12px; cursor:pointer;" onclick="alert('${d.text.replace(/\n/g, '\\n')}')"> [전체보기]</span>` : ''}
-                  </div>
-              `;
-              container.appendChild(item);
-          });
-      });
-}
+    function loadNotice() {
+        db.collection("board_posts").where("category", "==", "공지").orderBy("timestamp", "desc").limit(1).onSnapshot(snap => {
+            const box = document.getElementById("notice-content");
+            if(snap.empty) box.innerText = "현재 등록된 공지가 없습니다.";
+            else snap.forEach(doc => box.innerText = doc.data().text);
+        });
+    }
 
     function loadMyBoardPosts() {
     const name = localStorage.getItem("logipan_user_name");
@@ -268,14 +242,11 @@ function loadNotice() {
         // 공지 리스트 열고 닫기
     function toggleNoticeList() {
         const listDiv = document.getElementById("notice-list-all");
-        const btn = document.getElementById("notice-toggle-btn");
         if (listDiv.style.display === "none") {
             listDiv.style.display = "block";
-            btn.innerText = "▲ 닫기";
-            loadAllNotices();
+            loadAllNotices(); // 열 때 전체 공지 불러오기
         } else {
             listDiv.style.display = "none";
-            btn.innerText = "📜 이전 공지 전체보기 ▼";
         }
     }
 
