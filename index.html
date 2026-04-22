@@ -88,18 +88,16 @@
 
     <div id="section-board" style="display:none;">
         <h2>📢 공지사항 및 소통</h2>
-    <div class="notice-box">
-        <small>📢 최근 중요 공지 (최대 3개)</small>
-        <div id="notice-list-compact" style="margin-top:10px;">
-            불러오는 중...
-        </div>
-        <button onclick="toggleNoticeList()" id="notice-toggle-btn" style="margin-top:10px; background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
+        <div class="notice-box">
+        <small>최근 관리자 공지</small>
+        <div id="notice-content" style="font-weight:bold;">불러오는 중...</div>
+        <button onclick="toggleNoticeList()" style="margin-top:10px; background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
             📜 이전 공지 전체보기 ▼
         </button>
     </div>
 
     <div id="notice-list-all" style="display:none; margin-bottom:20px; background:#fffde7; border:1px solid #ffe082; border-radius:10px; padding:10px;">
-        <div id="all-notices" style="max-height:300px; overflow-y:auto; font-size:13px;"></div>
+        <div id="all-notices" style="max-height:200px; overflow-y:auto; font-size:13px;"></div>
     </div>
 
         <hr>
