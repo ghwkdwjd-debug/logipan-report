@@ -237,6 +237,47 @@
         loading.style.display = "none";
     }
 
+        // 공지 리스트 열고 닫기
+    function toggleNoticeList() {
+        const listDiv = document.getElementById("notice-list-all");
+        if (listDiv.style.display === "none") {
+            listDiv.style.display = "block";
+            loadAllNotices(); // 열 때 전체 공지 불러오기
+        } else {
+            listDiv.style.display = "none";
+        }
+    }
+
+    // 이전 공지 전체 불러오기 함수
+    function loadAllNotices() {
+        db.collection("board_posts")
+        .where("category", "==", "공지")
+        .orderBy("timestamp", "desc")
+        .get()
+        .then(snap => {
+            const container = document.getElementById("all-notices");
+            container.innerHTML = "";
+            
+            if(snap.empty) {
+                container.innerHTML = "<p style='color:#999; text-align:center;'>공지가 없습니다.</p>";
+                return;
+            }
+
+            snap.forEach(doc => {
+                const d = doc.data();
+                const date = d.timestamp ? new Date(d.timestamp.seconds * 1000).toLocaleDateString() : "";
+                
+                const item = document.createElement("div");
+                item.style = "padding:8px 0; border-bottom:1px solid #eee;";
+                item.innerHTML = `
+                    <div style="font-size:11px; color:#f39c12; font-weight:bold;">📌 ${date}</div>
+                    <div style="color:#444; line-height:1.4;">${d.text}</div>
+                `;
+                container.appendChild(item);
+            });
+        });
+    }
+
     /* --- 여기서부터 현장보고 로직 (수정 금지 영역) --- */
     let reportListener = null;
     function getFormattedDate() {
