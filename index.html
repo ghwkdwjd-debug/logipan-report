@@ -88,13 +88,16 @@
 
     <div id="section-board" style="display:none;">
         <h2>📢 공지사항 및 소통</h2>
-        <div class="notice-box">
+    <div class="notice-box">
         <small>최근 관리자 공지</small>
-        <div id="notice-content" style="font-weight:bold;">불러오는 중...</div>
-        <button onclick="handleNoticeStep()" id="notice-step-btn" style="margin-top:10px; background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
+        <div id="notice-content" style="font-weight:bold; margin-bottom:5px;">불러오는 중...</div>
+        
+        <div id="notice-btn-container">
+        <button id="notice-step-btn" onclick="handleNoticeStep(1)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
             📜 이전 공지 보기 (최근 5개) ▼
         </button>
     </div>
+</div>
 
     <div id="notice-list-all" style="display:none; margin-bottom:20px; background:#fffde7; border:1px solid #ffe082; border-radius:10px; padding:10px;">
         <div id="all-notices" style="max-height:200px; overflow-y:auto; font-size:13px;"></div>
@@ -238,27 +241,56 @@
     }
 
     // --- [공지 단계별 보기 로직] ---
-    let noticeStep = 0; // 0:닫힘, 1:5개, 2:7일치
+    let noticeStep = 0; // 0: 닫힘, 1: 5개, 2: 7일치
 
-    function handleNoticeStep() {
+    function handleNoticeStep(targetStep) {
         const listDiv = document.getElementById("notice-list-all");
-        const btn = document.getElementById("notice-step-btn");
         
-        noticeStep++;
-
-        if (noticeStep === 1) {
-            listDiv.style.display = "block";
-            btn.innerText = "📅 최근 7일 내역 더보기 ▼";
-            loadNoticesByStep(5);
-        } 
-        else if (noticeStep === 2) {
-            btn.innerText = "▲ 공지 닫기";
-            loadNoticesByStep('7days');
-        } 
-        else {
-            listDiv.style.display = "none";
-            btn.innerText = "📜 이전 공지 보기 (최근 5개) ▼";
+        // targetStep이 0이면 즉시 닫기
+        if (targetStep === 0) {
             noticeStep = 0;
+            listDiv.style.display = "none";
+            renderNoticeButtons();
+            return;
+        }
+
+        // 단계 설정 및 리스트 노출
+        noticeStep = targetStep;
+        listDiv.style.display = "block";
+        
+        renderNoticeButtons();
+        loadNoticesByStep(noticeStep === 1 ? 5 : '7days');
+    }
+
+    // 상황에 따라 버튼 구성을 다시 그리는 함수
+    function renderNoticeButtons() {
+        const btnContainer = document.getElementById("notice-btn-container");
+        if (!btnContainer) return;
+
+        if (noticeStep === 0) {
+            // [닫힘 상태]
+            btnContainer.innerHTML = `
+                <button id="notice-step-btn" onclick="handleNoticeStep(1)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
+                    📜 이전 공지 보기 (최근 5개) ▼
+                </button>
+            `;
+        } else if (noticeStep === 1) {
+            // [5개 보기 상태] - 접기 버튼 추가 노출
+            btnContainer.innerHTML = `
+                <button onclick="handleNoticeStep(2)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0; margin-right:15px;">
+                    📅 최근 7일 내역 더보기 ▼
+                </button>
+                <button onclick="handleNoticeStep(0)" style="background:none; border:none; color:#999; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
+                    ▲ 접기
+                </button>
+            `;
+        } else if (noticeStep === 2) {
+            // [7일치 보기 상태] - 접기만 노출
+            btnContainer.innerHTML = `
+                <button onclick="handleNoticeStep(0)" style="background:none; border:none; color:#999; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
+                    ▲ 모든 공지 리스트 접기
+                </button>
+            `;
         }
     }
 
@@ -289,7 +321,7 @@
                 item.style = "padding:12px 0; border-bottom:1px solid #eee;";
                 item.innerHTML = `
                     <div style="font-size:11px; color:#f39c12; font-weight:bold; margin-bottom:4px;">📌 ${date}</div>
-                    <div style="color:#444; line-height:1.5; white-space: pre-wrap;">${d.text}</div>
+                    <div style="color:#444; line-height:1.5; white-space: pre-wrap; font-size:13px;">${d.text}</div>
                 `;
                 container.appendChild(item);
             });
