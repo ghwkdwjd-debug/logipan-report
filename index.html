@@ -154,10 +154,25 @@
     };
 
     function loadNotice() {
-        db.collection("board_posts").where("category", "==", "공지").orderBy("timestamp", "desc").limit(1).onSnapshot(snap => {
+        const currentWorker = localStorage.getItem("workerName"); // 로그인 시 저장한 작업자 이름
+
+        // category가 '공지'이거나, 나에게 온 '개인지시'인 것 중 최신 1개
+        db.collection("board_posts")
+        .where("receiver", "in", ["all", currentWorker]) 
+        .orderBy("timestamp", "desc")
+        .limit(1)
+        .onSnapshot(snap => {
             const box = document.getElementById("notice-content");
-            if(snap.empty) box.innerText = "현재 등록된 공지가 없습니다.";
-            else snap.forEach(doc => box.innerText = doc.data().text);
+            if(snap.empty) {
+                box.innerText = "현재 등록된 공지가 없습니다.";
+            } else {
+                snap.forEach(doc => {
+                    const d = doc.data();
+                    // 개인 메시지면 앞에 [개인] 표시를 붙여주면 더 좋겠죠?
+                    const prefix = d.category === "개인지시" ? "🔒[개인] " : "📢 ";
+                    box.innerText = prefix + d.text;
+                });
+            }
         });
     }
 
