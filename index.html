@@ -154,24 +154,32 @@
     };
 
     function loadNotice() {
-        const currentWorker = localStorage.getItem("workerName"); // 로그인 시 저장한 작업자 이름
+        const currentWorker = localStorage.getItem("logipan_user_name");
 
         // category가 '공지'이거나, 나에게 온 '개인지시'인 것 중 최신 1개
+        // 단, '✅ 완료' 처리된 글은 제외해야 함 (PC쪽에서 완료 처리한 것)
         db.collection("board_posts")
         .where("receiver", "in", ["all", currentWorker]) 
         .orderBy("timestamp", "desc")
-        .limit(1)
+        .limit(10)
         .onSnapshot(snap => {
             const box = document.getElementById("notice-content");
-            if(snap.empty) {
+            // 완료된 것 제외하고 가장 최신 1개만 표시
+            let shown = false;
+            snap.forEach(doc => {
+                if (shown) return;
+                const d = doc.data();
+                // 완료/확인완료 처리된 공지는 건너뜀
+                if (d.status && (d.status.includes("완료") || d.status.includes("확인완료"))) return;
+                
+                const prefix = d.category === "개인지시" ? "🔒[개인] " : "📢 ";
+                // 작성자 표시 (real_sender 우선, 없으면 user)
+                const sender = d.real_sender || d.user || "관리자";
+                box.innerText = `${prefix}${d.text}\n— ${sender}`;
+                shown = true;
+            });
+            if (!shown) {
                 box.innerText = "현재 등록된 공지가 없습니다.";
-            } else {
-                snap.forEach(doc => {
-                    const d = doc.data();
-                    // 개인 메시지면 앞에 [개인] 표시를 붙여주면 더 좋겠죠?
-                    const prefix = d.category === "개인지시" ? "🔒[개인] " : "📢 ";
-                    box.innerText = prefix + d.text;
-                });
             }
         });
     }
@@ -196,8 +204,11 @@
           snap.forEach(doc => docs.push({id: doc.id, ...doc.data()}));
           docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
 
+          let renderedCount = 0;
           docs.forEach(d => {
             if(d.category === "공지") return;
+            // [추가] PC쪽에서 '완료' 처리한 글은 내 문의 리스트에서도 숨김
+            if(d.status && d.status.includes("완료")) return;
             
             const item = document.createElement("div");
             item.className = "report-item";
@@ -217,9 +228,11 @@
             `;
 
             if(d.reply) {
+                // [추가] 답변 작성자 표시
+                const replyFrom = d.reply_sender || "관리자";
                 html += `
                     <div class="reply-box">
-                        <b style="color:#1877f2; font-size:11px;">📢 관리자 답변</b><br>
+                        <b style="color:#1877f2; font-size:11px;">📢 ${replyFrom} 답변</b><br>
                         ${d.reply}
                     </div>
                 `;
@@ -227,7 +240,12 @@
 
             item.innerHTML = html;
             listDiv.appendChild(item);
+            renderedCount++;
         });
+        
+        if (renderedCount === 0) {
+            listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>표시할 문의 내역이 없습니다.</p>";
+        }
       }, err => {
           console.error("데이터 불러오기 오류:", err);
           // 여기서 "The query requires an index." 라는 메시지가 뜨면 링크를 클릭해서 색인을 만들어야 합니다.
@@ -244,7 +262,9 @@
         try {
             await db.collection("board_posts").add({
                 user: name,
+                real_sender: name,  // [추가] PC쪽 컬럼에서 작성자 표시용 (real_sender 우선 읽음)
                 category: "문의",
+                receiver: "all",     // [추가] 관리자가 받는 형태
                 text: text,
                 status: "신규",
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
@@ -329,17 +349,27 @@
                 container.innerHTML = "<p style='color:#999; text-align:center; padding:10px;'>해당하는 공지가 없습니다.</p>";
                 return;
             }
+            let renderedCount = 0;
             snap.forEach(doc => {
                 const d = doc.data();
+                // [추가] 완료 처리된 공지는 이전 공지 리스트에서도 숨김
+                if (d.status && d.status.includes("완료")) return;
+                
                 const date = d.timestamp ? new Date(d.timestamp.seconds * 1000).toLocaleDateString() : "날짜미상";
+                // [추가] 작성자 표시
+                const sender = d.real_sender || d.user || "관리자";
                 const item = document.createElement("div");
                 item.style = "padding:12px 0; border-bottom:1px solid #eee;";
                 item.innerHTML = `
-                    <div style="font-size:11px; color:#f39c12; font-weight:bold; margin-bottom:4px;">📌 ${date}</div>
+                    <div style="font-size:11px; color:#f39c12; font-weight:bold; margin-bottom:4px;">📌 ${date} · ${sender}</div>
                     <div style="color:#444; line-height:1.5; white-space: pre-wrap; font-size:13px;">${d.text}</div>
                 `;
                 container.appendChild(item);
+                renderedCount++;
             });
+            if (renderedCount === 0) {
+                container.innerHTML = "<p style='color:#999; text-align:center; padding:10px;'>해당하는 공지가 없습니다.</p>";
+            }
         });
     }
 
