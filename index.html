@@ -226,7 +226,7 @@
     <div id="section-board" style="display:none;">
         <h2>📢 공지사항 및 소통</h2>
         <div class="notice-box">
-            <small>최근 공지</small>
+            <small>최근 관리자 공지</small>
             <div id="notice-content" style="font-weight:bold; margin-bottom:5px;">불러오는 중...</div>
 
             <div id="notice-btn-container">
@@ -492,6 +492,10 @@
           .where("user", "==", name)
           .onSnapshot(snap => {
               const listDiv = document.getElementById("my-board-list");
+
+              // [수정] 기존 메시지 구독 모두 해제 (DOM이 새로 그려지므로)
+              unsubscribeAllBoardMessages();
+
               listDiv.innerHTML = "";
 
               if (snap.empty) {
@@ -543,10 +547,10 @@
                 // 댓글 토글 버튼 + 영역
                 html += `
                     <button onclick="toggleBoardThread('${d.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block; padding:0;">
-                        💬 대화 보기 <span id="bcount-${d.id}"></span><span id="bnew-${d.id}"></span>
+                        💬 대화 보기 <span id="bcount-${d.id}">(...)</span><span id="bnew-${d.id}"></span>
                     </button>
                     <div id="bsec-${d.id}" class="comment-section">
-                        <div id="bcomments-${d.id}">불러오는 중...</div>
+                        <div id="bcomments-${d.id}"></div>
                         <div style="display:flex; gap:5px; margin-top:10px;">
                             <input type="text" id="binput-${d.id}" placeholder="답장 입력" style="flex:1; padding:8px; font-size:13px;">
                             <button onclick="sendBoardReply('${d.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 12px; font-weight:bold;">전송</button>
@@ -571,9 +575,21 @@
     }
 
     // ---------- 공지/소통 - messages 서브컬렉션 구독 ----------
-    const boardMsgListeners = {};
+    // [수정] 매 렌더링마다 모든 기존 구독 해제 후 새로 구독 (DOM이 새로 그려지므로 그래야 함)
+    let boardMsgListeners = {};
+    function unsubscribeAllBoardMessages() {
+        Object.values(boardMsgListeners).forEach(unsub => {
+            try { unsub(); } catch (e) {}
+        });
+        boardMsgListeners = {};
+    }
+
     function subscribeBoardMessages(docId) {
-        if (boardMsgListeners[docId]) return; // 이미 구독중
+        // 같은 docId 기존 구독이 있으면 해제하고 새로 (DOM 갱신 대응)
+        if (boardMsgListeners[docId]) {
+            try { boardMsgListeners[docId](); } catch (e) {}
+            delete boardMsgListeners[docId];
+        }
 
         boardMsgListeners[docId] = db.collection("board_posts").doc(docId)
             .collection("messages").orderBy("timestamp", "asc")
@@ -583,10 +599,11 @@
                 const newBadge = document.getElementById(`bnew-${docId}`);
                 const itemEl = document.getElementById(`bpost-${docId}`);
 
+                // box가 사라졌으면 (DOM 재렌더 중) 그냥 무시
                 if (!box) return;
 
                 if (snap.empty) {
-                    box.innerHTML = "<p style='color:#999; font-size:12px;'>아직 답장이 없어요.</p>";
+                    box.innerHTML = "<p style='color:#999; font-size:12px; text-align:center; padding:8px 0;'>아직 답장이 없어요. 첫 답장을 남겨보세요!</p>";
                     if (countTag) countTag.innerText = "(0)";
                     return;
                 }
@@ -631,6 +648,10 @@
                 if (hasNewAdminReply && document.getElementById('section-board').style.display === 'none') {
                     document.getElementById('dot-board').style.display = 'block';
                 }
+            }, err => {
+                console.error(`messages 구독 오류 (${docId}):`, err);
+                const box = document.getElementById(`bcomments-${docId}`);
+                if (box) box.innerHTML = "<p style='color:#c00; font-size:12px;'>대화 불러오기 실패. 새로고침 해주세요.</p>";
             });
     }
 
@@ -873,10 +894,10 @@
                 <div style="font-size:13px; color:#666; margin-top:5px; white-space:pre-wrap;">${escapeHtml(data.text || '')}</div>
                 ${photosHtml}
                 <button onclick="toggleComments('${data.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block; padding:0;">
-                    💬 대화 보기 <span id="count-${data.id}"></span><span id="new-${data.id}"></span>
+                    💬 대화 보기 <span id="count-${data.id}">(...)</span><span id="new-${data.id}"></span>
                 </button>
                 <div id="sec-${data.id}" class="comment-section">
-                    <div id="comments-${data.id}">불러오는 중...</div>
+                    <div id="comments-${data.id}"></div>
                     <div style="display:flex; gap:5px; margin-top:10px;">
                         <input type="text" id="input-${data.id}" placeholder="답장 입력" style="flex:1; padding:8px; font-size:13px;">
                         <button onclick="sendReply('${data.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 12px; font-weight:bold;">전송</button>
