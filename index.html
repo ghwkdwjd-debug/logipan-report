@@ -9,60 +9,190 @@
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
-        
+
         /* 탭 메뉴 스타일 */
-        .tabs { display: flex; gap: 5px; margin-bottom: 20px; }
-        .tab-btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; background: #eee; color: #666; }
+        .tabs { display: flex; gap: 5px; margin-bottom: 20px; position: relative; }
+        .tab-btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; background: #eee; color: #666; position: relative; }
         .tab-btn.active { background: #222; color: white; }
+        /* 탭 빨간 점 알림 */
+        .tab-dot {
+            position: absolute; top: 6px; right: 8px;
+            width: 9px; height: 9px; border-radius: 50%;
+            background: #ff4d4f; display: none;
+            box-shadow: 0 0 0 2px white;
+            animation: pulse 1.4s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.25); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
 
         h2 { text-align: center; font-size: 20px; margin-bottom: 20px; color: #222; }
         label { font-size: 13px; font-weight: bold; color: #555; display: block; margin-top: 15px; margin-bottom: 5px; }
         input, textarea, select { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 15px; outline: none; }
         button.main-btn { width: 100%; padding: 16px; background: #222; color: white; border: none; border-radius: 8px; font-size: 17px; font-weight: bold; cursor: pointer; margin-top: 20px; }
-        
+
         /* 공지사항 스타일 */
         .notice-box { background: #fff9c4; padding: 15px; border-radius: 10px; border-left: 5px solid #fbc02d; margin-bottom: 20px; font-size: 14px; line-height: 1.5; }
         .notice-box small { display: block; color: #7f8c8d; margin-bottom: 5px; font-size: 11px; }
+        /* 공지 ...더보기 */
+        .notice-text-collapsed {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .notice-toggle-btn {
+            background: none; border: none; color: #f39c12;
+            font-size: 12px; font-weight: bold; cursor: pointer;
+            padding: 4px 0 0 0;
+        }
 
         .search-box { display: flex; gap: 8px; margin-top: 20px; margin-bottom: 10px; }
         .search-input { flex: 1; padding: 10px !important; font-size: 13px !important; }
         .search-btn { width: 70px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .refresh-btn {
+            width: 70px; background: #34a853; color: white; border: none;
+            border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px;
+        }
+
+        .list-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 10px;
+        }
 
         .report-item { background: #fff; border: 1px solid #eef0f2; padding: 15px; border-radius: 12px; margin-bottom: 12px; position: relative; }
-        .report-item.done { opacity: 0.8; background: #f9f9f9; border: 1px solid #ddd; }
+        .report-item.done { opacity: 0.85; background: #f9f9f9; border: 1px solid #ddd; }
+        .report-item.has-new { border: 2px solid #ff4d4f; box-shadow: 0 2px 8px rgba(255,77,79,0.15); }
         .status-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-bottom: 8px; }
-        .wait { background: #fff3e0; color: #ef6c00; } 
+        .wait { background: #fff3e0; color: #ef6c00; }
         .done { background: #e8f5e9; color: #2e7d32; }
+        .talking { background: #e3f2fd; color: #0d47a1; }
 
         .new-badge { background: #ff4d4f; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; margin-left: 5px; animation: blink 1.5s infinite; }
         @keyframes blink { 0% {opacity: 1;} 50% {opacity: 0.5;} 100% {opacity: 1;} }
 
         .comment-section { display: none; margin-top: 10px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; }
-        .comment-bubble { padding: 8px; border-radius: 6px; margin-bottom: 5px; }
+        .comment-bubble { padding: 8px 10px; border-radius: 8px; margin-bottom: 6px; line-height: 1.4; word-break: break-word; }
         .admin-msg { background: #e7f3ff; border-left: 4px solid #1a73e8; }
-        .user-msg { background: #eee; border-left: 4px solid #999; }
-        
-        #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); color: white; text-align: center; padding-top: 250px; z-index: 1000; }
+        .user-msg { background: #f0f0f0; border-left: 4px solid #999; }
+
+        #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.65); color: white; text-align: center; padding-top: 220px; z-index: 1000; font-size: 16px; }
+        #loading-progress {
+            width: 70%; max-width: 300px; margin: 20px auto 0;
+            background: rgba(255,255,255,0.2); border-radius: 8px; overflow: hidden;
+            height: 14px; display: none;
+        }
+        #loading-progress-bar {
+            height: 100%; background: #4CAF50; width: 0%;
+            transition: width 0.3s; border-radius: 8px;
+        }
 
         /* 관리자 답변용 파란색 박스 디자인 */
-        .reply-box { 
-            margin-top: 10px; 
-            background: #e7f3ff; 
-            padding: 10px; 
-            border-radius: 8px; 
-            border-left: 4px solid #1877f2; 
-            font-size: 13px; 
+        .reply-box {
+            margin-top: 10px;
+            background: #e7f3ff;
+            padding: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #1877f2;
+            font-size: 13px;
+        }
+
+        /* 사진 미리보기 (전송 전) */
+        #photoPreview {
+            display: flex; flex-wrap: wrap; gap: 8px;
+            margin-top: 8px;
+        }
+        .preview-thumb {
+            position: relative;
+            width: 80px; height: 80px;
+            border-radius: 8px; overflow: hidden;
+            border: 1px solid #ddd;
+        }
+        .preview-thumb img {
+            width: 100%; height: 100%; object-fit: cover;
+        }
+        .preview-thumb .remove-btn {
+            position: absolute; top: 2px; right: 2px;
+            width: 22px; height: 22px; border-radius: 50%;
+            background: rgba(0,0,0,0.7); color: white;
+            border: none; cursor: pointer; font-size: 14px;
+            display: flex; align-items: center; justify-content: center;
+            line-height: 1; padding: 0;
+        }
+
+        /* 첨부된 사진 갤러리 (전송 후, 리스트 안) */
+        .attached-photos {
+            display: flex; flex-wrap: wrap; gap: 6px;
+            margin-top: 8px;
+        }
+        .attached-photos img {
+            width: 70px; height: 70px; object-fit: cover;
+            border-radius: 6px; cursor: pointer;
+            border: 1px solid #eee;
+            transition: transform 0.15s;
+        }
+        .attached-photos img:hover {
+            transform: scale(1.05);
+        }
+
+        /* 라이트박스 (사진 크게 보기) */
+        #lightbox {
+            display: none; position: fixed; top: 0; left: 0;
+            width: 100%; height: 100%; background: rgba(0,0,0,0.92);
+            z-index: 2000; justify-content: center; align-items: center;
+        }
+        #lightbox img {
+            max-width: 95%; max-height: 90%;
+            border-radius: 4px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+        }
+        #lightbox-close {
+            position: absolute; top: 20px; right: 25px;
+            background: rgba(255,255,255,0.15); color: white;
+            border: none; width: 44px; height: 44px;
+            border-radius: 50%; font-size: 22px; cursor: pointer;
+        }
+
+        /* 임시저장 알림 */
+        .draft-notice {
+            background: #fff3cd; color: #856404;
+            border: 1px solid #ffeaa7; border-radius: 6px;
+            padding: 8px 12px; margin-top: 10px;
+            font-size: 13px; display: none;
+        }
+        .draft-notice button {
+            background: none; border: none; color: #1a73e8;
+            font-weight: bold; cursor: pointer; margin-left: 8px;
+            text-decoration: underline; font-size: 13px;
         }
     </style>
 </head>
 <body>
 
-<div id="loading">🚀 <span id="loadingMsg">데이터를 처리 중입니다...</span></div>
+<div id="loading">
+    🚀 <span id="loadingMsg">데이터를 처리 중입니다...</span>
+    <div id="loading-progress"><div id="loading-progress-bar"></div></div>
+</div>
+
+<!-- 라이트박스 (사진 크게 보기) -->
+<div id="lightbox" onclick="closeLightbox()">
+    <button id="lightbox-close" onclick="closeLightbox()">✕</button>
+    <img id="lightbox-img" src="" onclick="event.stopPropagation()">
+</div>
 
 <div class="card">
     <div class="tabs">
-        <button id="tab-report" class="tab-btn active" onclick="switchTab('report')">📷 현장보고</button>
-        <button id="tab-board" class="tab-btn" onclick="switchTab('board')">📢 공지/소통</button>
+        <button id="tab-report" class="tab-btn active" onclick="switchTab('report')">
+            📷 현장보고
+            <span id="dot-report" class="tab-dot"></span>
+        </button>
+        <button id="tab-board" class="tab-btn" onclick="switchTab('board')">
+            📢 공지/소통
+            <span id="dot-board" class="tab-dot"></span>
+        </button>
     </div>
 
     <div id="userDisplay" style="background:#f0f2f5; padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin-bottom:15px; font-size:14px; cursor:pointer;" onclick="askName()">👤 작업자 등록 (클릭)</div>
@@ -73,43 +203,56 @@
         <label>📌 제목</label>
         <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다">
         <label>📸 사진 촬영 / 첨부</label>
-        <input type="file" id="photoInput" accept="image/*" multiple>
+        <input type="file" id="photoInput" accept="image/*" multiple onchange="updatePhotoPreview()">
+        <div id="photoPreview"></div>
         <label>📝 상세 내용</label>
         <textarea id="reportText" rows="4" placeholder="상세 내용을 입력하세요"></textarea>
+        <div id="reportDraftNotice" class="draft-notice">
+            💾 작성하던 내용이 있어요. <button onclick="restoreReportDraft()">불러오기</button> <button onclick="clearReportDraft(true)">버리기</button>
+        </div>
         <button class="main-btn" onclick="uploadAndSend()">🚀 확인요청 보내기</button>
         <hr style="margin-top:25px; border:0; border-top:1px solid #eee;">
         <div class="search-box">
             <input type="text" id="searchKeyword" class="search-input" placeholder="제목 검색 시 완료 된 요청 검색가능">
             <button class="search-btn" onclick="searchReports()">조회</button>
+            <button class="refresh-btn" onclick="loadActiveReports()">🔄</button>
         </div>
-        <div id="listTitle" style="font-size:13px; font-weight:bold; color:#666; margin-bottom:10px;">⏳ 현재 진행 중인 작업</div>
+        <div class="list-header">
+            <div id="listTitle" style="font-size:13px; font-weight:bold; color:#666;">⏳ 현재 진행 중인 작업</div>
+        </div>
         <div id="reportList"></div>
     </div>
 
     <div id="section-board" style="display:none;">
         <h2>📢 공지사항 및 소통</h2>
-    <div class="notice-box">
-        <small>최근 관리자 공지</small>
-        <div id="notice-content" style="font-weight:bold; margin-bottom:5px;">불러오는 중...</div>
-        
-        <div id="notice-btn-container">
-        <button id="notice-step-btn" onclick="handleNoticeStep(1)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
-            📜 이전 공지 보기 (최근 5개) ▼
-        </button>
-    </div>
-</div>
+        <div class="notice-box">
+            <small>최근 관리자 공지</small>
+            <div id="notice-content" style="font-weight:bold; margin-bottom:5px;">불러오는 중...</div>
 
-    <div id="notice-list-all" style="display:none; margin-bottom:20px; background:#fffde7; border:1px solid #ffe082; border-radius:10px; padding:10px;">
-        <div id="all-notices" style="max-height:200px; overflow-y:auto; font-size:13px;"></div>
-    </div>
+            <div id="notice-btn-container">
+                <button id="notice-step-btn" onclick="handleNoticeStep(1)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
+                    📜 이전 공지 보기 (최근 5개) ▼
+                </button>
+            </div>
+        </div>
+
+        <div id="notice-list-all" style="display:none; margin-bottom:20px; background:#fffde7; border:1px solid #ffe082; border-radius:10px; padding:10px;">
+            <div id="all-notices" style="max-height:200px; overflow-y:auto; font-size:13px;"></div>
+        </div>
 
         <hr>
         <label>📝 전달 내용</label>
         <textarea id="boardText" rows="6" placeholder="내용을 입력하세요"></textarea>
+        <div id="boardDraftNotice" class="draft-notice">
+            💾 작성하던 메시지가 있어요. <button onclick="restoreBoardDraft()">불러오기</button> <button onclick="clearBoardDraft(true)">버리기</button>
+        </div>
         <button class="main-btn" style="background:#1877F2;" onclick="submitBoard()">💬 전송</button>
 
         <div style="margin-top:30px;">
-            <h3 style="font-size:16px; border-bottom:2px solid #eee; padding-bottom:10px;">💬 내 문의 현황</h3>
+            <div class="list-header">
+                <h3 style="font-size:16px; border-bottom:2px solid #eee; padding-bottom:10px; margin:0; flex:1;">💬 내 문의 현황</h3>
+                <button class="refresh-btn" onclick="loadMyBoardPosts()" style="margin-left:10px;">🔄</button>
+            </div>
             <div id="my-board-list"></div>
         </div>
     </div>
@@ -117,7 +260,7 @@
 
 <script>
     const firebaseConfig = {
-        apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I", 
+        apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I",
         authDomain: "logipan-2026.firebaseapp.com",
         projectId: "logipan-2026",
         storageBucket: "logipan-2026.appspot.com",
@@ -128,12 +271,30 @@
     const db = firebase.firestore();
     const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
 
+    // ---------- 임시저장 키 ----------
+    const DRAFT_REPORT_KEY = "logipan_draft_report";
+    const DRAFT_BOARD_KEY = "logipan_draft_board";
+    // ---------- 마지막 확인 시간 (NEW 뱃지 판정용) ----------
+    const LAST_SEEN_REPORT_KEY = "logipan_last_seen_report";
+    const LAST_SEEN_BOARD_KEY = "logipan_last_seen_board";
+
+    // ---------- 탭 전환 ----------
     function switchTab(type) {
         document.getElementById('section-report').style.display = type === 'report' ? 'block' : 'none';
         document.getElementById('section-board').style.display = type === 'board' ? 'block' : 'none';
         document.getElementById('tab-report').className = 'tab-btn' + (type === 'report' ? ' active' : '');
         document.getElementById('tab-board').className = 'tab-btn' + (type === 'board' ? ' active' : '');
-        if(type === 'board') { loadNotice(); loadMyBoardPosts(); }
+
+        // 탭 진입 시 마지막 확인 시간 갱신 → 그 탭의 알림 점 끄기
+        if (type === 'board') {
+            localStorage.setItem(LAST_SEEN_BOARD_KEY, Date.now().toString());
+            document.getElementById('dot-board').style.display = 'none';
+            loadNotice();
+            loadMyBoardPosts();
+        } else {
+            localStorage.setItem(LAST_SEEN_REPORT_KEY, Date.now().toString());
+            document.getElementById('dot-report').style.display = 'none';
+        }
     }
 
     function askName() {
@@ -150,32 +311,167 @@
             loadActiveReports();
             loadNotice();
             loadMyBoardPosts();
+            checkDrafts(); // 임시저장 확인
         }
+
+        // 작성중 자동 저장 (둘 다)
+        document.getElementById('reportText').addEventListener('input', autosaveReport);
+        document.getElementById('reportTitle').addEventListener('input', autosaveReport);
+        document.getElementById('boardText').addEventListener('input', autosaveBoard);
+
+        // ESC로 라이트박스 닫기
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeLightbox();
+        });
     };
 
+    // ---------- 임시저장 ----------
+    function autosaveReport() {
+        const data = {
+            title: document.getElementById('reportTitle').value,
+            text: document.getElementById('reportText').value,
+        };
+        // 둘 다 비어있으면 저장 안 함
+        if (!data.title && !data.text) {
+            localStorage.removeItem(DRAFT_REPORT_KEY);
+            return;
+        }
+        localStorage.setItem(DRAFT_REPORT_KEY, JSON.stringify(data));
+    }
+    function autosaveBoard() {
+        const text = document.getElementById('boardText').value;
+        if (!text) {
+            localStorage.removeItem(DRAFT_BOARD_KEY);
+            return;
+        }
+        localStorage.setItem(DRAFT_BOARD_KEY, text);
+    }
+    function checkDrafts() {
+        const r = localStorage.getItem(DRAFT_REPORT_KEY);
+        if (r) {
+            try {
+                const parsed = JSON.parse(r);
+                if (parsed.title || parsed.text) {
+                    document.getElementById('reportDraftNotice').style.display = 'block';
+                }
+            } catch(e) {}
+        }
+        const b = localStorage.getItem(DRAFT_BOARD_KEY);
+        if (b) {
+            document.getElementById('boardDraftNotice').style.display = 'block';
+        }
+    }
+    function restoreReportDraft() {
+        const r = localStorage.getItem(DRAFT_REPORT_KEY);
+        if (!r) return;
+        try {
+            const parsed = JSON.parse(r);
+            document.getElementById('reportTitle').value = parsed.title || '';
+            document.getElementById('reportText').value = parsed.text || '';
+            document.getElementById('reportDraftNotice').style.display = 'none';
+        } catch(e) {}
+    }
+    function restoreBoardDraft() {
+        const b = localStorage.getItem(DRAFT_BOARD_KEY);
+        if (!b) return;
+        document.getElementById('boardText').value = b;
+        document.getElementById('boardDraftNotice').style.display = 'none';
+    }
+    function clearReportDraft(hideNotice) {
+        localStorage.removeItem(DRAFT_REPORT_KEY);
+        if (hideNotice) document.getElementById('reportDraftNotice').style.display = 'none';
+    }
+    function clearBoardDraft(hideNotice) {
+        localStorage.removeItem(DRAFT_BOARD_KEY);
+        if (hideNotice) document.getElementById('boardDraftNotice').style.display = 'none';
+    }
+
+    // ---------- 사진 미리보기 (전송 전) ----------
+    let selectedFiles = [];
+    function updatePhotoPreview() {
+        const input = document.getElementById('photoInput');
+        // 새로 고른 파일들을 selectedFiles에 추가 (기존 거 유지)
+        for (let i = 0; i < input.files.length; i++) {
+            selectedFiles.push(input.files[i]);
+        }
+        renderPhotoPreview();
+        // input 초기화 (같은 파일 다시 고를 수 있게)
+        input.value = '';
+    }
+    function renderPhotoPreview() {
+        const box = document.getElementById('photoPreview');
+        box.innerHTML = '';
+        selectedFiles.forEach((file, idx) => {
+            const reader = new FileReader();
+            reader.onload = e => {
+                const div = document.createElement('div');
+                div.className = 'preview-thumb';
+                div.innerHTML = `
+                    <img src="${e.target.result}">
+                    <button class="remove-btn" onclick="removePhoto(${idx})">✕</button>
+                `;
+                box.appendChild(div);
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+    function removePhoto(idx) {
+        selectedFiles.splice(idx, 1);
+        renderPhotoPreview();
+    }
+
+    // ---------- 라이트박스 ----------
+    function openLightbox(url) {
+        document.getElementById('lightbox-img').src = url;
+        document.getElementById('lightbox').style.display = 'flex';
+    }
+    function closeLightbox() {
+        document.getElementById('lightbox').style.display = 'none';
+        document.getElementById('lightbox-img').src = '';
+    }
+
+    // ---------- 공지 (작성자 표시 + 완료 숨김 + 더보기) ----------
     function loadNotice() {
         const currentWorker = localStorage.getItem("logipan_user_name");
 
-        // category가 '공지'이거나, 나에게 온 '개인지시'인 것 중 최신 1개
-        // 단, '✅ 완료' 처리된 글은 제외해야 함 (PC쪽에서 완료 처리한 것)
         db.collection("board_posts")
-        .where("receiver", "in", ["all", currentWorker]) 
+        .where("receiver", "in", ["all", currentWorker])
         .orderBy("timestamp", "desc")
         .limit(10)
         .onSnapshot(snap => {
             const box = document.getElementById("notice-content");
-            // 완료된 것 제외하고 가장 최신 1개만 표시
             let shown = false;
             snap.forEach(doc => {
                 if (shown) return;
                 const d = doc.data();
-                // 완료/확인완료 처리된 공지는 건너뜀
                 if (d.status && (d.status.includes("완료") || d.status.includes("확인완료"))) return;
-                
+
                 const prefix = d.category === "개인지시" ? "🔒[개인] " : "📢 ";
-                // 작성자 표시 (real_sender 우선, 없으면 user)
                 const sender = d.real_sender || d.user || "관리자";
-                box.innerText = `${prefix}${d.text}\n— ${sender}`;
+
+                const fullText = `${prefix}${d.text}\n— ${sender}`;
+                // 3줄 이상이면 ...더보기 노출
+                box.innerHTML = '';
+                const txtDiv = document.createElement('div');
+                txtDiv.className = 'notice-text-collapsed';
+                txtDiv.innerText = fullText;
+                box.appendChild(txtDiv);
+
+                // 잘림 여부는 렌더 후 판단
+                setTimeout(() => {
+                    if (txtDiv.scrollHeight > txtDiv.clientHeight + 2) {
+                        const btn = document.createElement('button');
+                        btn.className = 'notice-toggle-btn';
+                        btn.innerText = '...더보기 ▼';
+                        btn.onclick = () => {
+                            const collapsed = txtDiv.classList.toggle('notice-text-collapsed');
+                            btn.innerText = collapsed ? '...더보기 ▼' : '▲ 접기';
+                        };
+                        // 이미 붙어있으면 다시 안 붙음
+                        if (!box.querySelector('.notice-toggle-btn')) box.appendChild(btn);
+                    }
+                }, 50);
+
                 shown = true;
             });
             if (!shown) {
@@ -184,133 +480,268 @@
         });
     }
 
+    // ---------- 내 문의 현황 (답글 시스템 포함) ----------
+    let myPostsListener = null;
     function loadMyBoardPosts() {
-    const name = localStorage.getItem("logipan_user_name");
-    
-    // .orderBy("timestamp", "desc") 이 부분을 잠시 지워보세요 (색인 생성 전까지)
-    db.collection("board_posts")
-      .where("user", "==", name)
-      .onSnapshot(snap => {
-          const listDiv = document.getElementById("my-board-list");
-          listDiv.innerHTML = "";
-          
-          if(snap.empty) {
-              listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>문의 내역이 없습니다.</p>";
-              return;
-          }
+        const name = localStorage.getItem("logipan_user_name");
+        if (!name) return;
 
-          // 데이터를 시간순으로 수동 정렬 (색인 오류 방지)
-          let docs = [];
-          snap.forEach(doc => docs.push({id: doc.id, ...doc.data()}));
-          docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+        if (myPostsListener) myPostsListener();
 
-          let renderedCount = 0;
-          docs.forEach(d => {
-            if(d.category === "공지") return;
-            // [추가] PC쪽에서 '완료' 처리한 글은 내 문의 리스트에서도 숨김
-            if(d.status && d.status.includes("완료")) return;
-            
-            const item = document.createElement("div");
-            item.className = "report-item";
-            item.style.border = "1px solid #ddd";
+        myPostsListener = db.collection("board_posts")
+          .where("user", "==", name)
+          .onSnapshot(snap => {
+              const listDiv = document.getElementById("my-board-list");
+              listDiv.innerHTML = "";
 
-            // 삭제 버튼 추가 (상태가 '신규'일 때만 보이게 하거나, 항상 보이게 할 수 있음)
-            // 여기서는 '신규'일 때만 삭제 버튼이 작동하도록 로직을 짭니다.
-            let html = `
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                    <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
-                    <div>
-                        <span class="status-badge ${d.status && d.status.includes('확인')?'done':'wait'}" style="margin:0;">${d.status || '신규'}</span>
-                        ${!d.reply ? `<button onclick="deleteMyPost('${d.id}')" style="margin-left:8px; border:none; background:none; color:#ff4d4f; cursor:pointer; font-size:12px;">삭제</button>` : ''}
+              if (snap.empty) {
+                  listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>문의 내역이 없습니다.</p>";
+                  return;
+              }
+
+              let docs = [];
+              snap.forEach(doc => docs.push({id: doc.id, ...doc.data()}));
+              docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+              let renderedCount = 0;
+              docs.forEach(d => {
+                if (d.category === "공지") return;
+                if (d.status && d.status.includes("완료")) return;
+
+                const item = document.createElement("div");
+                item.className = "report-item";
+                item.id = `bpost-${d.id}`;
+
+                // 상태 뱃지
+                let badgeClass = 'wait';
+                let badgeText = d.status || '신규';
+                if (d.status && d.status.includes('대화')) { badgeClass = 'talking'; badgeText = '💬 대화중'; }
+                else if (d.status && d.status.includes('확인')) { badgeClass = 'done'; badgeText = '✅ 확인'; }
+
+                let html = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
+                        <div>
+                            <span class="status-badge ${badgeClass}" style="margin:0;">${badgeText}</span>
+                            ${(!d.reply && (!d.status || !d.status.includes('대화'))) ? `<button onclick="deleteMyPost('${d.id}')" style="margin-left:8px; border:none; background:none; color:#ff4d4f; cursor:pointer; font-size:12px;">삭제</button>` : ''}
+                        </div>
                     </div>
-                </div>
-                <div style="font-size:14px; margin-bottom:5px; line-height:1.4;">${d.text}</div>
-            `;
+                    <div style="font-size:14px; margin-bottom:5px; line-height:1.4; white-space: pre-wrap;">${escapeHtml(d.text)}</div>
+                `;
 
-            if(d.reply) {
-                // [추가] 답변 작성자 표시
-                const replyFrom = d.reply_sender || "관리자";
+                // 레거시 단일 답장 (옛날 데이터 호환)
+                if (d.reply) {
+                    const replyFrom = d.reply_sender || "관리자";
+                    html += `
+                        <div class="reply-box">
+                            <b style="color:#1877f2; font-size:11px;">📢 ${escapeHtml(replyFrom)} 답변</b><br>
+                            ${escapeHtml(d.reply)}
+                        </div>
+                    `;
+                }
+
+                // 댓글 토글 버튼 + 영역
                 html += `
-                    <div class="reply-box">
-                        <b style="color:#1877f2; font-size:11px;">📢 ${replyFrom} 답변</b><br>
-                        ${d.reply}
+                    <button onclick="toggleBoardThread('${d.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block; padding:0;">
+                        💬 대화 보기 <span id="bcount-${d.id}"></span><span id="bnew-${d.id}"></span>
+                    </button>
+                    <div id="bsec-${d.id}" class="comment-section">
+                        <div id="bcomments-${d.id}">불러오는 중...</div>
+                        <div style="display:flex; gap:5px; margin-top:10px;">
+                            <input type="text" id="binput-${d.id}" placeholder="답장 입력" style="flex:1; padding:8px; font-size:13px;">
+                            <button onclick="sendBoardReply('${d.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 12px; font-weight:bold;">전송</button>
+                        </div>
                     </div>
                 `;
+
+                item.innerHTML = html;
+                listDiv.appendChild(item);
+                renderedCount++;
+
+                // 답글(messages 서브컬렉션) 실시간 구독 → NEW 판정
+                subscribeBoardMessages(d.id);
+            });
+
+            if (renderedCount === 0) {
+                listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>표시할 문의 내역이 없습니다.</p>";
             }
+          }, err => {
+              console.error("데이터 불러오기 오류:", err);
+          });
+    }
 
-            item.innerHTML = html;
-            listDiv.appendChild(item);
-            renderedCount++;
-        });
-        
-        if (renderedCount === 0) {
-            listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center;'>표시할 문의 내역이 없습니다.</p>";
+    // ---------- 공지/소통 - messages 서브컬렉션 구독 ----------
+    const boardMsgListeners = {};
+    function subscribeBoardMessages(docId) {
+        if (boardMsgListeners[docId]) return; // 이미 구독중
+
+        boardMsgListeners[docId] = db.collection("board_posts").doc(docId)
+            .collection("messages").orderBy("timestamp", "asc")
+            .onSnapshot(snap => {
+                const box = document.getElementById(`bcomments-${docId}`);
+                const countTag = document.getElementById(`bcount-${docId}`);
+                const newBadge = document.getElementById(`bnew-${docId}`);
+                const itemEl = document.getElementById(`bpost-${docId}`);
+
+                if (!box) return;
+
+                if (snap.empty) {
+                    box.innerHTML = "<p style='color:#999; font-size:12px;'>아직 답장이 없어요.</p>";
+                    if (countTag) countTag.innerText = "(0)";
+                    return;
+                }
+
+                if (countTag) countTag.innerText = `(${snap.size})`;
+
+                box.innerHTML = "";
+                let lastIsAdmin = false;
+                let hasNewAdminReply = false;
+                const lastSeen = parseInt(localStorage.getItem(LAST_SEEN_BOARD_KEY) || '0');
+
+                snap.forEach(c => {
+                    const md = c.data();
+                    const role = md.role || (md.sender === '관리자' ? 'admin' : 'worker');
+                    const isAdmin = role === 'admin';
+                    lastIsAdmin = isAdmin;
+
+                    const ts = md.timestamp;
+                    const tsMillis = ts ? ts.seconds * 1000 : 0;
+                    if (isAdmin && tsMillis > lastSeen) hasNewAdminReply = true;
+
+                    const timeStr = ts ? new Date(tsMillis).toLocaleString('ko-KR', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
+
+                    const bubble = document.createElement("div");
+                    bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
+                    bubble.innerHTML = `
+                        <span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">
+                            ${isAdmin ? '📢 ' : '👤 '}${escapeHtml(md.sender || '?')}
+                        </span>
+                        <span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span>
+                        <br>${escapeHtml(md.text || '')}
+                    `;
+                    box.appendChild(bubble);
+                });
+
+                // 새 답장 있으면 NEW 표시 + 탭 점 켜기
+                if (newBadge) newBadge.innerHTML = (lastIsAdmin && hasNewAdminReply) ? '<span class="new-badge">NEW</span>' : '';
+                if (itemEl) {
+                    if (hasNewAdminReply) itemEl.classList.add('has-new');
+                    else itemEl.classList.remove('has-new');
+                }
+                if (hasNewAdminReply && document.getElementById('section-board').style.display === 'none') {
+                    document.getElementById('dot-board').style.display = 'block';
+                }
+            });
+    }
+
+    function toggleBoardThread(docId) {
+        const sec = document.getElementById(`bsec-${docId}`);
+        const newOpen = sec.style.display !== "block";
+        sec.style.display = newOpen ? "block" : "none";
+        if (newOpen) {
+            // 열면 마지막 확인 시간 갱신 → NEW 표시 사라짐
+            localStorage.setItem(LAST_SEEN_BOARD_KEY, Date.now().toString());
+            document.getElementById('dot-board').style.display = 'none';
+            const itemEl = document.getElementById(`bpost-${docId}`);
+            if (itemEl) itemEl.classList.remove('has-new');
+            const newBadge = document.getElementById(`bnew-${docId}`);
+            if (newBadge) newBadge.innerHTML = '';
         }
-      }, err => {
-          console.error("데이터 불러오기 오류:", err);
-          // 여기서 "The query requires an index." 라는 메시지가 뜨면 링크를 클릭해서 색인을 만들어야 합니다.
-      });
-}
+    }
 
+    async function sendBoardReply(docId) {
+        const input = document.getElementById(`binput-${docId}`);
+        const name = document.getElementById('userName').value;
+        if (!input.value.trim()) return;
+        try {
+            await db.collection("board_posts").doc(docId).collection("messages").add({
+                sender: name,
+                role: "worker",
+                text: input.value.trim(),
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            // 부모 글 상태도 '대화중'으로
+            await db.collection("board_posts").doc(docId).update({
+                status: "💬 대화중"
+            });
+            input.value = "";
+        } catch (e) {
+            alert("답장 전송 실패: " + e.message);
+        }
+    }
+
+    // ---------- 메시지 전송 ----------
     async function submitBoard() {
         const name = document.getElementById('userName').value;
-        const text = document.getElementById('boardText').value;
-        if(!text) return alert("내용을 입력해주세요!");
+        const text = document.getElementById('boardText').value.trim();
+        if (!text) return alert("내용을 입력해주세요!");
 
         const loading = document.getElementById('loading');
+        document.getElementById('loadingMsg').innerText = "메시지 전송 중...";
+        document.getElementById('loading-progress').style.display = 'none';
         loading.style.display = "block";
         try {
             await db.collection("board_posts").add({
                 user: name,
-                real_sender: name,  // [추가] PC쪽 컬럼에서 작성자 표시용 (real_sender 우선 읽음)
+                real_sender: name,
                 category: "문의",
-                receiver: "all",     // [추가] 관리자가 받는 형태
+                receiver: "all",
                 text: text,
                 status: "신규",
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
-            alert("메시지가 전송되었습니다!");
             document.getElementById('boardText').value = "";
-        } catch(e) { alert("오류: " + e.message); }
+            clearBoardDraft(true);
+            // alert 대신 부드러운 토스트 느낌
+            showToast("✅ 메시지가 전송되었습니다!");
+        } catch(e) {
+            alert("오류: " + e.message);
+        }
         loading.style.display = "none";
     }
 
-    // --- [공지 단계별 보기 로직] ---
-    let noticeStep = 0; // 0: 닫힘, 1: 5개, 2: 7일치
+    function showToast(msg) {
+        const div = document.createElement('div');
+        div.innerText = msg;
+        div.style.cssText = `
+            position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
+            background: #323232; color: white; padding: 12px 24px;
+            border-radius: 25px; font-size: 14px; z-index: 3000;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            animation: fadein 0.2s;
+        `;
+        document.body.appendChild(div);
+        setTimeout(() => div.remove(), 2500);
+    }
+
+    // ---------- 공지 단계별 보기 ----------
+    let noticeStep = 0;
 
     function handleNoticeStep(targetStep) {
         const listDiv = document.getElementById("notice-list-all");
-        
-        // targetStep이 0이면 즉시 닫기
         if (targetStep === 0) {
             noticeStep = 0;
             listDiv.style.display = "none";
             renderNoticeButtons();
             return;
         }
-
-        // 단계 설정 및 리스트 노출
         noticeStep = targetStep;
         listDiv.style.display = "block";
-        
         renderNoticeButtons();
         loadNoticesByStep(noticeStep === 1 ? 5 : '7days');
     }
 
-    // 상황에 따라 버튼 구성을 다시 그리는 함수
     function renderNoticeButtons() {
         const btnContainer = document.getElementById("notice-btn-container");
         if (!btnContainer) return;
 
         if (noticeStep === 0) {
-            // [닫힘 상태]
             btnContainer.innerHTML = `
                 <button id="notice-step-btn" onclick="handleNoticeStep(1)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
                     📜 이전 공지 보기 (최근 5개) ▼
                 </button>
             `;
         } else if (noticeStep === 1) {
-            // [5개 보기 상태] - 접기 버튼 추가 노출
             btnContainer.innerHTML = `
                 <button onclick="handleNoticeStep(2)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0; margin-right:15px;">
                     📅 최근 7일 내역 더보기 ▼
@@ -320,7 +751,6 @@
                 </button>
             `;
         } else if (noticeStep === 2) {
-            // [7일치 보기 상태] - 접기만 노출
             btnContainer.innerHTML = `
                 <button onclick="handleNoticeStep(0)" style="background:none; border:none; color:#999; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
                     ▲ 모든 공지 리스트 접기
@@ -336,33 +766,31 @@
                     .orderBy("timestamp", "desc");
 
         if (mode === 5) {
-            query = query.limit(5); 
+            query = query.limit(5);
         } else if (mode === '7days') {
             const sevenDaysAgo = new Date();
             sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-            query = query.where("timestamp", ">=", sevenDaysAgo); 
+            query = query.where("timestamp", ">=", sevenDaysAgo);
         }
 
         query.get().then(snap => {
             container.innerHTML = "";
-            if(snap.empty) {
+            if (snap.empty) {
                 container.innerHTML = "<p style='color:#999; text-align:center; padding:10px;'>해당하는 공지가 없습니다.</p>";
                 return;
             }
             let renderedCount = 0;
             snap.forEach(doc => {
                 const d = doc.data();
-                // [추가] 완료 처리된 공지는 이전 공지 리스트에서도 숨김
                 if (d.status && d.status.includes("완료")) return;
-                
+
                 const date = d.timestamp ? new Date(d.timestamp.seconds * 1000).toLocaleDateString() : "날짜미상";
-                // [추가] 작성자 표시
                 const sender = d.real_sender || d.user || "관리자";
                 const item = document.createElement("div");
                 item.style = "padding:12px 0; border-bottom:1px solid #eee;";
                 item.innerHTML = `
-                    <div style="font-size:11px; color:#f39c12; font-weight:bold; margin-bottom:4px;">📌 ${date} · ${sender}</div>
-                    <div style="color:#444; line-height:1.5; white-space: pre-wrap; font-size:13px;">${d.text}</div>
+                    <div style="font-size:11px; color:#f39c12; font-weight:bold; margin-bottom:4px;">📌 ${date} · ${escapeHtml(sender)}</div>
+                    <div style="color:#444; line-height:1.5; white-space: pre-wrap; font-size:13px;">${escapeHtml(d.text)}</div>
                 `;
                 container.appendChild(item);
                 renderedCount++;
@@ -373,48 +801,43 @@
         });
     }
 
-    /* --- 여기서부터 현장보고 로직 (수정 금지 영역) --- */
+    // ---------- 현장보고 ----------
     let reportListener = null;
     function getFormattedDate() {
         const now = new Date();
         return `${String(now.getFullYear()).slice(-2)}/${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}`;
     }
 
-    // 1. 처음 접속 시 로직: 무조건 '처리중'만!
     function loadActiveReports() {
         const name = localStorage.getItem("logipan_user_name");
+        if (!name) return;
         document.getElementById("listTitle").innerText = "⏳ 현재 진행 중인 작업";
-        
-        if(reportListener) reportListener();
-        
-        // 여기는 다시 .where("status", "==", "⏳ 처리중") 을 살려둡니다.
+
+        if (reportListener) reportListener();
+
         reportListener = db.collection("field_reports")
             .where("user", "==", name)
-            .where("status", "==", "⏳ 처리중") 
+            .where("status", "==", "⏳ 처리중")
             .onSnapshot(snap => { renderList(snap); });
     }
 
-    // 2. 검색 시 로직: 상태 상관없이 검색어만 맞으면 다 가져옴!
     async function searchReports() {
         const name = localStorage.getItem("logipan_user_name");
         let keyword = document.getElementById("searchKeyword").value.trim();
-        
-        // 검색어가 없으면 다시 기본(처리중만) 로직으로 복귀
+
         if (!keyword) { loadActiveReports(); return; }
-        
-        if(reportListener) reportListener();
+
+        if (reportListener) reportListener();
         document.getElementById("listTitle").innerText = `🔍 '${keyword}' 검색 결과 (완료 포함)`;
-        
-        // 날짜 검색 대응 (260421 -> 26/04/21)
+
         if (keyword.length === 6 && !isNaN(keyword)) {
             keyword = `${keyword.slice(0,2)}/${keyword.slice(2,4)}/${keyword.slice(4,6)}`;
         }
-        
-        // [핵심] 검색할 때는 status 조건 없이 유저의 '전체 데이터'를 가져와서 필터링
+
         const snap = await db.collection("field_reports")
             .where("user", "==", name)
             .get();
-            
+
         renderList(snap, keyword);
     }
 
@@ -426,30 +849,47 @@
         docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
 
         docs.forEach(data => {
-            if (kw && !(data.date + data.title + data.text).toLowerCase().includes(kw.toLowerCase())) return;
+            if (kw && !((data.date||'') + (data.title||'') + (data.text||'')).toLowerCase().includes(kw.toLowerCase())) return;
             const isDone = data.status === "✅ 완료";
-            const imgCount = data.imageUrl ? data.imageUrl.split(",").length : 0;
+            const imgUrls = data.imageUrl ? data.imageUrl.split(",").filter(u => u.trim()) : [];
             const item = document.createElement("div");
             item.className = `report-item ${isDone ? 'done' : ''}`;
+            item.id = `rpost-${data.id}`;
+
+            // 첨부 사진을 썸네일로 직접 표시 (클릭하면 라이트박스)
+            let photosHtml = '';
+            if (imgUrls.length > 0) {
+                photosHtml = '<div class="attached-photos">';
+                imgUrls.forEach(url => {
+                    const safeUrl = url.replace(/"/g, '&quot;');
+                    photosHtml += `<img src="${safeUrl}" onclick="openLightbox('${safeUrl}')" loading="lazy">`;
+                });
+                photosHtml += '</div>';
+            }
+
             item.innerHTML = `
-                <div class="status-badge ${isDone ? 'done' : 'wait'}">${data.status}</div>
-                <div style="font-weight:bold; font-size:15px;">${data.title}</div>
-                <div style="font-size:13px; color:#666; margin-top:5px;">${data.text}</div>
-                ${imgCount > 0 ? `<div style="font-size:12px; color:#1a73e8; margin-top:5px;">🖼️ 사진 ${imgCount}장 첨부됨</div>` : ''}
-                <button onclick="toggleComments('${data.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block;">
+                <div class="status-badge ${isDone ? 'done' : 'wait'}">${escapeHtml(data.status || '')}</div>
+                <div style="font-weight:bold; font-size:15px;">${escapeHtml(data.title || '')}</div>
+                <div style="font-size:13px; color:#666; margin-top:5px; white-space:pre-wrap;">${escapeHtml(data.text || '')}</div>
+                ${photosHtml}
+                <button onclick="toggleComments('${data.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block; padding:0;">
                     💬 대화 보기 <span id="count-${data.id}"></span><span id="new-${data.id}"></span>
                 </button>
                 <div id="sec-${data.id}" class="comment-section">
                     <div id="comments-${data.id}">불러오는 중...</div>
                     <div style="display:flex; gap:5px; margin-top:10px;">
                         <input type="text" id="input-${data.id}" placeholder="답장 입력" style="flex:1; padding:8px; font-size:13px;">
-                        <button onclick="sendReply('${data.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 10px;">전송</button>
+                        <button onclick="sendReply('${data.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 12px; font-weight:bold;">전송</button>
                     </div>
                 </div>
             `;
             listDiv.appendChild(item);
             loadComments(data.id);
         });
+
+        if (docs.length === 0) {
+            listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center; padding:20px 0;'>표시할 작업이 없습니다.</p>";
+        }
     }
 
     function loadComments(docId) {
@@ -457,75 +897,148 @@
             const box = document.getElementById(`comments-${docId}`);
             const countTag = document.getElementById(`count-${docId}`);
             const newBadge = document.getElementById(`new-${docId}`);
-            if (snap.empty) { box.innerHTML = "대화 없음"; countTag.innerText = "(0)"; return; }
-            countTag.innerText = `(${snap.size})`;
+            const itemEl = document.getElementById(`rpost-${docId}`);
+            if (!box) return;
+
+            if (snap.empty) { box.innerHTML = "대화 없음"; if (countTag) countTag.innerText = "(0)"; return; }
+            if (countTag) countTag.innerText = `(${snap.size})`;
             box.innerHTML = "";
             let lastIsAdmin = false;
+            let hasNewAdminReply = false;
+            const lastSeen = parseInt(localStorage.getItem(LAST_SEEN_REPORT_KEY) || '0');
+
             snap.forEach(c => {
                 const d = c.data();
-                const isAdmin = !d.text.includes("[답장]"); 
+                const isAdmin = !d.text.includes("[답장]");
                 lastIsAdmin = isAdmin;
+                const ts = d.timestamp;
+                const tsMillis = ts ? ts.seconds * 1000 : 0;
+                if (isAdmin && tsMillis > lastSeen) hasNewAdminReply = true;
+
+                const timeStr = ts ? new Date(tsMillis).toLocaleString('ko-KR', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
+
                 const bubble = document.createElement("div");
                 bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
-                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin?'📢 '+d.user:'👤 '+d.user}</span><br>${d.text.replace("[답장] ", "")}`;
+                bubble.innerHTML = `
+                    <span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">
+                        ${isAdmin?'📢 '+escapeHtml(d.user||'관리자'):'👤 '+escapeHtml(d.user||'')}
+                    </span>
+                    <span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span>
+                    <br>${escapeHtml((d.text||'').replace("[답장] ", ""))}
+                `;
                 box.appendChild(bubble);
             });
-            if(newBadge) newBadge.innerHTML = lastIsAdmin ? '<span class="new-badge">NEW</span>' : '';
+            if (newBadge) newBadge.innerHTML = (lastIsAdmin && hasNewAdminReply) ? '<span class="new-badge">NEW</span>' : '';
+            if (itemEl) {
+                if (hasNewAdminReply) itemEl.classList.add('has-new');
+                else itemEl.classList.remove('has-new');
+            }
+            if (hasNewAdminReply && document.getElementById('section-report').style.display === 'none') {
+                document.getElementById('dot-report').style.display = 'block';
+            }
         });
     }
 
     async function uploadAndSend() {
         const name = document.getElementById('userName').value;
-        const title = document.getElementById('reportTitle').value;
-        const text = document.getElementById('reportText').value;
-        const files = document.getElementById('photoInput').files;
-        if(!title || !text) return alert("제목과 내용을 입력해주세요!");
+        const title = document.getElementById('reportTitle').value.trim();
+        const text = document.getElementById('reportText').value.trim();
+        if (!title || !text) return alert("제목과 내용을 입력해주세요!");
 
         const loading = document.getElementById('loading');
+        const progressBox = document.getElementById('loading-progress');
+        const progressBar = document.getElementById('loading-progress-bar');
+        const msg = document.getElementById('loadingMsg');
+
         loading.style.display = "block";
-        let imageUrls = []; 
+        let imageUrls = [];
         try {
-            for (let i = 0; i < files.length; i++) {
+            const total = selectedFiles.length;
+            if (total > 0) {
+                progressBox.style.display = 'block';
+                progressBar.style.width = '0%';
+            } else {
+                progressBox.style.display = 'none';
+            }
+
+            for (let i = 0; i < total; i++) {
+                msg.innerText = `사진 업로드 중... (${i+1}/${total})`;
+                progressBar.style.width = `${Math.round((i / total) * 100)}%`;
+
                 let formData = new FormData();
-                formData.append("image", files[i]);
+                formData.append("image", selectedFiles[i]);
                 const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
                 const json = await res.json();
-                if(json.success) imageUrls.push(json.data.url);
+                if (json.success) imageUrls.push(json.data.url);
             }
+
+            if (total > 0) progressBar.style.width = '100%';
+            msg.innerText = "전송 중...";
+
             await db.collection("field_reports").add({
-                user: name, title: title, text: text, date: getFormattedDate(), 
+                user: name, title: title, text: text, date: getFormattedDate(),
                 imageUrl: imageUrls.join(","), status: "⏳ 처리중", timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
-            alert("전송 완료!"); location.reload();
-        } catch (e) { alert("오류: " + e.message); }
+
+            // 화면 정리
+            document.getElementById('reportTitle').value = '';
+            document.getElementById('reportText').value = '';
+            selectedFiles = [];
+            renderPhotoPreview();
+            clearReportDraft(true);
+
+            showToast("✅ 보고가 전송되었습니다!");
+        } catch (e) {
+            alert("오류: " + e.message);
+        }
         loading.style.display = "none";
+        progressBox.style.display = 'none';
     }
 
     function toggleComments(docId) {
         const sec = document.getElementById(`sec-${docId}`);
-        sec.style.display = sec.style.display === "block" ? "none" : "block";
+        const newOpen = sec.style.display !== "block";
+        sec.style.display = newOpen ? "block" : "none";
+        if (newOpen) {
+            localStorage.setItem(LAST_SEEN_REPORT_KEY, Date.now().toString());
+            document.getElementById('dot-report').style.display = 'none';
+            const itemEl = document.getElementById(`rpost-${docId}`);
+            if (itemEl) itemEl.classList.remove('has-new');
+            const newBadge = document.getElementById(`new-${docId}`);
+            if (newBadge) newBadge.innerHTML = '';
+        }
     }
 
     async function sendReply(docId) {
         const input = document.getElementById(`input-${docId}`);
         const name = document.getElementById('userName').value;
-        if (!input.value) return;
+        if (!input.value.trim()) return;
         await db.collection("field_reports").doc(docId).collection("comments").add({
-            user: name, text: "[답장] " + input.value, timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            user: name, text: "[답장] " + input.value.trim(), timestamp: firebase.firestore.FieldValue.serverTimestamp()
         });
         input.value = "";
     }
 
-    // 내 글 삭제 함수
     async function deleteMyPost(docId) {
-        if(!confirm("작성하신 메시지를 삭제하시겠습니까?")) return;
-        
+        if (!confirm("작성하신 메시지를 삭제하시겠습니까?")) return;
+
         try {
             await db.collection("board_posts").doc(docId).delete();
-            alert("삭제되었습니다.");
+            showToast("삭제되었습니다.");
         } catch (e) {
             alert("삭제 중 오류가 발생했습니다: " + e.message);
         }
+    }
+
+    // ---------- 안전한 HTML 출력 (XSS 방지) ----------
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     }
 </script>
 </body>
