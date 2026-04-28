@@ -281,7 +281,7 @@
                 if (shown) return;
                 const d = doc.data();
                 if (d.status && (d.status.includes("완료") || d.status.includes("확인완료"))) return;
-                const prefix = d.category === "개인지시" ? "🔒[개인] " : "📢 ";
+                const prefix = d.category === "개인요청" ? "🔒[개인] " : "📢 ";
                 const sender = d.real_sender || d.user || "관리자";
                 const fullText = `${prefix}${d.text}\n— ${sender}`;
                 box.innerHTML = '';
