@@ -1,0 +1,24 @@
+{
+  "name": "로지판 - 현장보고",
+  "short_name": "로지판",
+  "description": "로지판 작업자 현장 보고 시스템",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f4f7f9",
+  "theme_color": "#1a73e8",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://api.iconify.design/material-symbols:assignment.svg?color=%231a73e8",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "https://api.iconify.design/material-symbols:assignment.svg?color=%231a73e8",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
