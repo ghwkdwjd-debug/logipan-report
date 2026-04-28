@@ -704,10 +704,10 @@ class LogiPanApp:
                         post_data = {
                             'user': receiver_name if target == "individual" else my_name, 
                             'real_sender': my_name, # 실제 보낸 사람 (내 이름)
-                            'category': "공지" if target == "all" else "개인지시",
+                            'category': "공지" if target == "all" else "개인요청",
                             'receiver': receiver_name if target == "individual" else "all",
                             'text': content,
-                            'status': "📢 공지" if target == "all" else "🆕 지시", # 리스트에 뜰 상태
+                            'status': "📢 공지" if target == "all" else "🆕요청", # 리스트에 뜰 상태
                             'timestamp': firestore.SERVER_TIMESTAMP
                         }
                         
@@ -745,7 +745,7 @@ class LogiPanApp:
             self._open_notice_view(item_id, post_data)
             return
 
-        # 개인지시/문의는 대화 스레드 창
+        # 개인요청/문의는 대화 스레드 창
         self._open_thread_window(item_id, post_data, row_values)
 
     def _open_notice_view(self, item_id, post_data):
@@ -794,7 +794,7 @@ class LogiPanApp:
                   padx=15, pady=5).pack(side="right", padx=20)
 
     def _open_thread_window(self, item_id, post_data, row_values):
-        """개인지시/문의에 대한 대화형 스레드 창"""
+        """개인요청/문의에 대한 대화형 스레드 창"""
         win = tk.Toplevel(self.root)
         win.title(f"💬 {post_data.get('user', '작업자')}님과의 대화")
         win.configure(bg="#F0F2F5")
@@ -892,9 +892,9 @@ class LogiPanApp:
         # 1) 첫 메시지 = 원글 (작업자 쪽 / 왼쪽 흰 말풍선)
         orig_ts = post_data.get('timestamp')
         orig_time = orig_ts.strftime('%m/%d %H:%M') if orig_ts else ""
-        # 개인지시는 관리자가 보낸 것이므로 오른쪽, 문의는 작업자가 보낸 것이므로 왼쪽
+        # 개인요청은 관리자가 보낸 것이므로 오른쪽, 문의는 작업자가 보낸 것이므로 왼쪽
         category = post_data.get('category', '')
-        if '지시' in category:
+        if '요청' in category:
             # [수정] '관리자' 하드코딩 제거, real_sender 우선 사용
             sender_name = post_data.get('real_sender') or '관리자'
             _add_bubble(post_data.get('text', ''), sender_name,
@@ -1029,7 +1029,7 @@ class LogiPanApp:
                 d = doc.to_dict()
 
                 current_status = d.get('status', '') # 예: '🆕 신규', '💬 대화중', '✅ 확인완료'
-                current_category = d.get('category', '') # 예: '📢 공지', '개인지시', '문의'
+                current_category = d.get('category', '') # 예: '📢 공지', '개인요청', '문의'
 
                 # [숨김 처리] 확인완료된 스레드는 리스트에서 제외
                 if '확인완료' in current_status:
@@ -1046,7 +1046,7 @@ class LogiPanApp:
                 time_str = ts.strftime('%m/%d') if ts else ""
 
                 # [수정] 작업자 칼럼은 가능하면 real_sender(실제 작성자)를 보여줌.
-                # 공지/지시는 user 필드에 받는 사람이 들어가있어서 작성자가 안보였음.
+                # 공지/요청는 user 필드에 받는 사람이 들어가있어서 작성자가 안보였음.
                 writer = d.get('real_sender') or d.get('user', '')
 
                 # [수정] 컬럼 순서: 날짜 / 작업자 / 구분 / 상태 / 내용
@@ -1067,7 +1067,7 @@ class LogiPanApp:
                     self.board_tree.tag_configure("talking", background="#E3F2FD", foreground="#0D47A1") # 연하늘 배경 + 진파랑 글자
                     self.board_tree.item(item_id, tags=("talking",))
 
-                elif "신규" in current_status or "지시" in current_status:
+                elif "신규" in current_status or "요청" in current_status:
                     self.board_tree.tag_configure("new", background="#FFEBEE", foreground="#C62828") # 연분홍 배경 + 진빨강 글자
                     self.board_tree.item(item_id, tags=("new",))
 
