@@ -490,10 +490,11 @@
                 else if (d.status && d.status.includes('확인')) { badgeClass = 'done'; badgeText = '✅ 확인'; }
                 let html = `
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                        <span style="font-weight:bold; color:#555;">💬 내 메시지</span>
+                        <span style="font-weight:bold; color:#555;">💬 내 메시지${d.edited ? ' <span style="color:#999;font-size:11px;font-weight:normal;">(수정됨)</span>' : ''}</span>
                         <div>
                             <span class="status-badge ${badgeClass}" style="margin:0;">${badgeText}</span>
-                            ${(!d.reply && (!d.status || !d.status.includes('대화'))) ? `<button onclick="deleteMyPost('${d.id}')" style="margin-left:8px; border:none; background:none; color:#ff4d4f; cursor:pointer; font-size:12px;">삭제</button>` : ''}
+                            <button onclick="editMyPost('${d.id}', ${JSON.stringify(d.text || '')})" style="margin-left:6px; border:none; background:none; color:#1a73e8; cursor:pointer; font-size:12px;">✏️ 수정</button>
+                            <button onclick="deleteMyPost('${d.id}')" style="margin-left:2px; border:none; background:none; color:#ff4d4f; cursor:pointer; font-size:12px;">🗑️ 삭제</button>
                         </div>
                     </div>
                     <div style="font-size:14px; margin-bottom:5px; line-height:1.4; white-space: pre-wrap;">${escapeHtml(d.text)}</div>
@@ -508,10 +509,13 @@
                     </button>
                     <div id="bsec-${d.id}" class="comment-section">
                         <div id="bcomments-${d.id}"></div>
-                        <div style="display:flex; gap:5px; margin-top:10px;">
+                        <div style="display:flex; gap:5px; margin-top:10px; align-items:center;">
                             <input type="text" id="binput-${d.id}" placeholder="답장 입력" style="flex:1; padding:8px; font-size:13px;">
+                            <label for="bphoto-${d.id}" style="background:#f0f2f5; padding:6px 8px; border-radius:6px; cursor:pointer; font-size:13px;" title="사진 첨부">📷</label>
+                            <input type="file" id="bphoto-${d.id}" accept="image/*" style="display:none;" onchange="markBoardPhoto('${d.id}')">
                             <button onclick="sendBoardReply('${d.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 12px; font-weight:bold;">전송</button>
                         </div>
+                        <div id="bphotoinfo-${d.id}" style="font-size:11px; color:#1a73e8; margin-top:4px;"></div>
                     </div>
                 `;
                 item.innerHTML = html;
@@ -553,6 +557,8 @@
                 const md = c.data();
                 const role = md.role || (md.sender === '관리자' ? 'admin' : 'worker');
                 const isAdmin = role === 'admin';
+                const myName = localStorage.getItem("logipan_user_name") || "";
+                const isMine = !isAdmin && md.sender === myName;
                 lastIsAdmin = isAdmin;
                 const ts = md.timestamp;
                 const tsMillis = ts ? ts.seconds * 1000 : 0;
@@ -560,7 +566,13 @@
                 const timeStr = ts ? new Date(tsMillis).toLocaleString('ko-KR', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
                 const bubble = document.createElement("div");
                 bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
-                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin ? '📢 ' : '👤 '}${escapeHtml(md.sender || '?')}</span><span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span><br>${escapeHtml(md.text || '')}`;
+                const editedTag = md.edited ? ' <span style="color:#999;font-size:10px;">(수정됨)</span>' : '';
+                const editBtns = isMine ? `
+                    <span style="float:right;">
+                        <button onclick="editMyComment('board_posts', '${docId}', '${c.id}', 'messages', ${JSON.stringify(md.text || '')})" style="border:none;background:none;color:#1a73e8;cursor:pointer;font-size:11px;">수정</button>
+                        <button onclick="deleteMyComment('board_posts', '${docId}', '${c.id}', 'messages')" style="border:none;background:none;color:#ff4d4f;cursor:pointer;font-size:11px;">삭제</button>
+                    </span>` : '';
+                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin ? '📢 ' : '👤 '}${escapeHtml(md.sender || '?')}</span><span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span>${editedTag}${editBtns}<br>${escapeHtml(md.text || '')}${md.imageUrl ? `<br><img src="${md.imageUrl}" onclick="openLightbox('${md.imageUrl}')" style="max-width:100%; max-height:200px; border-radius:6px; margin-top:6px; cursor:pointer;">` : ''}`;
                 box.appendChild(bubble);
             });
             if (newBadge) newBadge.innerHTML = (lastIsAdmin && hasNewAdminReply) ? '<span class="new-badge">NEW</span>' : '';
@@ -587,18 +599,60 @@
         }
     }
 
+    function markBoardPhoto(docId) {
+        const input = document.getElementById(`bphoto-${docId}`);
+        const info = document.getElementById(`bphotoinfo-${docId}`);
+        if (input.files.length > 0) {
+            info.innerText = `📎 ${input.files[0].name}`;
+        } else {
+            info.innerText = '';
+        }
+    }
+    function markReportPhoto(docId) {
+        const input = document.getElementById(`rphoto-${docId}`);
+        const info = document.getElementById(`rphotoinfo-${docId}`);
+        if (input.files.length > 0) {
+            info.innerText = `📎 ${input.files[0].name}`;
+        } else {
+            info.innerText = '';
+        }
+    }
+    async function uploadImageToImgbb(file) {
+        const formData = new FormData();
+        formData.append("image", file);
+        const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_KEY}`, { method: "POST", body: formData });
+        const json = await res.json();
+        if (json.success) return json.data.url;
+        throw new Error("이미지 업로드 실패");
+    }
+
     async function sendBoardReply(docId) {
         const input = document.getElementById(`binput-${docId}`);
+        const photoInput = document.getElementById(`bphoto-${docId}`);
+        const info = document.getElementById(`bphotoinfo-${docId}`);
         const name = document.getElementById('userName').value;
-        if (!input.value.trim()) return;
+        const text = input.value.trim();
+        const hasPhoto = photoInput && photoInput.files.length > 0;
+        if (!text && !hasPhoto) return;
         try {
+            let imageUrl = '';
+            if (hasPhoto) {
+                info.innerText = '📤 사진 업로드 중...';
+                imageUrl = await uploadImageToImgbb(photoInput.files[0]);
+            }
             await db.collection("board_posts").doc(docId).collection("messages").add({
-                sender: name, role: "worker", text: input.value.trim(),
+                sender: name, role: "worker", text: text,
+                imageUrl: imageUrl,
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             await db.collection("board_posts").doc(docId).update({ status: "💬 대화중" });
             input.value = "";
-        } catch (e) { alert("답장 전송 실패: " + e.message); }
+            if (photoInput) photoInput.value = "";
+            if (info) info.innerText = '';
+        } catch (e) {
+            if (info) info.innerText = '';
+            alert("답장 전송 실패: " + e.message);
+        }
     }
 
     async function submitBoard() {
@@ -719,8 +773,14 @@
                 photosHtml += '</div>';
             }
             item.innerHTML = `
-                <div class="status-badge ${isDone ? 'done' : 'wait'}">${escapeHtml(data.status || '')}</div>
-                <div style="font-weight:bold; font-size:15px;">${escapeHtml(data.title || '')}</div>
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <div class="status-badge ${isDone ? 'done' : 'wait'}">${escapeHtml(data.status || '')}</div>
+                    ${!isDone ? `<div>
+                        <button onclick="editMyReport('${data.id}', ${JSON.stringify(data.title || '')}, ${JSON.stringify(data.text || '')})" style="border:none; background:none; color:#1a73e8; cursor:pointer; font-size:12px;">✏️ 수정</button>
+                        <button onclick="deleteMyReport('${data.id}')" style="border:none; background:none; color:#ff4d4f; cursor:pointer; font-size:12px;">🗑️ 삭제</button>
+                    </div>` : ''}
+                </div>
+                <div style="font-weight:bold; font-size:15px;">${escapeHtml(data.title || '')}${data.edited ? ' <span style="color:#999;font-size:11px;font-weight:normal;">(수정됨)</span>' : ''}</div>
                 <div style="font-size:13px; color:#666; margin-top:5px; white-space:pre-wrap;">${escapeHtml(data.text || '')}</div>
                 ${photosHtml}
                 <button onclick="toggleComments('${data.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block; padding:0;">
@@ -728,10 +788,13 @@
                 </button>
                 <div id="sec-${data.id}" class="comment-section">
                     <div id="comments-${data.id}"></div>
-                    <div style="display:flex; gap:5px; margin-top:10px;">
+                    <div style="display:flex; gap:5px; margin-top:10px; align-items:center;">
                         <input type="text" id="input-${data.id}" placeholder="답장 입력" style="flex:1; padding:8px; font-size:13px;">
+                        <label for="rphoto-${data.id}" style="background:#f0f2f5; padding:6px 8px; border-radius:6px; cursor:pointer; font-size:13px;" title="사진 첨부">📷</label>
+                        <input type="file" id="rphoto-${data.id}" accept="image/*" style="display:none;" onchange="markReportPhoto('${data.id}')">
                         <button onclick="sendReply('${data.id}')" style="background:#1a73e8; color:white; border:none; border-radius:6px; padding:0 12px; font-weight:bold;">전송</button>
                     </div>
+                    <div id="rphotoinfo-${data.id}" style="font-size:11px; color:#1a73e8; margin-top:4px;"></div>
                 </div>
             `;
             listDiv.appendChild(item);
@@ -764,6 +827,7 @@
                 else if (explicitRole === 'worker') isAdmin = false;
                 else if (text.startsWith('[답장]') && userName === myName) isAdmin = false;
                 else isAdmin = true;
+                const isMine = !isAdmin && userName === myName;
                 lastIsAdmin = isAdmin;
                 const ts = d.timestamp;
                 const tsMillis = ts ? ts.seconds * 1000 : 0;
@@ -773,7 +837,13 @@
                 const cleanText = text.replace(/^\[답장\]\s*/, '');
                 const bubble = document.createElement("div");
                 bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
-                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin ? '📢 ' : '👤 '}${escapeHtml(displayName)}</span><span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span><br>${escapeHtml(cleanText)}`;
+                const editedTag = d.edited ? ' <span style="color:#999;font-size:10px;">(수정됨)</span>' : '';
+                const editBtns = isMine ? `
+                    <span style="float:right;">
+                        <button onclick="editMyComment('field_reports', '${docId}', '${c.id}', 'comments', ${JSON.stringify(cleanText)})" style="border:none;background:none;color:#1a73e8;cursor:pointer;font-size:11px;">수정</button>
+                        <button onclick="deleteMyComment('field_reports', '${docId}', '${c.id}', 'comments')" style="border:none;background:none;color:#ff4d4f;cursor:pointer;font-size:11px;">삭제</button>
+                    </span>` : '';
+                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin ? '📢 ' : '👤 '}${escapeHtml(displayName)}</span><span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span>${editedTag}${editBtns}<br>${escapeHtml(cleanText)}${d.imageUrl ? `<br><img src="${d.imageUrl}" onclick="openLightbox('${d.imageUrl}')" style="max-width:100%; max-height:200px; border-radius:6px; margin-top:6px; cursor:pointer;">` : ''}`;
                 box.appendChild(bubble);
             });
             if (newBadge) newBadge.innerHTML = (lastIsAdmin && hasNewAdminReply) ? '<span class="new-badge">NEW</span>' : '';
@@ -839,19 +909,120 @@
 
     async function sendReply(docId) {
         const input = document.getElementById(`input-${docId}`);
+        const photoInput = document.getElementById(`rphoto-${docId}`);
+        const info = document.getElementById(`rphotoinfo-${docId}`);
         const name = document.getElementById('userName').value;
-        if (!input.value.trim()) return;
-        await db.collection("field_reports").doc(docId).collection("comments").add({
-            user: name, role: "worker", text: "[답장] " + input.value.trim(),
-            timestamp: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        input.value = "";
+        const text = input.value.trim();
+        const hasPhoto = photoInput && photoInput.files.length > 0;
+        if (!text && !hasPhoto) return;
+        try {
+            let imageUrl = '';
+            if (hasPhoto) {
+                if (info) info.innerText = '📤 사진 업로드 중...';
+                imageUrl = await uploadImageToImgbb(photoInput.files[0]);
+            }
+            await db.collection("field_reports").doc(docId).collection("comments").add({
+                user: name, role: "worker",
+                text: text ? "[답장] " + text : "[답장] (사진)",
+                imageUrl: imageUrl,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            input.value = "";
+            if (photoInput) photoInput.value = "";
+            if (info) info.innerText = '';
+        } catch (e) {
+            if (info) info.innerText = '';
+            alert("답장 전송 실패: " + e.message);
+        }
     }
 
     async function deleteMyPost(docId) {
-        if (!confirm("작성하신 메시지를 삭제하시겠습니까?")) return;
-        try { await db.collection("board_posts").doc(docId).delete(); showToast("삭제되었습니다."); }
-        catch (e) { alert("삭제 중 오류: " + e.message); }
+        if (!confirm("작성하신 메시지를 삭제하시겠습니까?\n(딸린 답글도 함께 삭제됩니다)")) return;
+        try {
+            // 서브컬렉션 messages도 같이 삭제
+            const msgs = await db.collection("board_posts").doc(docId).collection("messages").get();
+            const batch = db.batch();
+            msgs.forEach(m => batch.delete(m.ref));
+            batch.delete(db.collection("board_posts").doc(docId));
+            await batch.commit();
+            showToast("✅ 삭제되었습니다.");
+        } catch (e) { alert("삭제 중 오류: " + e.message); }
+    }
+
+    // [추가] 공지/소통 - 내가 쓴 글 수정
+    async function editMyPost(docId, currentText) {
+        const newText = prompt("내용 수정:", currentText);
+        if (newText === null) return;  // 취소
+        const trimmed = newText.trim();
+        if (!trimmed) { alert("내용을 입력해주세요"); return; }
+        try {
+            await db.collection("board_posts").doc(docId).update({
+                text: trimmed,
+                edited: true,
+                editedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            showToast("✅ 수정되었습니다.");
+        } catch (e) { alert("수정 중 오류: " + e.message); }
+    }
+
+    // [추가] 작업보고 - 내가 쓴 글 삭제
+    async function deleteMyReport(docId) {
+        if (!confirm("작성하신 작업보고를 삭제하시겠습니까?\n(딸린 댓글도 함께 삭제됩니다)")) return;
+        try {
+            const cmts = await db.collection("field_reports").doc(docId).collection("comments").get();
+            const batch = db.batch();
+            cmts.forEach(c => batch.delete(c.ref));
+            batch.delete(db.collection("field_reports").doc(docId));
+            await batch.commit();
+            showToast("✅ 삭제되었습니다.");
+        } catch (e) { alert("삭제 중 오류: " + e.message); }
+    }
+
+    // [추가] 작업보고 - 내가 쓴 글 수정 (제목 + 내용)
+    async function editMyReport(docId, currentTitle, currentText) {
+        const newTitle = prompt("제목 수정:", currentTitle);
+        if (newTitle === null) return;
+        const newText = prompt("내용 수정:", currentText);
+        if (newText === null) return;
+        const tTitle = newTitle.trim();
+        const tText = newText.trim();
+        if (!tTitle || !tText) { alert("제목과 내용 모두 입력해주세요"); return; }
+        try {
+            await db.collection("field_reports").doc(docId).update({
+                title: tTitle,
+                text: tText,
+                edited: true,
+                editedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            showToast("✅ 수정되었습니다.");
+        } catch (e) { alert("수정 중 오류: " + e.message); }
+    }
+
+    // [추가] 댓글/답장 삭제 (내가 쓴 것만)
+    async function deleteMyComment(parentColl, parentDocId, commentId, subColl) {
+        if (!confirm("이 댓글을 삭제하시겠습니까?")) return;
+        try {
+            await db.collection(parentColl).doc(parentDocId)
+                .collection(subColl).doc(commentId).delete();
+            showToast("✅ 삭제되었습니다.");
+        } catch (e) { alert("삭제 중 오류: " + e.message); }
+    }
+
+    // [추가] 댓글/답장 수정 (내가 쓴 것만)
+    async function editMyComment(parentColl, parentDocId, commentId, subColl, currentText) {
+        const newText = prompt("댓글 수정:", currentText);
+        if (newText === null) return;
+        const trimmed = newText.trim();
+        if (!trimmed) { alert("내용을 입력해주세요"); return; }
+        try {
+            await db.collection(parentColl).doc(parentDocId)
+                .collection(subColl).doc(commentId).update({
+                    text: trimmed,
+                    edited: true,
+                    editedAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            showToast("✅ 수정되었습니다.");
+        } catch (e) { alert("수정 중 오류: " + e.message); }
     }
 
     function escapeHtml(str) {
