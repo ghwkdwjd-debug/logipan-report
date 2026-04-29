@@ -780,65 +780,172 @@ class LogiPanApp:
             else:
                 chip.config(bg="#F0F2F5", fg="#666")
 
-    def setup_board_system(self, parent): # 여기서 parent라고 받았으면
-        # 1. 상단 버튼 영역
-        btn_frame = tk.Frame(parent) # 여기도 parent!
-        btn_frame.pack(fill='x', padx=10, pady=10)
+    def setup_board_system(self, parent):
+        """모던 카드 리스트 스타일 공지/소통 화면"""
+        parent.configure(bg="#F5F6F8")
 
-        # 공지 작성 버튼
-        tk.Button(btn_frame, text="📢 공지 작성하기", bg="#1a73e8", fg="white", 
-                font=("맑은 고딕", 10, "bold"), command=self.send_global_notice, width=20).pack(side='left', padx=5)
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(parent, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=30, pady=(20, 10))
 
-        # 새로고침 버튼 (수동 갱신 - 실시간 리스너 있어도 fallback용으로 둠)
-        tk.Button(btn_frame, text="🔄 리스트 새로고침", bg="#34a853", fg="white", 
-                font=("맑은 고딕", 10, "bold"), command=self.update_board_view, width=20).pack(side='left', padx=5)
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="📢", font=("맑은 고딕", 28),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 8))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="공지 및 작업자 소통",
+                 font=("맑은 고딕", 18, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        # 새 메시지 카운터
+        self.board_new_counter = tk.Label(title_text_box, text="",
+                                            font=("맑은 고딕", 9, "bold"),
+                                            bg="#F5F6F8", fg="#FF4757")
+        self.board_new_counter.pack(anchor="w")
 
-        # [추가] 내 이름 설정 버튼 (작업보고 탭과 동일 변수 self.current_user 공유)
-        tk.Button(btn_frame, text="⚙️ 내 이름 설정", command=self.change_user_name,
-                  font=("맑은 고딕", 9, "bold"), bg="#f0f0f0", fg="#333", 
-                  relief="flat", padx=10, cursor="hand2").pack(side="left", padx=10)
+        # 우측 액션 버튼들
+        action_box = tk.Frame(header_frame, bg="#F5F6F8")
+        action_box.pack(side="right")
+        tk.Button(action_box, text="⚙️ 내 이름",
+                  command=self.change_user_name,
+                  font=("맑은 고딕", 9, "bold"),
+                  bg="white", fg="#444",
+                  relief="flat", padx=14, pady=8,
+                  cursor="hand2",
+                  highlightthickness=1,
+                  highlightbackground="#DDD").pack(side="right", padx=(8, 0))
+        tk.Button(action_box, text="🔄 새로고침",
+                  command=self.update_board_view,
+                  font=("맑은 고딕", 9, "bold"),
+                  bg="#34a853", fg="white",
+                  relief="flat", padx=14, pady=8,
+                  cursor="hand2").pack(side="right", padx=(8, 0))
+        tk.Button(action_box, text="✏️ 공지 작성",
+                  command=self.send_global_notice,
+                  font=("맑은 고딕", 9, "bold"),
+                  bg="#1877F2", fg="white",
+                  relief="flat", padx=14, pady=8,
+                  cursor="hand2").pack(side="right")
 
-        # [추가] 안내 라벨 (우클릭으로 완료 처리 가능하다는 힌트)
-        tk.Label(btn_frame, text="💡 우클릭: 완료/삭제", 
-                 fg="#888", font=("맑은 고딕", 9)).pack(side="left", padx=10)
+        # ========== [필터 + 검색 바] ==========
+        filter_card = tk.Frame(parent, bg="white",
+                                highlightthickness=1,
+                                highlightbackground="#E5E7EB")
+        filter_card.pack(side="top", fill="x", padx=30, pady=(0, 10), ipady=4)
 
-        # 2. 작업자 소통 리스트 구역
-        list_label_frame = tk.Frame(parent, bg="#F0F2F5")
-        list_label_frame.pack(fill="x", padx=35)
-        tk.Label(list_label_frame, text="💬 작업자 소통 현황", font=("맑은 고딕", 12, "bold"), 
-                 bg="#F0F2F5", fg="#1C1E21").pack(side="left")
+        # 필터 칩
+        if not hasattr(self, 'board_filter_var'):
+            self.board_filter_var = tk.StringVar(value="📌 미완료")
+        else:
+            self.board_filter_var.set("📌 미완료")
 
-        frame_list = tk.Frame(parent, bg="white", bd=1, relief="solid")
-        frame_list.pack(expand=True, fill="both", padx=30, pady=(5, 10))
+        self.board_filter_chips = {}
+        chip_box = tk.Frame(filter_card, bg="white")
+        chip_box.pack(side="left", padx=14, pady=10)
 
-        # [수정] 컬럼 순서: 날짜 / 작업자 / 구분 / 상태 / 내용
-        cols = ("날짜", "작업자", "구분", "상태", "내용")
-        self.board_tree = ttk.Treeview(frame_list, columns=cols, show="headings", height=12)
-        
-        widths = {"날짜": 80, "작업자": 100, "구분": 100, "상태": 90, "내용": 430}
-        for col in cols:
-            self.board_tree.heading(col, text=col)
-            self.board_tree.column(col, width=widths[col], anchor="center")
-        
-        self.board_tree.pack(side="left", expand=True, fill="both")
-        
-        # 스크롤바 & 더블클릭 이벤트
-        sb = ttk.Scrollbar(frame_list, orient="vertical", command=self.board_tree.yview)
-        self.board_tree.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self.board_tree.bind("<Double-1>", self.on_board_double_click)
+        def make_board_chip(label, value):
+            def click():
+                self.board_filter_var.set(value)
+                self._update_board_chip_styles()
+                self.update_board_view()
+            chip = tk.Label(chip_box, text=label,
+                             font=("맑은 고딕", 9, "bold"),
+                             bg="#F0F2F5", fg="#666",
+                             padx=14, pady=6, cursor="hand2")
+            chip.bind("<Button-1>", lambda e: click())
+            chip.pack(side="left", padx=2)
+            self.board_filter_chips[value] = chip
 
-        # [추가] 우클릭 메뉴 - 완료 처리 / 삭제
+        make_board_chip("📌 미완료", "📌 미완료")
+        make_board_chip("✅ 완료", "✅ 완료")
+
+        # 구분선
+        tk.Frame(filter_card, bg="#E5E7EB", width=1).pack(side="left", fill="y", padx=8, pady=14)
+
+        # 검색
+        if not hasattr(self, 'board_search_var'):
+            self.board_search_var = tk.StringVar()
+
+        search_box = tk.Frame(filter_card, bg="white")
+        search_box.pack(side="left", padx=10, pady=10, fill="x", expand=True)
+        tk.Label(search_box, text="🔍", font=("맑은 고딕", 11),
+                 bg="white", fg="#999").pack(side="left", padx=(0, 4))
+        board_search_entry = tk.Entry(search_box, textvariable=self.board_search_var,
+                                       font=("맑은 고딕", 10),
+                                       bd=0, relief="flat",
+                                       highlightthickness=0,
+                                       bg="white", fg="#333")
+        board_search_entry.pack(side="left", fill="x", expand=True, ipady=4)
+        board_search_entry.bind("<Return>", lambda e: self.update_board_view())
+
+        def board_focus_in(e):
+            if board_search_entry.get() == "내용·작업자·날짜·구분 검색":
+                board_search_entry.delete(0, tk.END)
+                board_search_entry.config(fg="#333")
+        def board_focus_out(e):
+            if not board_search_entry.get():
+                board_search_entry.insert(0, "내용·작업자·날짜·구분 검색")
+                board_search_entry.config(fg="#999")
+        if not self.board_search_var.get():
+            board_search_entry.insert(0, "내용·작업자·날짜·구분 검색")
+            board_search_entry.config(fg="#999")
+        board_search_entry.bind("<FocusIn>", board_focus_in)
+        board_search_entry.bind("<FocusOut>", board_focus_out)
+
+        self._update_board_chip_styles()
+
+        # ========== [카드 리스트 영역] ==========
+        list_outer = tk.Frame(parent, bg="#F5F6F8")
+        list_outer.pack(side="top", expand=True, fill="both", padx=30, pady=(0, 15))
+
+        list_canvas = tk.Canvas(list_outer, bg="#F5F6F8", highlightthickness=0)
+        list_scrollbar = ttk.Scrollbar(list_outer, orient="vertical",
+                                        command=list_canvas.yview)
+        self.board_cards_frame = tk.Frame(list_canvas, bg="#F5F6F8")
+
+        self.board_cards_frame.bind(
+            "<Configure>",
+            lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+        )
+        canvas_window = list_canvas.create_window((0, 0), window=self.board_cards_frame, anchor="nw")
+        def _on_canvas_resize(event):
+            list_canvas.itemconfig(canvas_window, width=event.width)
+        list_canvas.bind("<Configure>", _on_canvas_resize)
+        list_canvas.configure(yscrollcommand=list_scrollbar.set)
+
+        list_scrollbar.pack(side="right", fill="y")
+        list_canvas.pack(side="left", fill="both", expand=True)
+
+        def _on_mousewheel(event):
+            try:
+                list_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            except: pass
+        def _bind_wheel(e): list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _unbind_wheel(e): list_canvas.unbind_all("<MouseWheel>")
+        list_canvas.bind("<Enter>", _bind_wheel)
+        list_canvas.bind("<Leave>", _unbind_wheel)
+
+        # 우클릭 메뉴
         self.board_context_menu = tk.Menu(self.root, tearoff=0, font=("맑은 고딕", 10))
-        self.board_context_menu.add_command(label="✅ 완료 처리 (리스트에서 숨김)", command=self.complete_board_post)
+        self.board_context_menu.add_command(label="✅ 완료 처리", command=self.complete_board_post)
         self.board_context_menu.add_separator()
         self.board_context_menu.add_command(label="🗑️ 완전 삭제", command=self.delete_board_post)
-        self.board_tree.bind("<Button-3>", self.show_board_context_menu)
 
-        # [추가] 실시간 리스너 시작 (자동으로 변경 감지해서 갱신)
+        self._selected_board_id = None
+
+        # 실시간 리스너 + 첫 로드
         self.start_board_listener()
+        self.update_board_view()
 
-        # [제거] 하단 게시글 새로고침 버튼 - 위에 이미 있고 실시간 갱신도 됨
+    def _update_board_chip_styles(self):
+        """공지/소통 필터 칩 선택 상태 업데이트"""
+        if not hasattr(self, 'board_filter_chips'): return
+        current = self.board_filter_var.get()
+        for value, chip in self.board_filter_chips.items():
+            if value == current:
+                chip.config(bg="#1877F2", fg="white")
+            else:
+                chip.config(bg="#F0F2F5", fg="#666")
 
     def send_global_notice(self):
             notice_win = tk.Toplevel(self.root)
@@ -920,12 +1027,19 @@ class LogiPanApp:
 
     # --- [기능 1: 소통 글 더블클릭 - 공지는 열람, 개인/문의는 대화 스레드] ---
     def on_board_double_click(self, event):
-        selection = self.board_tree.selection()
-        if not selection:
-            return
+        # [수정] _direct_board_id (카드 클릭) 우선, 없으면 옛 board_tree fallback
+        item_id = getattr(self, '_direct_board_id', None)
+        self._direct_board_id = None  # 한번 쓰고 비움
 
-        item_id = selection[0]
-        row_values = self.board_tree.item(item_id, "values")  # (날짜, 작성자, 구분, 내용, 상태)
+        if not item_id:
+            # 호환: 옛 board_tree 인터페이스
+            if hasattr(self, 'board_tree') and self.board_tree.winfo_exists():
+                selection = self.board_tree.selection()
+                if not selection:
+                    return
+                item_id = selection[0]
+            else:
+                return
 
         # Firestore에서 원본 문서 로드
         try:
@@ -1220,112 +1334,286 @@ class LogiPanApp:
 
     # --- [기능 2: 소통 글 리스트 업데이트 및 색상 적용] ---
     def update_board_view(self):
-        # 기존 리스트 싹 비우기
-        for i in self.board_tree.get_children():
-            self.board_tree.delete(i)
+        from datetime import datetime, timedelta, timezone
+
+        # 카드 영역 없으면 무시
+        if not hasattr(self, 'board_cards_frame') or not self.board_cards_frame.winfo_exists():
+            return
+
+        # 1. 기존 카드 제거
+        for w in self.board_cards_frame.winfo_children():
+            w.destroy()
 
         try:
-            # 최신 순으로 최대 200개 훑어서 숨김 제외하고 100개까지 표시
-            posts = self.db.collection('board_posts').order_by('timestamp', direction=firestore.Query.DESCENDING).limit(200).get()
+            search_keyword = self.board_search_var.get().strip().lower() if hasattr(self, 'board_search_var') else ""
+            if search_keyword == "내용·작업자·날짜·구분 검색":
+                search_keyword = ""
+            current_filter = self.board_filter_var.get() if hasattr(self, 'board_filter_var') else "📌 미완료"
 
+            ref = self.db.collection('board_posts')
+
+            # [최적화] 필터별 다른 쿼리
+            try:
+                if search_keyword:
+                    posts = list(ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(500).get())
+                elif current_filter == "📌 미완료":
+                    # 최근 200건 (대부분 미완료가 적음)
+                    posts = list(ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(200).get())
+                else:
+                    # 완료: 최근 7일치만
+                    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+                    posts = list(ref.where('timestamp', '>=', seven_days_ago)
+                                    .order_by('timestamp', direction=firestore.Query.DESCENDING).limit(200).get())
+            except Exception as fetch_err:
+                print(f"❌ Firestore 조회 실패: {fetch_err}")
+                try:
+                    posts = list(ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(200).get())
+                except Exception:
+                    tk.Label(self.board_cards_frame,
+                             text=f"⚠️ 데이터 로딩 실패\n{fetch_err}",
+                             bg="#F5F6F8", fg="#c00",
+                             font=("맑은 고딕", 10), pady=30).pack()
+                    return
+
+            new_count = 0  # 미확인/대화중 카운터
             shown = 0
-            for doc in posts:
+
+            for idx, doc in enumerate(posts):
                 d = doc.to_dict()
-
-                current_status = d.get('status', '') # 예: '🆕 신규', '💬 대화중', '✅ 확인완료'
-                current_category = d.get('category', '') # 예: '📢 공지', '개인지시', '문의'
-
-                # [숨김 처리] 확인완료된 스레드는 리스트에서 제외
-                if '확인완료' in current_status:
-                    continue
-                # 레거시: 예전 단일 답장 시스템의 '✅ 확인' 상태도 마무리된 것으로 간주하여 숨김
-                if current_status.strip() == '✅ 확인':
-                    continue
-                # [추가] 완료 처리된 게시글도 리스트에서 숨김 (DB에는 남아있음)
-                if '완료' in current_status:
-                    continue
-
+                current_status = d.get('status', '신규')
+                current_category = d.get('category', '문의')
+                writer = d.get('real_sender') or d.get('user', '익명')
+                receiver = d.get('receiver', 'all')
+                text = d.get('text', '')
                 ts = d.get('timestamp')
-                # [수정] 시간 제거하고 날짜만 표시
-                time_str = ts.strftime('%m/%d') if ts else ""
+                time_str = ts.strftime('%y/%m/%d') if ts else ""
 
-                # [수정] 작업자 칼럼은 가능하면 real_sender(실제 작성자)를 보여줌.
-                # 공지/지시는 user 필드에 받는 사람이 들어가있어서 작성자가 안보였음.
-                writer = d.get('real_sender') or d.get('user', '')
+                # 완료 여부 판단
+                is_done = ('완료' in current_status) or ('확인완료' in current_status) or (current_status.strip() == '✅ 확인')
 
-                # [수정] 컬럼 순서: 날짜 / 작업자 / 구분 / 상태 / 내용
-                item_id = self.board_tree.insert("", "end", iid=doc.id,
-                                                values=(time_str,
-                                                        writer,
-                                                        current_category,
-                                                        current_status,
-                                                        d.get('text', '').replace('\n', ' ')))
+                # 필터: 미완료 vs 완료
+                if current_filter == "📌 미완료" and is_done:
+                    continue
+                if current_filter == "✅ 완료" and not is_done:
+                    continue
+
+                # 검색어 매칭
+                if search_keyword:
+                    combined = f"{time_str} {writer} {current_category} {current_status} {text} {receiver}".lower()
+                    if search_keyword not in combined:
+                        continue
+
+                # 새 메시지/대화 카운트
+                if not is_done and ("대화중" in current_status or "신규" in current_status):
+                    new_count += 1
+
+                self._render_board_card(doc.id, d, current_status, current_category,
+                                          writer, receiver, text, time_str, is_done, idx)
                 shown += 1
-
-                # --- [색상 태그 설정] ---
-                if "공지" in current_category:
-                    self.board_tree.tag_configure("notice", background="#FFF9C4") # 연노랑
-                    self.board_tree.item(item_id, tags=("notice",))
-
-                elif "대화중" in current_status:
-                    self.board_tree.tag_configure("talking", background="#E3F2FD", foreground="#0D47A1") # 연하늘 배경 + 진파랑 글자
-                    self.board_tree.item(item_id, tags=("talking",))
-
-                elif "신규" in current_status or "지시" in current_status:
-                    self.board_tree.tag_configure("new", background="#FFEBEE", foreground="#C62828") # 연분홍 배경 + 진빨강 글자
-                    self.board_tree.item(item_id, tags=("new",))
-
                 if shown >= 100:
                     break
 
+            if shown == 0:
+                if current_filter == "📌 미완료":
+                    msg = "🎉 미완료 항목이 없습니다!"
+                elif search_keyword:
+                    msg = f"🔍 '{search_keyword}' 검색 결과가 없습니다"
+                else:
+                    msg = "📭 최근 7일간 완료된 항목이 없습니다\n(더 보려면 검색하세요)"
+                tk.Label(self.board_cards_frame, text=msg,
+                         bg="#F5F6F8", fg="#999",
+                         font=("맑은 고딕", 11), pady=50, justify="center").pack()
+
+            # 새 메시지 카운터
+            if hasattr(self, 'board_new_counter'):
+                if new_count > 0:
+                    self.board_new_counter.config(text=f"🔔 미처리 {new_count}건", fg="#FF4757")
+                else:
+                    self.board_new_counter.config(text="")
+
+            # 완료 탭 안내
+            if not search_keyword and current_filter == "✅ 완료":
+                hint = tk.Label(self.board_cards_frame,
+                                 text="💡 최근 7일치만 표시됩니다. 더 오래된 데이터는 위 검색창에 키워드를 입력하세요\n(내용·작업자·날짜·구분 모두 검색 가능)",
+                                 bg="#F5F6F8", fg="#999",
+                                 font=("맑은 고딕", 8), pady=15, justify="center")
+                hint.pack(side="bottom")
+
         except Exception as e:
-            print(f"새로고침 오류: {e}")
+            import traceback
+            print(f"❌ 공지/소통 카드 렌더링 오류: {e}")
+            traceback.print_exc()
+            tk.Label(self.board_cards_frame, text=f"⚠️ 오류: {e}",
+                     bg="#F5F6F8", fg="#c00",
+                     font=("맑은 고딕", 10), pady=30).pack()
+
+    def _render_board_card(self, doc_id, data, status, category, writer, receiver,
+                            text, time_str, is_done, idx):
+        """공지/소통 카드 한 개 그리기"""
+        # 카테고리/상태별 색상
+        if is_done:
+            accent_color = "#9CA3AF"
+            badge_bg = "#E5E7EB"
+            badge_fg = "#6B7280"
+            card_bg = "#FAFAFA"
+            cat_label = f"✅ {category}"
+        elif "공지" in category:
+            accent_color = "#F59E0B"
+            badge_bg = "#FEF3C7"
+            badge_fg = "#92400E"
+            card_bg = "#FFFEF5"
+            cat_label = "📢 공지"
+        elif "개인지시" in category:
+            accent_color = "#8B5CF6"
+            badge_bg = "#EDE9FE"
+            badge_fg = "#5B21B6"
+            card_bg = "white"
+            cat_label = f"🔒 개인지시 → {receiver if receiver != 'all' else ''}"
+        elif "대화중" in status:
+            accent_color = "#3B82F6"
+            badge_bg = "#DBEAFE"
+            badge_fg = "#1E40AF"
+            card_bg = "white"
+            cat_label = "💬 대화중"
+        else:  # 신규/문의
+            accent_color = "#FF4757"
+            badge_bg = "#FFE5E8"
+            badge_fg = "#DC2626"
+            card_bg = "white"
+            cat_label = "💬 문의"
+
+        # 카드 컨테이너
+        card_outer = tk.Frame(self.board_cards_frame, bg="#F5F6F8")
+        card_outer.pack(fill="x", padx=2, pady=4)
+
+        card = tk.Frame(card_outer, bg=card_bg,
+                         highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="x")
+
+        # 좌측 액센트 바
+        accent_bar = tk.Frame(card, bg=accent_color, width=4)
+        accent_bar.pack(side="left", fill="y")
+
+        content = tk.Frame(card, bg=card_bg, padx=14, pady=12)
+        content.pack(side="left", fill="both", expand=True)
+
+        # 1행: 카테고리 뱃지 + 상태 + 우측 작성자
+        row1 = tk.Frame(content, bg=card_bg)
+        row1.pack(fill="x")
+
+        # 카테고리 뱃지
+        tk.Label(row1, text=cat_label,
+                 bg=badge_bg, fg=badge_fg,
+                 font=("맑은 고딕", 8, "bold"),
+                 padx=8, pady=2).pack(side="left")
+
+        # 진행 상태 뱃지 (대화중 등)
+        if not is_done and "대화중" in status:
+            tk.Label(row1, text="💬 대화중",
+                     bg="#DBEAFE", fg="#1E40AF",
+                     font=("맑은 고딕", 8, "bold"),
+                     padx=6, pady=2).pack(side="left", padx=(4, 0))
+
+        # 시간
+        tk.Label(row1, text=f"📅 {time_str}",
+                 bg=card_bg, fg="#9CA3AF",
+                 font=("맑은 고딕", 9)).pack(side="left", padx=(8, 0))
+
+        # 우측: 작성자
+        tk.Label(row1, text=f"👤 {writer}",
+                 bg=card_bg, fg="#374151",
+                 font=("맑은 고딕", 9, "bold")).pack(side="right")
+
+        # 2행: 내용 (최대 2줄 미리보기)
+        preview = text.replace('\n', ' ').strip()
+        if len(preview) > 100:
+            preview = preview[:100] + "..."
+        tk.Label(content, text=preview,
+                 bg=card_bg, fg="#111827",
+                 font=("맑은 고딕", 11),
+                 anchor="w", justify="left",
+                 wraplength=600).pack(fill="x", anchor="w", pady=(6, 0))
+
+        # 클릭/우클릭 이벤트
+        def on_click(e):
+            self._direct_board_id = doc_id
+            self.on_board_double_click(None)
+        def on_right_click(e):
+            self._selected_board_id = doc_id
+            self.board_context_menu.post(e.x_root, e.y_root)
+        def on_enter(e):
+            card.config(highlightbackground="#1877F2", highlightthickness=2)
+        def on_leave(e):
+            card.config(highlightbackground="#E5E7EB", highlightthickness=1)
+
+        for widget in [card, content, accent_bar, row1] + list(row1.winfo_children()) + list(content.winfo_children()):
+            try:
+                widget.bind("<Double-Button-1>", on_click)
+                widget.bind("<Button-3>", on_right_click)
+                widget.config(cursor="hand2")
+            except:
+                pass
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
 
     # --- [공지/소통 우클릭 메뉴 & 완료/삭제 & 실시간 리스너] ---
     def show_board_context_menu(self, event):
-        """공지/소통 리스트 우클릭 시 메뉴 표시"""
-        item = self.board_tree.identify_row(event.y)
-        if item:
-            self.board_tree.selection_set(item)
-            self.board_context_menu.post(event.x_root, event.y_root)
+        """옛 board_tree 호환 - 카드는 _selected_board_id로 동작"""
+        if hasattr(self, 'board_tree') and self.board_tree.winfo_exists():
+            item = self.board_tree.identify_row(event.y)
+            if item:
+                self.board_tree.selection_set(item)
+                self.board_context_menu.post(event.x_root, event.y_root)
 
     def complete_board_post(self):
         """선택한 게시글을 '완료' 처리 (리스트에서는 숨김, DB에는 유지)"""
-        selected = self.board_tree.selection()
-        if not selected:
+        # 카드 시스템: _selected_board_id 우선, 옛 board_tree fallback
+        doc_id = getattr(self, '_selected_board_id', None)
+        if not doc_id and hasattr(self, 'board_tree') and self.board_tree.winfo_exists():
+            selected = self.board_tree.selection()
+            if selected:
+                doc_id = selected[0]
+        if not doc_id:
             return
-        doc_id = selected[0]
         try:
-            d = self.board_tree.item(doc_id)
-            # [수정] 컬럼 순서가 (날짜, 작업자, 구분, 상태, 내용)이므로 내용은 인덱스 4
-            title_preview = d['values'][4][:30] if d.get('values') and len(d['values']) > 4 else ''
             if not messagebox.askyesno("완료 처리",
                 f"이 게시글을 완료 처리할까요?\n\n"
-                f"내용: {title_preview}...\n\n"
-                f"※ 리스트에서는 사라지지만 데이터는 보관됩니다."):
+                f"※ '미완료' 탭에서는 사라지지만 '✅ 완료' 탭에서 확인 가능합니다."):
                 return
             self.db.collection('board_posts').document(doc_id).update({
                 'status': '✅ 완료',
                 'completed_at': firestore.SERVER_TIMESTAMP
             })
+            self._selected_board_id = None
             self.update_board_view()
         except Exception as e:
             messagebox.showerror("오류", f"완료 처리 실패: {e}")
 
     def delete_board_post(self):
         """선택한 게시글을 완전 삭제 (DB에서도 제거)"""
-        selected = self.board_tree.selection()
-        if not selected:
+        doc_id = getattr(self, '_selected_board_id', None)
+        if not doc_id and hasattr(self, 'board_tree') and self.board_tree.winfo_exists():
+            selected = self.board_tree.selection()
+            if selected:
+                doc_id = selected[0]
+        if not doc_id:
             return
-        doc_id = selected[0]
         try:
             if not messagebox.askyesno("완전 삭제",
                 "정말로 이 게시글을 완전히 삭제할까요?\n\n"
                 "⚠️ 데이터까지 영구 삭제되며 복구할 수 없습니다.\n"
                 "(단순히 리스트에서 숨기려면 '완료 처리'를 사용하세요)"):
                 return
+            # 서브컬렉션 messages도 같이 삭제
+            try:
+                msgs = self.db.collection('board_posts').document(doc_id).collection('messages').get()
+                for m in msgs:
+                    m.reference.delete()
+            except Exception:
+                pass
             self.db.collection('board_posts').document(doc_id).delete()
             messagebox.showinfo("삭제 완료", "게시글이 삭제되었습니다.")
+            self._selected_board_id = None
             self.update_board_view()
         except Exception as e:
             messagebox.showerror("오류", f"삭제 실패: {e}")
