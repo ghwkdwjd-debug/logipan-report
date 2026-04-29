@@ -881,7 +881,10 @@
             msg.innerText = "전송 중...";
             await db.collection("field_reports").add({
                 user: name, title: title, text: text, date: getFormattedDate(),
-                imageUrl: imageUrls.join(","), status: "⏳ 처리중", timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                imageUrl: imageUrls.join(","), status: "⏳ 처리중",
+                comment_count: 0,  // [추가] 캐싱 초기값
+                has_attached_image: imageUrls.length > 0,  // [추가] 본문 사진 여부
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             document.getElementById('reportTitle').value = '';
             document.getElementById('reportText').value = '';
@@ -928,6 +931,17 @@
                 imageUrl: imageUrl,
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
+            // [추가] 본문에 메타 캐싱 (Firestore 읽기 비용 절약)
+            try {
+                await db.collection("field_reports").doc(docId).update({
+                    comment_count: firebase.firestore.FieldValue.increment(1),
+                    last_comment_text: text || "(사진)",
+                    last_comment_user: name,
+                    last_comment_role: 'worker',
+                    last_comment_at: firebase.firestore.FieldValue.serverTimestamp(),
+                    has_attached_image: imageUrl ? true : firebase.firestore.FieldValue.delete()
+                });
+            } catch (metaErr) { console.warn('메타 업데이트 실패:', metaErr); }
             input.value = "";
             if (photoInput) photoInput.value = "";
             if (info) info.innerText = '';
@@ -1005,6 +1019,14 @@
         try {
             await db.collection(parentColl).doc(parentDocId)
                 .collection(subColl).doc(commentId).delete();
+            // [추가] field_reports의 경우 본문 카운트도 감소
+            if (parentColl === 'field_reports') {
+                try {
+                    await db.collection(parentColl).doc(parentDocId).update({
+                        comment_count: firebase.firestore.FieldValue.increment(-1)
+                    });
+                } catch (metaErr) { console.warn('카운트 감소 실패:', metaErr); }
+            }
             showToast("✅ 삭제되었습니다.");
         } catch (e) { alert("삭제 중 오류: " + e.message); }
     }
