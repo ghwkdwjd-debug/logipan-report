@@ -93,6 +93,11 @@
         <button id="notifBtn" onclick="enableNotifications()" style="background:#fbbc04; color:white; border:none; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:bold; cursor:pointer; white-space:nowrap;">🔔 알림 켜기</button>
     </div>
 
+    <!-- 알림 진단용 - 작업자가 본인 폰 알림 동작 확인 -->
+    <div style="text-align:right; margin-bottom:10px;">
+        <button onclick="testLocalNotification()" style="background:none; border:1px dashed #ccc; color:#999; border-radius:6px; padding:4px 10px; font-size:11px; cursor:pointer;">🧪 알림 테스트</button>
+    </div>
+
     <input type="hidden" id="userName">
 
     <div id="section-report">
@@ -170,6 +175,34 @@
 
     // [추가] 푸시 알림용 VAPID 키
     const VAPID_KEY = "BJNykZMVNq1d0i8fd0bnHd1dsJgYXOuNDVz9DeneNk9okRbJ7UgJCQeWiOSwWw7CVaJaeaBKaWqFEGM4cX42ZBg";
+
+    // [추가] 로컬 알림 테스트 - Firebase 안 거치고 폰 자체에서 알림 띄우기
+    // 알림이 안 올 때 본인 폰 시스템이 정상인지 확인용
+    async function testLocalNotification() {
+        if (Notification.permission !== 'granted') {
+            alert("먼저 🔔 알림 켜기 버튼을 눌러주세요!");
+            return;
+        }
+        try {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg) {
+                await reg.showNotification("🧪 테스트 알림", {
+                    body: "이 알림이 보이면 폰 알림은 정상이에요!",
+                    icon: 'https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
+                    tag: 'test-' + Date.now(),
+                    requireInteraction: false
+                });
+                showToast("🧪 알림 발송됨 - 알림 센터 확인");
+            } else {
+                new Notification("🧪 테스트 알림", {
+                    body: "이게 보이면 알림 정상"
+                });
+                showToast("🧪 알림 발송됨");
+            }
+        } catch (e) {
+            alert("로컬 알림 실패: " + e.message);
+        }
+    }
 
     // [추가] FCM (메시징) 객체 - 브라우저 지원 시에만 초기화
     let messaging = null;
