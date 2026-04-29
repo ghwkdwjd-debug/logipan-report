@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, simpledialog
 import re
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, messaging
 
 class LogiPanApp:
     def __init__(self, root):
@@ -15,7 +15,6 @@ class LogiPanApp:
         self.root.title("로지판 (Logi-Pan) v11.0 - 통합 물류 파트너")
 
         # --- 구글 비밀기지 연결 시작 ---
-        self.db = None  # [추가] 연결 실패 시에도 속성 보장
         try:
             # 실행 위치와 상관없이 key.json을 찾도록 절대경로로 접근
             base_path = os.path.dirname(os.path.abspath(__file__))
@@ -29,8 +28,6 @@ class LogiPanApp:
             print("✅ 구글 비밀기지 연결 성공!")
         except Exception as e:
             print(f"❌ 연결 실패: {e}")
-            # [추가] 사용자에게 안내 (창 띄우기 전에는 print만, 메시지박스는 나중에)
-            self._db_init_error = str(e)
         # --- 구글 비밀기지 연결 끝 ---
 
         # [창 크기 설정]
@@ -106,17 +103,6 @@ class LogiPanApp:
 
         # [추가] 탭 알림 시스템 초기화 (모든 탭 만든 다음에)
         self.setup_tab_alert_system()
-
-        # [추가] Firebase 연결 실패했을 때 사용자에게 알림 (창 띄운 후에)
-        if self.db is None:
-            err_msg = getattr(self, '_db_init_error', '알 수 없는 오류')
-            self.root.after(500, lambda: messagebox.showwarning(
-                "⚠️ 서버 연결 실패",
-                f"구글 서버 연결에 실패했습니다.\n\n"
-                f"입고/출고/맘스 등 로컬 작업은 정상 동작하지만,\n"
-                f"작업보고/공지소통 기능은 사용할 수 없습니다.\n\n"
-                f"오류: {err_msg}\n\n"
-                f"※ key.json 파일이 같은 폴더에 있는지 확인해주세요."))
 
     # --- [데이터 처리 공통 로직] ---
     def check_double_enter(self, event):
@@ -304,6 +290,90 @@ class LogiPanApp:
         self.save_save_dir(self.save_dir)
         self.status.config(text=f" 📂 저장 위치: {self.save_dir}")
         messagebox.showinfo("경로 변경 완료", f"저장 위치가 변경되었습니다.\n\n{self.save_dir}\n\n(앞으로 모든 파일은 여기에 저장됩니다)")
+
+    # ========== [추가] FCM 푸시 알림 발송 ==========
+    def send_fcm_push(self, target_user, title, body):
+        """작업자에게 푸시 알림 발송.
+
+        Args:
+            target_user: 받는 작업자 이름 (예: "장정호") 또는 "all" (전체)
+            title: 알림 제목
+            body: 알림 본문
+
+        Firestore의 fcm_tokens 컬렉션에서 토큰을 조회해서 발송.
+        실패해도 조용히 무시 (로그만). 메인 작업 흐름 방해 안함.
+        """
+        if self.db is None:
+            return
+
+        import threading
+        # 백그라운드 스레드에서 발송 (UI 멈춤 방지)
+        def _send():
+            try:
+                tokens = []
+                if target_user == "all":
+                    # 모든 작업자에게
+                    docs = self.db.collection('fcm_tokens').stream()
+                    for doc in docs:
+                        d = doc.to_dict()
+                        if d.get('token'):
+                            tokens.append(d['token'])
+                else:
+                    # 특정 작업자
+                    doc = self.db.collection('fcm_tokens').document(target_user).get()
+                    if doc.exists:
+                        d = doc.to_dict()
+                        if d.get('token'):
+                            tokens.append(d['token'])
+
+                if not tokens:
+                    print(f"📵 FCM 토큰 없음 (대상: {target_user}) - 알림 스킵")
+                    return
+
+                # 발송
+                success, fail = 0, 0
+                for token in tokens:
+                    try:
+                        msg = messaging.Message(
+                            notification=messaging.Notification(
+                                title=title,
+                                body=body,
+                            ),
+                            token=token,
+                            webpush=messaging.WebpushConfig(
+                                notification=messaging.WebpushNotification(
+                                    title=title,
+                                    body=body,
+                                    icon='/logipan-report/icon.png',
+                                ),
+                                fcm_options=messaging.WebpushFCMOptions(
+                                    link='https://ghwkdwjd-debug.github.io/logipan-report/',
+                                ),
+                            ),
+                        )
+                        messaging.send(msg)
+                        success += 1
+                    except Exception as e:
+                        fail += 1
+                        # 토큰이 만료/무효면 자동 정리
+                        err_str = str(e)
+                        if 'unregistered' in err_str.lower() or 'invalid' in err_str.lower():
+                            try:
+                                # 어느 사용자의 토큰인지 찾아서 삭제
+                                docs = self.db.collection('fcm_tokens') \
+                                    .where('token', '==', token).stream()
+                                for d in docs:
+                                    d.reference.delete()
+                                print(f"🧹 만료된 FCM 토큰 정리 완료")
+                            except Exception:
+                                pass
+
+                print(f"📱 FCM 푸시 완료: {success}건 성공 / {fail}건 실패 (대상: {target_user})")
+            except Exception as e:
+                print(f"⚠️ FCM 발송 오류: {e}")
+
+        # 백그라운드 스레드로 실행
+        threading.Thread(target=_send, daemon=True).start()
 
     def position_popup(self, win, width, height):
         """[추가] 팝업창을 메인 창(self.root) 근처에 띄움.
@@ -704,14 +774,23 @@ class LogiPanApp:
                         post_data = {
                             'user': receiver_name if target == "individual" else my_name, 
                             'real_sender': my_name, # 실제 보낸 사람 (내 이름)
-                            'category': "공지" if target == "all" else "개인요청",
+                            'category': "공지" if target == "all" else "개인지시",
                             'receiver': receiver_name if target == "individual" else "all",
                             'text': content,
-                            'status': "📢 공지" if target == "all" else "🆕요청", # 리스트에 뜰 상태
+                            'status': "📢 공지" if target == "all" else "🆕 지시", # 리스트에 뜰 상태
                             'timestamp': firestore.SERVER_TIMESTAMP
                         }
                         
                         self.db.collection('board_posts').add(post_data)
+                        # [추가] 푸시 알림 발송
+                        if target == "all":
+                            self.send_fcm_push("all",
+                                                f"📢 새 공지사항",
+                                                content[:50] + ('...' if len(content) > 50 else ''))
+                        else:
+                            self.send_fcm_push(receiver_name,
+                                                f"🔒 {my_name}님의 개인지시",
+                                                content[:50] + ('...' if len(content) > 50 else ''))
                         messagebox.showinfo("완료", "전송되었습니다.", parent=notice_win)
                         notice_win.destroy()
                         self.update_board_view()
@@ -745,7 +824,7 @@ class LogiPanApp:
             self._open_notice_view(item_id, post_data)
             return
 
-        # 개인요청/문의는 대화 스레드 창
+        # 개인지시/문의는 대화 스레드 창
         self._open_thread_window(item_id, post_data, row_values)
 
     def _open_notice_view(self, item_id, post_data):
@@ -794,7 +873,7 @@ class LogiPanApp:
                   padx=15, pady=5).pack(side="right", padx=20)
 
     def _open_thread_window(self, item_id, post_data, row_values):
-        """개인요청/문의에 대한 대화형 스레드 창"""
+        """개인지시/문의에 대한 대화형 스레드 창"""
         win = tk.Toplevel(self.root)
         win.title(f"💬 {post_data.get('user', '작업자')}님과의 대화")
         win.configure(bg="#F0F2F5")
@@ -892,9 +971,9 @@ class LogiPanApp:
         # 1) 첫 메시지 = 원글 (작업자 쪽 / 왼쪽 흰 말풍선)
         orig_ts = post_data.get('timestamp')
         orig_time = orig_ts.strftime('%m/%d %H:%M') if orig_ts else ""
-        # 개인요청은 관리자가 보낸 것이므로 오른쪽, 문의는 작업자가 보낸 것이므로 왼쪽
+        # 개인지시는 관리자가 보낸 것이므로 오른쪽, 문의는 작업자가 보낸 것이므로 왼쪽
         category = post_data.get('category', '')
-        if '요청' in category:
+        if '지시' in category:
             # [수정] '관리자' 하드코딩 제거, real_sender 우선 사용
             sender_name = post_data.get('real_sender') or '관리자'
             _add_bubble(post_data.get('text', ''), sender_name,
@@ -952,6 +1031,13 @@ class LogiPanApp:
                         'status': '💬 대화중',
                         'last_reply_time': firestore.SERVER_TIMESTAMP
                     })
+                # [추가] 답장 받은 작업자에게 푸시 알림 발송
+                target = post_data.get('user', '')
+                if target:
+                    preview = content[:50] + ('...' if len(content) > 50 else '')
+                    self.send_fcm_push(target,
+                                        f"📢 {my_name}님의 답장",
+                                        preview)
                 win.destroy()
                 self.update_board_view()
             except Exception as e:
@@ -1029,7 +1115,7 @@ class LogiPanApp:
                 d = doc.to_dict()
 
                 current_status = d.get('status', '') # 예: '🆕 신규', '💬 대화중', '✅ 확인완료'
-                current_category = d.get('category', '') # 예: '📢 공지', '개인요청', '문의'
+                current_category = d.get('category', '') # 예: '📢 공지', '개인지시', '문의'
 
                 # [숨김 처리] 확인완료된 스레드는 리스트에서 제외
                 if '확인완료' in current_status:
@@ -1046,7 +1132,7 @@ class LogiPanApp:
                 time_str = ts.strftime('%m/%d') if ts else ""
 
                 # [수정] 작업자 칼럼은 가능하면 real_sender(실제 작성자)를 보여줌.
-                # 공지/요청는 user 필드에 받는 사람이 들어가있어서 작성자가 안보였음.
+                # 공지/지시는 user 필드에 받는 사람이 들어가있어서 작성자가 안보였음.
                 writer = d.get('real_sender') or d.get('user', '')
 
                 # [수정] 컬럼 순서: 날짜 / 작업자 / 구분 / 상태 / 내용
@@ -1067,7 +1153,7 @@ class LogiPanApp:
                     self.board_tree.tag_configure("talking", background="#E3F2FD", foreground="#0D47A1") # 연하늘 배경 + 진파랑 글자
                     self.board_tree.item(item_id, tags=("talking",))
 
-                elif "신규" in current_status or "요청" in current_status:
+                elif "신규" in current_status or "지시" in current_status:
                     self.board_tree.tag_configure("new", background="#FFEBEE", foreground="#C62828") # 연분홍 배경 + 진빨강 글자
                     self.board_tree.item(item_id, tags=("new",))
 
@@ -1130,11 +1216,6 @@ class LogiPanApp:
         """공지/소통 게시판 실시간 리스너.
         Firestore의 on_snapshot은 변경된 문서에 대해서만 read를 사용하므로
         활동 적은 게시판이면 데이터 사용량은 거의 무시 가능."""
-        # [추가] DB 연결 실패 시 그냥 종료 (크래시 방지)
-        if self.db is None:
-            print("⚠️ DB 미연결 → 공지/소통 실시간 리스너 비활성화")
-            return
-
         # 부팅 직후 5초 안에 들어오는 ADDED 이벤트는 알림 안 띄움 (이미 있던 글 로딩이라서)
         self._board_is_booting = True
         self.root.after(5000, lambda: setattr(self, '_board_is_booting', False))
@@ -1830,14 +1911,22 @@ class LogiPanApp:
 
         def send_cmd():
             if not entry.get(): return
+            content = entry.get()
             doc_ref.collection('comments').add({
                 'user': self.current_user,
                 'role': 'admin',  # [추가] 명시적으로 관리자 표시
-                'text': entry.get(),
+                'text': content,
                 'timestamp': firestore.SERVER_TIMESTAMP
             })
             entry.delete(0, tk.END)
             refresh_comments()
+            # [추가] 작업보고 작성자에게 푸시 알림 발송
+            target = data.get('user', '')
+            if target:
+                preview = content[:50] + ('...' if len(content) > 50 else '')
+                self.send_fcm_push(target,
+                                    f"💬 {self.current_user}님의 댓글",
+                                    preview)
 
         tk.Button(btn_container, text="🚀 댓글 전송", command=send_cmd, bg="#1877F2", fg="white", 
                   font=("맑은 고딕", 10, "bold"), relief="flat", pady=10).pack(side="left", expand=True, fill="x", padx=(0, 5))
@@ -1849,11 +1938,6 @@ class LogiPanApp:
      
     # 1. 실시간 감시 (음성 알림 버전 - 필터 및 이모지 대응 수정)
     def start_realtime_listener(self):
-        # [추가] DB 연결 실패 시 그냥 종료 (크래시 방지)
-        if self.db is None:
-            print("⚠️ DB 미연결 → 작업보고 실시간 리스너 비활성화")
-            return
-
         import pyttsx3
         import threading
         from datetime import datetime, timedelta
