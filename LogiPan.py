@@ -997,7 +997,7 @@ class LogiPanApp:
                         post_data = {
                             'user': receiver_name if target == "individual" else my_name, 
                             'real_sender': my_name, # 실제 보낸 사람 (내 이름)
-                            'category': "공지" if target == "all" else "개인지시",
+                            'category': "공지" if target == "all" else "요청",
                             'receiver': receiver_name if target == "individual" else "all",
                             'text': content,
                             'status': "📢 공지" if target == "all" else "🆕 지시", # 리스트에 뜰 상태
@@ -1056,7 +1056,7 @@ class LogiPanApp:
             self._open_notice_view(item_id, post_data)
             return
 
-        # 개인지시/문의는 대화 스레드 창 (post_data만으로 호출)
+        # 요청/문의는 대화 스레드 창 (post_data만으로 호출)
         self._open_thread_window(item_id, post_data, None)
 
     def _open_notice_view(self, item_id, post_data):
@@ -1105,7 +1105,7 @@ class LogiPanApp:
                   padx=15, pady=5).pack(side="right", padx=20)
 
     def _open_thread_window(self, item_id, post_data, row_values=None):
-        """개인지시/문의 대화창 - 작업보고와 동일한 카톡 스타일"""
+        """요청/문의 대화창 - 작업보고와 동일한 카톡 스타일"""
         import threading
         from tkinter import messagebox
 
@@ -1115,7 +1115,7 @@ class LogiPanApp:
         # 원글 작성자 (real_sender 우선, 없으면 user)
         original_writer = post_data.get('real_sender') or post_data.get('user', '익명')
         # '지시'면 관리자가 보낸 거 = is_admin_origin True
-        is_admin_origin = '지시' in category
+        is_admin_origin = ('요청' in category) or ('지시' in category)
 
         # 팝업 창
         detail_win = tk.Toplevel(self.root)
@@ -1145,7 +1145,7 @@ class LogiPanApp:
         title_frame = tk.Frame(header, bg="white")
         title_frame.place(x=70, y=10)
 
-        cat_label = "🔒 개인지시" if is_admin_origin else "💬 문의"
+        cat_label = "🔒 요청" if is_admin_origin else "💬 문의"
         if is_admin_origin and post_data.get('user'):
             cat_label += f" → {post_data.get('user')}"
 
@@ -1242,14 +1242,8 @@ class LogiPanApp:
             body_bubble.pack(side="left", anchor="w", padx=(0, 60))
 
         body_text = post_data.get('text', '')
-        body_longest = max((len(line) for line in body_text.split('\n')), default=0)
-        body_kor_ratio = sum(1 for ch in body_text if ord(ch) > 127) / max(1, len(body_text))
-        body_char_w = 1.7 if body_kor_ratio > 0.5 else 1.0
-        body_width = min(42, max(5, int(body_longest * body_char_w) + 1))
-
-        lines = body_text.count('\n') + 1
-        approx_extra = sum(max(0, (len(line) - 30) // 30) for line in body_text.split('\n'))
-        text_height = max(1, min(20, lines + approx_extra))
+        # [수정] width/height 정확한 계산 (한글 한 글자 = 2칸)
+        body_width, text_height = self._calc_text_size(body_text, max_width=42)
 
         body_label = tk.Text(body_bubble, font=("맑은 고딕", 11),
                               bg=body_color, fg="#1A1A1A",
@@ -1404,15 +1398,8 @@ class LogiPanApp:
                 bubble.bind("<Button-3>", lambda e, id=mid, txt=msg_text: show_msg_menu(e, id, txt))
 
                 if clean_text and clean_text not in ("(사진)", ""):
-                    # 글자수에 맞춰 width 조절
-                    longest_line = max((len(line) for line in clean_text.split('\n')), default=0)
-                    korean_ratio = sum(1 for ch in clean_text if ord(ch) > 127) / max(1, len(clean_text))
-                    char_w = 1.7 if korean_ratio > 0.5 else 1.0
-                    cmt_width = min(38, max(3, int(longest_line * char_w) + 1))
-
-                    cmt_lines = clean_text.count('\n') + 1
-                    cmt_extra = sum(max(0, (len(line) - 28) // 28) for line in clean_text.split('\n'))
-                    cmt_height = max(1, min(10, cmt_lines + cmt_extra))
+                    # [수정] 정확한 width/height 계산 사용
+                    cmt_width, cmt_height = self._calc_text_size(clean_text, max_width=38)
 
                     text_label = tk.Text(bubble, font=("맑은 고딕", 11),
                                           bg=bubble_color, fg="#1A1A1A",
@@ -1804,12 +1791,12 @@ class LogiPanApp:
             badge_fg = "#92400E"
             card_bg = "#FFFEF5"
             cat_label = "📢 공지"
-        elif "개인지시" in category:
+        elif ("요청" in category) or ("지시" in category):
             accent_color = "#8B5CF6"
             badge_bg = "#EDE9FE"
             badge_fg = "#5B21B6"
             card_bg = "white"
-            cat_label = f"🔒 개인지시 → {receiver if receiver != 'all' else ''}"
+            cat_label = f"🔒 요청 → {receiver if receiver != 'all' else ''}"
         elif "대화중" in status:
             accent_color = "#3B82F6"
             badge_bg = "#DBEAFE"
@@ -1960,29 +1947,51 @@ class LogiPanApp:
             messagebox.showerror("오류", f"삭제 실패: {e}")
 
     def start_board_listener(self):
-        """공지/소통 게시판 실시간 리스너.
-        Firestore의 on_snapshot은 변경된 문서에 대해서만 read를 사용하므로
-        활동 적은 게시판이면 데이터 사용량은 거의 무시 가능."""
-        # 부팅 직후 5초 안에 들어오는 ADDED 이벤트는 알림 안 띄움 (이미 있던 글 로딩이라서)
+        """공지/소통 게시판 실시간 리스너."""
+        import pyttsx3
+        import threading
+
+        # 음성 알림 함수
+        def speak_alert(text):
+            def _speak():
+                try:
+                    engine = pyttsx3.init()
+                    engine.setProperty('volume', 1.0)
+                    engine.setProperty('rate', 170)
+                    engine.say(text)
+                    engine.runAndWait()
+                except: pass
+            threading.Thread(target=_speak, daemon=True).start()
+
+        # 부팅 직후 5초 안에 들어오는 ADDED 이벤트는 알림 안 띄움
         self._board_is_booting = True
         self.root.after(5000, lambda: setattr(self, '_board_is_booting', False))
 
         def on_board_snapshot(col_snapshot, changes, read_time):
-            # [추가] 신규 글 들어왔는지 확인
             new_post_detected = False
+            should_speak = False  # 음성 알림 띄울지
             for change in changes:
                 if change.type.name == 'ADDED' and not getattr(self, '_board_is_booting', True):
-                    new_post_detected = True
-                    break
+                    try:
+                        d = change.document.to_dict()
+                        cat = d.get('category', '')
+                        if '공지' in cat or '요청' in cat or '지시' in cat:
+                            # 공지/요청은 관리자가 쓴 거니까 음성 X
+                            new_post_detected = True
+                            continue
+                        else:
+                            # 문의 (작업자가 보냄) → 음성 ON
+                            new_post_detected = True
+                            should_speak = True
+                    except Exception:
+                        new_post_detected = True
 
-            # 백그라운드 스레드에서 호출되므로 메인 스레드로 안전하게 넘김
             try:
-                self.root.after(10, lambda: self._safe_board_refresh(new_post_detected))
+                self.root.after(10, lambda: self._safe_board_refresh(new_post_detected, should_speak, speak_alert))
             except Exception:
                 pass
 
         try:
-            # 최근 200개만 구독 (옛날 글 변경에는 반응 안함 = 비용 절약)
             query = self.db.collection('board_posts').order_by(
                 'timestamp', direction=firestore.Query.DESCENDING
             ).limit(200)
@@ -1991,14 +2000,16 @@ class LogiPanApp:
         except Exception as e:
             print(f"❌ 공지/소통 리스너 설정 오류: {e}")
 
-    def _safe_board_refresh(self, new_post_detected=False):
+    def _safe_board_refresh(self, new_post_detected=False, should_speak=False, alert_func=None):
         """메인(GUI) 스레드에서 안전하게 board 갱신"""
         try:
             if hasattr(self, 'root') and self.root.winfo_exists():
                 self.update_board_view()
-                # [추가] 신규 글이 있으면 공지/소통 탭에 빨간 점
                 if new_post_detected:
                     self.set_tab_alert(self.t_board, True)
+                    # [추가] 문의 글일 때만 음성 알림
+                    if alert_func and should_speak:
+                        alert_func("문의 확인")
         except Exception as e:
             print(f"❌ board UI 리프레시 오류: {e}")
 
@@ -2557,6 +2568,26 @@ class LogiPanApp:
         except Exception:
             return ""
 
+    def _calc_text_size(self, text, max_width=42):
+        """말풍선 width/height 정확한 계산 (한글 한 글자 = 2칸).
+        Returns: (width, height) tuple"""
+        def line_visual_width(line):
+            w = 0
+            for ch in line:
+                w += 2 if ord(ch) > 127 else 1
+            return w
+        paragraphs = text.split('\n')
+        longest_visual = max((line_visual_width(p) for p in paragraphs), default=0)
+        width = min(max_width, max(5, longest_visual + 2))
+        total_lines = 0
+        for p in paragraphs:
+            pw = line_visual_width(p)
+            if pw == 0:
+                total_lines += 1
+            else:
+                total_lines += (pw + width - 1) // width  # 올림 나눗셈
+        return width, max(1, min(30, total_lines))
+
     def on_message_double_click(self, event):
         import requests
         from io import BytesIO
@@ -2703,15 +2734,8 @@ class LogiPanApp:
         body_bubble.pack(side="left", anchor="w", padx=(0, 60))
 
         body_text = data.get('text', '')
-        # [수정] 글자수에 맞춰 width 동적 계산
-        body_longest = max((len(line) for line in body_text.split('\n')), default=0)
-        body_kor_ratio = sum(1 for ch in body_text if ord(ch) > 127) / max(1, len(body_text))
-        body_char_w = 1.7 if body_kor_ratio > 0.5 else 1.0
-        body_width = min(42, max(5, int(body_longest * body_char_w) + 1))
-
-        lines = body_text.count('\n') + 1
-        approx_extra = sum(max(0, (len(line) - 30) // 30) for line in body_text.split('\n'))
-        text_height = max(1, min(20, lines + approx_extra))
+        # [수정] 정확한 width/height 계산 (한글=2칸)
+        body_width, text_height = self._calc_text_size(body_text, max_width=42)
 
         body_label = tk.Text(body_bubble, font=("맑은 고딕", 11),
                               bg="white", fg="#1A1A1A",
@@ -2947,17 +2971,8 @@ class LogiPanApp:
 
                 # 텍스트가 있으면 Text 위젯 (복사 가능), 없으면 패스
                 if clean_text:
-                    # [수정] 글자수에 맞춰 width 동적 계산
-                    # 한글은 한 글자가 약 2칸, 영문은 1칸
-                    longest_line = max((len(line) for line in clean_text.split('\n')), default=0)
-                    # 한글 비중 추정 (간단히 ord > 127인 글자 비율)
-                    korean_ratio = sum(1 for ch in clean_text if ord(ch) > 127) / max(1, len(clean_text))
-                    char_w = 1.7 if korean_ratio > 0.5 else 1.0
-                    cmt_width = min(38, max(3, int(longest_line * char_w) + 1))
-
-                    cmt_lines = clean_text.count('\n') + 1
-                    cmt_extra = sum(max(0, (len(line) - 28) // 28) for line in clean_text.split('\n'))
-                    cmt_height = max(1, min(10, cmt_lines + cmt_extra))
+                    # [수정] 정확한 width/height 계산 (한글=2칸)
+                    cmt_width, cmt_height = self._calc_text_size(clean_text, max_width=38)
 
                     text_label = tk.Text(bubble, font=("맑은 고딕", 11),
                                           bg=bubble_color, fg=text_color,
