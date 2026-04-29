@@ -293,86 +293,84 @@ class LogiPanApp:
 
     # ========== [추가] FCM 푸시 알림 발송 ==========
     def send_fcm_push(self, target_user, title, body):
-        """작업자에게 푸시 알림 발송.
-
-        Args:
-            target_user: 받는 작업자 이름 (예: "장정호") 또는 "all" (전체)
-            title: 알림 제목
-            body: 알림 본문
-
-        Firestore의 fcm_tokens 컬렉션에서 토큰을 조회해서 발송.
-        실패해도 조용히 무시 (로그만). 메인 작업 흐름 방해 안함.
-        """
+        """작업자에게 푸시 알림 발송. (iOS PWA 호환 버전)"""
         if self.db is None:
             return
 
         import threading
-        # 백그라운드 스레드에서 발송 (UI 멈춤 방지)
         def _send():
             try:
-                tokens = []
+                token_docs = []
                 if target_user == "all":
-                    # 모든 작업자에게
                     docs = self.db.collection('fcm_tokens').stream()
                     for doc in docs:
                         d = doc.to_dict()
                         if d.get('token'):
-                            tokens.append(d['token'])
+                            token_docs.append({'name': doc.id, 'token': d['token']})
                 else:
-                    # 특정 작업자
                     doc = self.db.collection('fcm_tokens').document(target_user).get()
                     if doc.exists:
                         d = doc.to_dict()
                         if d.get('token'):
-                            tokens.append(d['token'])
+                            token_docs.append({'name': target_user, 'token': d['token']})
 
-                if not tokens:
+                if not token_docs:
                     print(f"📵 FCM 토큰 없음 (대상: {target_user}) - 알림 스킵")
                     return
 
-                # 발송
                 success, fail = 0, 0
-                for token in tokens:
+                for td in token_docs:
+                    token = td['token']
+                    name = td['name']
                     try:
+                        # [수정] iOS PWA 호환을 위한 강화된 webpush 설정
                         msg = messaging.Message(
+                            # notification 블록은 iOS/안드로이드 백그라운드에서 시스템 알림 트리거
                             notification=messaging.Notification(
                                 title=title,
                                 body=body,
                             ),
                             token=token,
+                            # webpush 블록 - 브라우저용 상세 설정
                             webpush=messaging.WebpushConfig(
+                                headers={
+                                    'Urgency': 'high',  # 즉시 전달 우선순위
+                                    'TTL': '86400',  # 24시간 유지
+                                },
                                 notification=messaging.WebpushNotification(
                                     title=title,
                                     body=body,
-                                    icon='/logipan-report/icon.png',
+                                    icon='https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
+                                    badge='https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
+                                    require_interaction=False,
+                                    tag='logipan',
+                                    renotify=True,
                                 ),
                                 fcm_options=messaging.WebpushFCMOptions(
                                     link='https://ghwkdwjd-debug.github.io/logipan-report/',
                                 ),
                             ),
                         )
-                        messaging.send(msg)
+                        response = messaging.send(msg)
                         success += 1
+                        print(f"  ✅ [{name}] 푸시 성공: {response}")
+                    except messaging.UnregisteredError:
+                        fail += 1
+                        print(f"  ❌ [{name}] 토큰 만료 - 자동 정리")
+                        try:
+                            self.db.collection('fcm_tokens').document(name).delete()
+                        except Exception:
+                            pass
                     except Exception as e:
                         fail += 1
-                        # 토큰이 만료/무효면 자동 정리
-                        err_str = str(e)
-                        if 'unregistered' in err_str.lower() or 'invalid' in err_str.lower():
-                            try:
-                                # 어느 사용자의 토큰인지 찾아서 삭제
-                                docs = self.db.collection('fcm_tokens') \
-                                    .where('token', '==', token).stream()
-                                for d in docs:
-                                    d.reference.delete()
-                                print(f"🧹 만료된 FCM 토큰 정리 완료")
-                            except Exception:
-                                pass
+                        print(f"  ❌ [{name}] 발송 실패: {type(e).__name__}: {e}")
 
                 print(f"📱 FCM 푸시 완료: {success}건 성공 / {fail}건 실패 (대상: {target_user})")
             except Exception as e:
-                print(f"⚠️ FCM 발송 오류: {e}")
+                print(f"⚠️ FCM 발송 전체 오류: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
 
-        # 백그라운드 스레드로 실행
         threading.Thread(target=_send, daemon=True).start()
 
     def position_popup(self, win, width, height):
