@@ -2003,17 +2003,59 @@ class LogiPanApp:
 
         # [추가] 사진 첨부 상태 (Entry 위젯에 attribute로 들고있음)
         self._pending_image_path = None
+        # 썸네일 PhotoImage 참조 유지용
+        self._pending_thumb_img = None
 
-        # [추가] 첨부 사진 미리보기 영역
-        photo_status_frame = tk.Frame(footer, bg="white")
+        # [추가] 첨부 사진 미리보기 영역 (큰 박스)
+        photo_status_frame = tk.Frame(footer, bg="#FFF9E6", relief="flat",
+                                       highlightthickness=1, highlightbackground="#FFD966")
         photo_status_frame.pack(fill="x", pady=(0, 5))
-        photo_status_label = tk.Label(photo_status_frame, text="", bg="white",
-                                       fg="#1a73e8", font=("맑은 고딕", 9))
-        photo_status_label.pack(side="left")
+        # 평소엔 숨겨둠 (사진 첨부 시에만 표시)
+        photo_status_frame.pack_forget()
+
+        thumb_label = tk.Label(photo_status_frame, bg="#FFF9E6")
+        thumb_label.pack(side="left", padx=8, pady=8)
+
+        info_label = tk.Label(photo_status_frame, text="", bg="#FFF9E6",
+                              fg="#444", font=("맑은 고딕", 10, "bold"))
+        info_label.pack(side="left", padx=(0, 10))
 
         def clear_pending_image():
             self._pending_image_path = None
-            photo_status_label.config(text="")
+            self._pending_thumb_img = None
+            thumb_label.config(image="")
+            info_label.config(text="")
+            photo_status_frame.pack_forget()
+
+        cancel_btn = tk.Button(photo_status_frame, text="✕ 취소",
+                                command=clear_pending_image, bg="#FF6B6B", fg="white",
+                                font=("맑은 고딕", 9, "bold"), relief="flat", padx=10, pady=5,
+                                cursor="hand2")
+        cancel_btn.pack(side="right", padx=8, pady=8)
+
+        def show_thumbnail(image_source):
+            """이미지 경로 또는 PIL Image를 받아 썸네일 표시"""
+            try:
+                from PIL import Image, ImageTk
+                if isinstance(image_source, str):
+                    pil_img = Image.open(image_source)
+                else:
+                    pil_img = image_source
+                # 썸네일 (60x60)
+                pil_thumb = pil_img.copy()
+                pil_thumb.thumbnail((60, 60), Image.LANCZOS)
+                self._pending_thumb_img = ImageTk.PhotoImage(pil_thumb)
+                thumb_label.config(image=self._pending_thumb_img)
+
+                w, h = pil_img.size
+                info_label.config(text=f"📎 첨부됨 ({w}×{h})\n전송 시 자동 업로드")
+                # 박스 표시
+                photo_status_frame.pack(fill="x", pady=(0, 5), before=entry.master.winfo_children()[-1] if False else None)
+                # 위치 보정: btn_container 위에 놓이도록 다시 pack
+                photo_status_frame.pack_forget()
+                photo_status_frame.pack(fill="x", pady=(0, 5))
+            except Exception as e:
+                info_label.config(text=f"썸네일 생성 실패: {e}")
 
         def attach_image_from_clipboard():
             """클립보드의 이미지를 임시 파일로 저장 후 첨부"""
@@ -2024,16 +2066,16 @@ class LogiPanApp:
                 if img is None:
                     messagebox.showinfo("알림", "클립보드에 이미지가 없습니다.\n캡처 도구로 캡처 후 시도해주세요.", parent=detail_win)
                     return False
-                # 클립보드 이미지가 PIL.Image면 그대로, 파일경로 리스트면 첫번째
                 if isinstance(img, list):
                     if not img:
                         return False
                     self._pending_image_path = img[0]
+                    show_thumbnail(img[0])
                 else:
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
                     img.save(tmp.name, "PNG")
                     self._pending_image_path = tmp.name
-                photo_status_label.config(text="📎 클립보드 이미지 첨부됨 (전송하면 업로드)")
+                    show_thumbnail(img)
                 return True
             except Exception as e:
                 messagebox.showerror("오류", f"클립보드 이미지 가져오기 실패:\n{e}", parent=detail_win)
@@ -2049,20 +2091,19 @@ class LogiPanApp:
             )
             if path:
                 self._pending_image_path = path
-                photo_status_label.config(text=f"📎 {os.path.basename(path)}")
+                show_thumbnail(path)
 
         # [추가] Ctrl+V로 클립보드 이미지 붙여넣기
         def on_paste(event):
-            # 먼저 클립보드에서 이미지 시도. 이미지가 있으면 첨부, 없으면 텍스트는 기본 동작
             try:
                 from PIL import ImageGrab
                 img = ImageGrab.grabclipboard()
                 if img is not None and not isinstance(img, list):
                     attach_image_from_clipboard()
-                    return "break"  # 텍스트 붙여넣기 막음 (이미지로 처리됨)
+                    return "break"
             except Exception:
                 pass
-            return None  # 텍스트 붙여넣기는 정상 동작
+            return None
         entry.bind("<Control-v>", on_paste)
 
         btn_container = tk.Frame(footer, bg="white")
