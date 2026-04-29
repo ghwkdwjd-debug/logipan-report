@@ -42,7 +42,7 @@
         .talking { background: #e3f2fd; color: #0d47a1; }
         .new-badge { background: #ff4d4f; color: white; padding: 2px 6px; border-radius: 10px; font-size: 10px; font-weight: bold; margin-left: 5px; animation: blink 1.5s infinite; }
         @keyframes blink { 0% {opacity: 1;} 50% {opacity: 0.5;} 100% {opacity: 1;} }
-        .comment-section { display: none; margin-top: 10px; background: #B2C7DA; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #9DB0C2; }
+        .comment-section { display: none; margin-top: 10px; background: #f8f9fa; border-radius: 8px; padding: 12px; font-size: 13px; border: 1px solid #eee; }
         .comment-bubble { padding: 8px 10px; border-radius: 8px; margin-bottom: 6px; line-height: 1.4; word-break: break-word; }
         .admin-msg { background: #e7f3ff; border-left: 4px solid #1a73e8; }
         .user-msg { background: #f0f0f0; border-left: 4px solid #999; }
@@ -565,50 +565,16 @@
                 if (isAdmin && tsMillis > lastSeen) hasNewAdminReply = true;
                 const timeStr = ts ? new Date(tsMillis).toLocaleString('ko-KR', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
                 const cleanText = (md.text || '').replace(/^\(사진\)$/, '');
-
-                const row = document.createElement("div");
-                row.style.cssText = `display:flex; flex-direction:column; align-items:${isMine ? 'flex-end' : 'flex-start'}; margin-bottom:8px;`;
-
-                if (!isMine) {
-                    const nameTag = document.createElement("div");
-                    nameTag.style.cssText = "font-size:11px; color:#444; margin-bottom:2px; padding-left:4px; font-weight:bold;";
-                    nameTag.innerText = `${isAdmin ? '📢 ' : '👤 '}${escapeHtml(md.sender || '?')}`;
-                    row.appendChild(nameTag);
-                }
-
-                const bubbleWrap = document.createElement("div");
-                bubbleWrap.style.cssText = "display:flex; align-items:flex-end; gap:4px; max-width:85%;";
-                if (isMine) bubbleWrap.style.flexDirection = 'row-reverse';
-
                 const bubble = document.createElement("div");
-                bubble.style.cssText = `background:${isMine ? '#FEE500' : 'white'}; color:#1a1a1a; padding:8px 12px; border-radius:12px; line-height:1.4; word-break:break-word; box-shadow:0 1px 2px rgba(0,0,0,0.05);`;
-
-                const editedTag = md.edited ? '<div style="font-size:10px; color:#888; margin-top:2px;">(수정됨)</div>' : '';
-                let bubbleHTML = '';
-                if (cleanText) bubbleHTML += `<div>${escapeHtml(cleanText)}</div>`;
-                if (md.imageUrl) bubbleHTML += `<img src="${md.imageUrl}" onclick="openLightbox('${md.imageUrl}')" style="max-width:240px; max-height:240px; border-radius:8px; margin-top:${cleanText?'6px':'0'}; cursor:pointer; display:block;">`;
-                bubbleHTML += editedTag;
-                bubble.innerHTML = bubbleHTML;
-                bubbleWrap.appendChild(bubble);
-
-                const timeTag = document.createElement("div");
-                timeTag.style.cssText = "font-size:10px; color:#666; padding:0 2px;";
-                timeTag.innerText = timeStr;
-                bubbleWrap.appendChild(timeTag);
-
-                row.appendChild(bubbleWrap);
-
-                if (isMine) {
-                    const editBtns = document.createElement("div");
-                    editBtns.style.cssText = "font-size:10px; margin-top:2px;";
-                    editBtns.innerHTML = `
-                        <button onclick="editMyComment('board_posts', '${docId}', '${c.id}', 'messages', ${JSON.stringify(cleanText)})" style="border:none;background:none;color:#1a73e8;cursor:pointer;font-size:10px;padding:0 4px;">수정</button>
-                        <button onclick="deleteMyComment('board_posts', '${docId}', '${c.id}', 'messages')" style="border:none;background:none;color:#ff4d4f;cursor:pointer;font-size:10px;padding:0 4px;">삭제</button>
-                    `;
-                    row.appendChild(editBtns);
-                }
-
-                box.appendChild(row);
+                bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
+                const editedTag = md.edited ? ' <span style="color:#999;font-size:10px;">(수정됨)</span>' : '';
+                const editBtns = isMine ? `
+                    <span style="float:right;">
+                        <button onclick="editMyComment('board_posts', '${docId}', '${c.id}', 'messages', ${JSON.stringify(cleanText)})" style="border:none;background:none;color:#1a73e8;cursor:pointer;font-size:11px;">수정</button>
+                        <button onclick="deleteMyComment('board_posts', '${docId}', '${c.id}', 'messages')" style="border:none;background:none;color:#ff4d4f;cursor:pointer;font-size:11px;">삭제</button>
+                    </span>` : '';
+                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin ? '📢 ' : '👤 '}${escapeHtml(md.sender || '?')}</span><span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span>${editedTag}${editBtns}<br>${escapeHtml(cleanText)}${md.imageUrl ? `<br><img src="${md.imageUrl}" onclick="openLightbox('${md.imageUrl}')" style="max-width:100%; max-height:200px; border-radius:6px; margin-top:6px; cursor:pointer;">` : ''}`;
+                box.appendChild(bubble);
             });
             if (newBadge) newBadge.innerHTML = (lastIsAdmin && hasNewAdminReply) ? '<span class="new-badge">NEW</span>' : '';
             if (itemEl) { if (hasNewAdminReply) itemEl.classList.add('has-new'); else itemEl.classList.remove('has-new'); }
@@ -870,51 +836,16 @@
                 const timeStr = ts ? new Date(tsMillis).toLocaleString('ko-KR', {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
                 const displayName = userName || (isAdmin ? '관리자' : '나');
                 const cleanText = text.replace(/^\[답장\]\s*/, '').replace(/^\(사진\)$/, '');
-
-                // 카톡 스타일 - 관리자=왼쪽 흰 말풍선, 본인=오른쪽 노란 말풍선
-                const row = document.createElement("div");
-                row.style.cssText = `display:flex; flex-direction:column; align-items:${isMine ? 'flex-end' : 'flex-start'}; margin-bottom:8px;`;
-
-                if (!isMine) {
-                    const nameTag = document.createElement("div");
-                    nameTag.style.cssText = "font-size:11px; color:#444; margin-bottom:2px; padding-left:4px; font-weight:bold;";
-                    nameTag.innerText = `${isAdmin ? '📢 ' : '👤 '}${displayName}`;
-                    row.appendChild(nameTag);
-                }
-
-                const bubbleWrap = document.createElement("div");
-                bubbleWrap.style.cssText = "display:flex; align-items:flex-end; gap:4px; max-width:85%;";
-                if (isMine) bubbleWrap.style.flexDirection = 'row-reverse';
-
                 const bubble = document.createElement("div");
-                bubble.style.cssText = `background:${isMine ? '#FEE500' : 'white'}; color:#1a1a1a; padding:8px 12px; border-radius:12px; line-height:1.4; word-break:break-word; box-shadow:0 1px 2px rgba(0,0,0,0.05);`;
-
-                const editedTag = d.edited ? '<div style="font-size:10px; color:#888; margin-top:2px;">(수정됨)</div>' : '';
-                let bubbleHTML = '';
-                if (cleanText) bubbleHTML += `<div>${escapeHtml(cleanText)}</div>`;
-                if (d.imageUrl) bubbleHTML += `<img src="${d.imageUrl}" onclick="openLightbox('${d.imageUrl}')" style="max-width:240px; max-height:240px; border-radius:8px; margin-top:${cleanText?'6px':'0'}; cursor:pointer; display:block;">`;
-                bubbleHTML += editedTag;
-                bubble.innerHTML = bubbleHTML;
-                bubbleWrap.appendChild(bubble);
-
-                const timeTag = document.createElement("div");
-                timeTag.style.cssText = "font-size:10px; color:#666; padding:0 2px;";
-                timeTag.innerText = timeStr;
-                bubbleWrap.appendChild(timeTag);
-
-                row.appendChild(bubbleWrap);
-
-                if (isMine) {
-                    const editBtns = document.createElement("div");
-                    editBtns.style.cssText = "font-size:10px; margin-top:2px;";
-                    editBtns.innerHTML = `
-                        <button onclick="editMyComment('field_reports', '${docId}', '${c.id}', 'comments', ${JSON.stringify(cleanText)})" style="border:none;background:none;color:#1a73e8;cursor:pointer;font-size:10px;padding:0 4px;">수정</button>
-                        <button onclick="deleteMyComment('field_reports', '${docId}', '${c.id}', 'comments')" style="border:none;background:none;color:#ff4d4f;cursor:pointer;font-size:10px;padding:0 4px;">삭제</button>
-                    `;
-                    row.appendChild(editBtns);
-                }
-
-                box.appendChild(row);
+                bubble.className = `comment-bubble ${isAdmin ? 'admin-msg' : 'user-msg'}`;
+                const editedTag = d.edited ? ' <span style="color:#999;font-size:10px;">(수정됨)</span>' : '';
+                const editBtns = isMine ? `
+                    <span style="float:right;">
+                        <button onclick="editMyComment('field_reports', '${docId}', '${c.id}', 'comments', ${JSON.stringify(cleanText)})" style="border:none;background:none;color:#1a73e8;cursor:pointer;font-size:11px;">수정</button>
+                        <button onclick="deleteMyComment('field_reports', '${docId}', '${c.id}', 'comments')" style="border:none;background:none;color:#ff4d4f;cursor:pointer;font-size:11px;">삭제</button>
+                    </span>` : '';
+                bubble.innerHTML = `<span style="font-size:11px; font-weight:bold; color:${isAdmin?'#1a73e8':'#555'}">${isAdmin ? '📢 ' : '👤 '}${escapeHtml(displayName)}</span><span style="font-size:10px; color:#999; margin-left:6px;">${timeStr}</span>${editedTag}${editBtns}<br>${escapeHtml(cleanText)}${d.imageUrl ? `<br><img src="${d.imageUrl}" onclick="openLightbox('${d.imageUrl}')" style="max-width:100%; max-height:200px; border-radius:6px; margin-top:6px; cursor:pointer;">` : ''}`;
+                box.appendChild(bubble);
             });
             if (newBadge) newBadge.innerHTML = (lastIsAdmin && hasNewAdminReply) ? '<span class="new-badge">NEW</span>' : '';
             if (itemEl) { if (hasNewAdminReply) itemEl.classList.add('has-new'); else itemEl.classList.remove('has-new'); }
