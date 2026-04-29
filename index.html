@@ -11,6 +11,7 @@
     <title>로지판 - 통합 현장 관리 (v2.1)</title>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
@@ -118,7 +119,7 @@
     <div id="section-board" style="display:none;">
         <h2>📢 공지사항 및 소통</h2>
         <div class="notice-box">
-            <small>최근 공지</small>
+            <small>최근 관리자 공지</small>
             <div id="notice-content" style="font-weight:bold; margin-bottom:5px;">불러오는 중...</div>
             <div id="notice-btn-container">
                 <button id="notice-step-btn" onclick="handleNoticeStep(1)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
@@ -155,12 +156,25 @@
         authDomain: "logipan-2026.firebaseapp.com",
         projectId: "logipan-2026",
         storageBucket: "logipan-2026.appspot.com",
-        messagingSenderId: "1136785507793",
-        appId: "1:1136785507793:web:786543210abcd1234"
+        messagingSenderId: "650344159406",
+        appId: "1:650344159406:web:786543210abcd1234"
     };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
     const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
+
+    // [추가] 푸시 알림용 VAPID 키
+    const VAPID_KEY = "BEXYSoChlEpxfrvDu0kD3909BXRsSuH_5iD1mq-R0oyak8tAuTPZ9THP25RBR3GO1BeqHVFPrJLt9X3Q8LJ7QuE";
+
+    // [추가] FCM (메시징) 객체 - 브라우저 지원 시에만 초기화
+    let messaging = null;
+    try {
+        if (firebase.messaging.isSupported()) {
+            messaging = firebase.messaging();
+        }
+    } catch (e) {
+        console.warn("FCM 미지원 브라우저:", e);
+    }
 
     const DRAFT_REPORT_KEY = "logipan_draft_report";
     const DRAFT_BOARD_KEY = "logipan_draft_board";
@@ -189,7 +203,7 @@
     }
 
     window.onload = function() {
-        console.log("%c🚀 로지판 v2.1 로드됨", "color: #1a73e8; font-size: 14px; font-weight: bold;");
+        console.log("%c🚀 로지판 v2.2 로드됨 (푸시 알림 지원)", "color: #1a73e8; font-size: 14px; font-weight: bold;");
         const name = localStorage.getItem("logipan_user_name");
         if (!name) askName();
         else {
@@ -199,12 +213,59 @@
             loadNotice();
             loadMyBoardPosts();
             checkDrafts();
+            // [추가] 푸시 알림 초기화 (1초 뒤에 권한 요청)
+            setTimeout(() => initPushNotifications(name), 1000);
         }
         document.getElementById('reportText').addEventListener('input', autosaveReport);
         document.getElementById('reportTitle').addEventListener('input', autosaveReport);
         document.getElementById('boardText').addEventListener('input', autosaveBoard);
         document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
     };
+
+    // ---------- [추가] 푸시 알림 ----------
+    async function initPushNotifications(userName) {
+        if (!messaging) {
+            console.log("⚠️ 푸시 알림 미지원 환경");
+            return;
+        }
+
+        try {
+            // 1) 권한 요청
+            const permission = await Notification.requestPermission();
+            if (permission !== 'granted') {
+                console.log("🔕 알림 권한 거부됨");
+                return;
+            }
+            console.log("🔔 알림 권한 허용됨");
+
+            // 2) FCM 토큰 받기
+            const token = await messaging.getToken({ vapidKey: VAPID_KEY });
+            if (!token) {
+                console.warn("⚠️ FCM 토큰 발급 실패");
+                return;
+            }
+            console.log("✅ FCM 토큰 발급:", token.substring(0, 20) + "...");
+
+            // 3) Firestore에 저장 (작업자별로 구분)
+            await db.collection("fcm_tokens").doc(userName).set({
+                token: token,
+                user: userName,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                userAgent: navigator.userAgent
+            });
+            console.log("✅ FCM 토큰 Firestore 저장 완료");
+
+            // 4) 포그라운드 메시지 수신 (앱 켜져있을 때)
+            messaging.onMessage(payload => {
+                console.log("📨 포그라운드 메시지:", payload);
+                const title = payload.notification?.title || "새 알림";
+                const body = payload.notification?.body || "";
+                showToast(`🔔 ${title}: ${body}`);
+            });
+        } catch (e) {
+            console.error("❌ 푸시 알림 초기화 실패:", e);
+        }
+    }
 
     function autosaveReport() {
         const data = { title: document.getElementById('reportTitle').value, text: document.getElementById('reportText').value };
@@ -281,7 +342,7 @@
                 if (shown) return;
                 const d = doc.data();
                 if (d.status && (d.status.includes("완료") || d.status.includes("확인완료"))) return;
-                const prefix = d.category === "개인요청" ? "🔒[개인] " : "📢 ";
+                const prefix = d.category === "개인지시" ? "🔒[개인] " : "📢 ";
                 const sender = d.real_sender || d.user || "관리자";
                 const fullText = `${prefix}${d.text}\n— ${sender}`;
                 box.innerHTML = '';
