@@ -5,12 +5,12 @@ importScripts('https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js');
 importScripts('https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js');
 
 firebase.initializeApp({
-    apiKey: "AIzaSyAs-T0_v6G3_Lp-o2S5k_Jz1E5I",
+    apiKey: "AIzaSyBYJfQD7Jkd9Jecyu27Owy8yGPrwg3tg80",
     authDomain: "logipan-2026.firebaseapp.com",
     projectId: "logipan-2026",
-    storageBucket: "logipan-2026.appspot.com",
+    storageBucket: "logipan-2026.firebasestorage.app",
     messagingSenderId: "650344159406",
-    appId: "1:650344159406:web:786543210abcd1234"
+    appId: "1:650344159406:web:ff736627926763dae6353f"
 });
 
 const messaging = firebase.messaging();
