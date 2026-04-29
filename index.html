@@ -238,15 +238,23 @@
             }
             console.log("🔔 알림 권한 허용됨");
 
-            // 2) FCM 토큰 받기
-            const token = await messaging.getToken({ vapidKey: VAPID_KEY });
+            // 2) [수정] 서비스 워커를 명시적으로 현재 경로에서 등록
+            //    GitHub Pages 하위경로(/logipan-report/) 대응
+            const swRegistration = await navigator.serviceWorker.register('firebase-messaging-sw.js');
+            console.log("✅ FCM 서비스워커 등록:", swRegistration.scope);
+
+            // 3) FCM 토큰 받기 (등록된 SW 명시)
+            const token = await messaging.getToken({
+                vapidKey: VAPID_KEY,
+                serviceWorkerRegistration: swRegistration
+            });
             if (!token) {
                 console.warn("⚠️ FCM 토큰 발급 실패");
                 return;
             }
             console.log("✅ FCM 토큰 발급:", token.substring(0, 20) + "...");
 
-            // 3) Firestore에 저장 (작업자별로 구분)
+            // 4) Firestore에 저장
             await db.collection("fcm_tokens").doc(userName).set({
                 token: token,
                 user: userName,
@@ -255,7 +263,7 @@
             });
             console.log("✅ FCM 토큰 Firestore 저장 완료");
 
-            // 4) 포그라운드 메시지 수신 (앱 켜져있을 때)
+            // 5) 포그라운드 메시지 수신
             messaging.onMessage(payload => {
                 console.log("📨 포그라운드 메시지:", payload);
                 const title = payload.notification?.title || "새 알림";
