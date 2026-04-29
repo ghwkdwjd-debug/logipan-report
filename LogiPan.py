@@ -323,27 +323,29 @@ class LogiPanApp:
                     token = td['token']
                     name = td['name']
                     try:
-                        # [수정] iOS PWA 호환을 위한 강화된 webpush 설정
+                        # [수정] iOS PWA용 - 'data'와 'notification' 둘 다 포함
+                        # notification만 있으면 iOS는 가끔 무시함
                         msg = messaging.Message(
-                            # notification 블록은 iOS/안드로이드 백그라운드에서 시스템 알림 트리거
-                            notification=messaging.Notification(
-                                title=title,
-                                body=body,
-                            ),
+                            # data: 항상 SW의 push 이벤트 트리거 (백그라운드 보장)
+                            data={
+                                'title': title,
+                                'body': body,
+                                'click_action': 'https://ghwkdwjd-debug.github.io/logipan-report/',
+                            },
                             token=token,
-                            # webpush 블록 - 브라우저용 상세 설정
                             webpush=messaging.WebpushConfig(
                                 headers={
-                                    'Urgency': 'high',  # 즉시 전달 우선순위
-                                    'TTL': '86400',  # 24시간 유지
+                                    'Urgency': 'high',
+                                    'TTL': '86400',
                                 },
+                                # webpush.notification: 브라우저가 자동 표시할 알림
                                 notification=messaging.WebpushNotification(
                                     title=title,
                                     body=body,
                                     icon='https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
                                     badge='https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
                                     require_interaction=False,
-                                    tag='logipan',
+                                    tag='logipan-' + str(int(__import__('time').time())),
                                     renotify=True,
                                 ),
                                 fcm_options=messaging.WebpushFCMOptions(
