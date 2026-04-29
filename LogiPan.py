@@ -627,84 +627,159 @@ class LogiPanApp:
     
     # --- [탭 6: 현장소통] ---
     def setup_field_comm(self, container):
-        # 1. 배경색 설정
-        container.configure(bg="#F0F2F5") 
+        """모던 카드 리스트 스타일 작업보고 화면"""
+        container.configure(bg="#F5F6F8")
 
-        # [수정] 제목 + 새로고침 버튼을 한 프레임에 배치
-        title_frame = tk.Frame(container, bg="#F0F2F5")
-        title_frame.pack(side="top", fill="x", padx=40, pady=(15, 5))
-        # 빈 라벨로 좌측 균형 (제목이 가운데로 오도록)
-        tk.Frame(title_frame, bg="#F0F2F5", width=120).pack(side="left")
-        tk.Label(title_frame, text="📱 실시간 작업 보고", font=("맑은 고딕", 22, "bold"),
-                 bg="#F0F2F5", fg="#1C1E21").pack(side="left", expand=True)
-        # 제목 오른쪽에 새로고침 버튼
-        tk.Button(title_frame, text="🔄 새로고침", command=self.update_table_view,
-                  font=("맑은 고딕", 10, "bold"), bg="#34a853", fg="white",
-                  relief="flat", padx=14, pady=6, cursor="hand2").pack(side="right")
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=30, pady=(20, 10))
 
-        # [위치 교정 2] 필터 & 검색 바
-        filter_frame = tk.Frame(container, bg="white", padx=15, pady=8, bd=1, relief="flat")
-        filter_frame.pack(side="top", fill="x", padx=40, pady=(0, 10)) 
-        
-        # --- 내부 순서 ---
-        tk.Label(filter_frame, text="🎯 상태 보기: ", font=("맑은 고딕", 10, "bold"), bg="white", fg="#65676B").pack(side="left")
-        self.filter_var.set("⏳ 처리중") 
-        filter_combo = ttk.Combobox(filter_frame, textvariable=self.filter_var, 
-                                    values=["전체", "⏳ 처리중", "✅ 완료"], state="readonly", width=12)
-        filter_combo.pack(side="left", padx=5)
-        filter_combo.bind("<<ComboboxSelected>>", lambda e: self.update_table_view())
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="📋", font=("맑은 고딕", 28),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 8))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="실시간 작업 보고",
+                 font=("맑은 고딕", 18, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        # 새 댓글 카운터 라벨
+        self.new_comment_counter = tk.Label(title_text_box, text="",
+                                              font=("맑은 고딕", 9, "bold"),
+                                              bg="#F5F6F8", fg="#FF4757")
+        self.new_comment_counter.pack(anchor="w")
 
-        tk.Label(filter_frame, text="🔍 검색: ", font=("맑은 고딕", 10, "bold"), bg="white", fg="#65676B").pack(side="left", padx=(30, 5))
-        search_entry = tk.Entry(filter_frame, textvariable=self.search_var, font=("맑은 고딕", 10),
-                                 bd=1, relief="solid", highlightthickness=0, width=25)
-        search_entry.pack(side="left", padx=5)
+        # 우측 액션 버튼들
+        action_box = tk.Frame(header_frame, bg="#F5F6F8")
+        action_box.pack(side="right")
+        tk.Button(action_box, text="⚙️ 내 이름",
+                  command=self.change_user_name,
+                  font=("맑은 고딕", 9, "bold"),
+                  bg="white", fg="#444",
+                  relief="flat", padx=14, pady=8,
+                  cursor="hand2",
+                  highlightthickness=1,
+                  highlightbackground="#DDD").pack(side="right", padx=(8, 0))
+        tk.Button(action_box, text="🔄 새로고침",
+                  command=self.update_table_view,
+                  font=("맑은 고딕", 9, "bold"),
+                  bg="#1877F2", fg="white",
+                  relief="flat", padx=14, pady=8,
+                  cursor="hand2").pack(side="right")
+
+        # ========== [필터 + 검색 바 - 깔끔한 둥근 박스] ==========
+        filter_card = tk.Frame(container, bg="white",
+                                highlightthickness=1,
+                                highlightbackground="#E5E7EB")
+        filter_card.pack(side="top", fill="x", padx=30, pady=(0, 10), ipady=4)
+
+        # 필터 칩 (탭처럼 보이는 버튼들)
+        self.filter_var.set("⏳ 처리중")
+        self.filter_chips = {}
+        chip_box = tk.Frame(filter_card, bg="white")
+        chip_box.pack(side="left", padx=14, pady=10)
+
+        def make_chip(label, value):
+            def click():
+                self.filter_var.set(value)
+                self._update_chip_styles()
+                self.update_table_view()
+            chip = tk.Label(chip_box, text=label,
+                             font=("맑은 고딕", 9, "bold"),
+                             bg="#F0F2F5", fg="#666",
+                             padx=14, pady=6, cursor="hand2")
+            chip.bind("<Button-1>", lambda e: click())
+            chip.pack(side="left", padx=2)
+            self.filter_chips[value] = chip
+
+        make_chip("전체", "전체")
+        make_chip("⏳ 처리중", "⏳ 처리중")
+        make_chip("✅ 완료", "✅ 완료")
+
+        # 구분선
+        tk.Frame(filter_card, bg="#E5E7EB", width=1).pack(side="left", fill="y", padx=8, pady=14)
+
+        # 검색
+        search_box = tk.Frame(filter_card, bg="white")
+        search_box.pack(side="left", padx=10, pady=10, fill="x", expand=True)
+        tk.Label(search_box, text="🔍", font=("맑은 고딕", 11),
+                 bg="white", fg="#999").pack(side="left", padx=(0, 4))
+        search_entry = tk.Entry(search_box, textvariable=self.search_var,
+                                 font=("맑은 고딕", 10),
+                                 bd=0, relief="flat",
+                                 highlightthickness=0,
+                                 bg="white", fg="#333")
+        search_entry.pack(side="left", fill="x", expand=True, ipady=4)
         search_entry.bind("<Return>", lambda e: self.update_table_view())
+        # placeholder 흉내
+        def on_focus_in(e):
+            if search_entry.get() == "제목/작업자/날짜 검색":
+                search_entry.delete(0, tk.END)
+                search_entry.config(fg="#333")
+        def on_focus_out(e):
+            if not search_entry.get():
+                search_entry.insert(0, "제목/작업자/날짜 검색")
+                search_entry.config(fg="#999")
+        if not self.search_var.get():
+            search_entry.insert(0, "제목/작업자/날짜 검색")
+            search_entry.config(fg="#999")
+        search_entry.bind("<FocusIn>", on_focus_in)
+        search_entry.bind("<FocusOut>", on_focus_out)
 
-        # [수정] 내 이름 설정 버튼은 필터바 오른쪽에 배치 (새로고침은 제목 옆으로 이동)
-        setting_btn = tk.Button(filter_frame, text="⚙️ 내 이름 설정", command=self.change_user_name,
-                                font=("맑은 고딕", 9, "bold"), bg="#f0f0f0", fg="#333", 
-                                relief="flat", padx=10, cursor="hand2")
-        setting_btn.pack(side="right", padx=5)
+        self._update_chip_styles()
 
-        # [제거] 하단 버튼부 (공지사항 전송은 공지/소통 탭과 중복이라 제거,
-        # 새로고침은 위로 이동했으므로 하단 영역 자체를 제거함)
+        # ========== [카드 리스트 영역 - 스크롤] ==========
+        list_outer = tk.Frame(container, bg="#F5F6F8")
+        list_outer.pack(side="top", expand=True, fill="both", padx=30, pady=(0, 15))
 
-        # [위치 교정 4] 리스트 상자 (마지막에 배치하여 남은 중간 공간을 다 차지함)
-        frame_list = tk.Frame(container, bg="white", bd=1, highlightthickness=1, highlightbackground="#E4E6EB")
-        frame_list.pack(side="top", expand=True, fill="both", padx=40, pady=10)
+        list_canvas = tk.Canvas(list_outer, bg="#F5F6F8",
+                                 highlightthickness=0)
+        list_scrollbar = ttk.Scrollbar(list_outer, orient="vertical",
+                                        command=list_canvas.yview)
+        self.cards_frame = tk.Frame(list_canvas, bg="#F5F6F8")
 
-        # --- 스타일 설정 ---
-        style = ttk.Style()
-        style.theme_use("clam") 
-        style.configure("Treeview", rowheight=40, font=("맑은 고딕", 10, "bold"), 
-                        background="white", fieldbackground="white", foreground="#333333", borderwidth=0)
-        style.configure("Treeview.Heading", font=("맑은 고딕", 11, "bold"), background="#F8F9FA", foreground="#555")
-        style.map("Treeview", background=[('selected', '#E7F3FF')], foreground=[('selected', '#1877F2')])
+        self.cards_frame.bind(
+            "<Configure>",
+            lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+        )
+        canvas_window = list_canvas.create_window((0, 0), window=self.cards_frame, anchor="nw")
+        # 캔버스 크기에 맞춰 cards_frame 너비 조절
+        def _on_canvas_resize(event):
+            list_canvas.itemconfig(canvas_window, width=event.width)
+        list_canvas.bind("<Configure>", _on_canvas_resize)
+        list_canvas.configure(yscrollcommand=list_scrollbar.set)
 
-        # 표 생성
-        self.chat_tree = ttk.Treeview(frame_list, columns=("상태", "진행", "날짜", "작업자", "제목"), show="headings", height=18)
-        self.chat_tree.tag_configure("oddrow", background="white")
-        self.chat_tree.tag_configure("evenrow", background="#F9FAFB") 
-        
-        scrollbar = ttk.Scrollbar(frame_list, orient="vertical", command=self.chat_tree.yview)
-        self.chat_tree.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side="right", fill="y")
-        self.chat_tree.pack(side="left", fill="both", expand=True)
+        list_scrollbar.pack(side="right", fill="y")
+        list_canvas.pack(side="left", fill="both", expand=True)
 
-        # 컬럼 설정
-        cols = {"상태": 90, "진행": 90, "날짜": 90, "작업자": 70, "제목": 180}
-        for col, width in cols.items():
-            self.chat_tree.heading(col, text=col)
-            self.chat_tree.column(col, width=width, anchor="center")
+        def _on_mousewheel(event):
+            try:
+                list_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            except: pass
+        list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # 윈도우가 다른 탭으로 전환 시 바인딩 안 풀리는 문제 방지: 마우스가 영역 안에 있을 때만 작동하도록
+        def _bind_wheel(e): list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _unbind_wheel(e): list_canvas.unbind_all("<MouseWheel>")
+        list_canvas.bind("<Enter>", _bind_wheel)
+        list_canvas.bind("<Leave>", _unbind_wheel)
 
-        # 우클릭 메뉴 및 이벤트
+        # 우클릭 메뉴 (삭제용)
         self.context_menu = tk.Menu(self.root, tearoff=0, font=("맑은 고딕", 10))
         self.context_menu.add_command(label="🗑️ 이 보고서 완전 삭제", command=self.delete_report)
-        self.chat_tree.bind("<Button-3>", self.show_context_menu)
-        self.chat_tree.bind("<Double-1>", self.on_message_double_click)
 
-        # 마지막 데이터 로드
+        # 첫 로드
+        self._selected_card_id = None
         self.update_table_view()
+
+    def _update_chip_styles(self):
+        """필터 칩 선택 상태에 맞춰 스타일 업데이트"""
+        if not hasattr(self, 'filter_chips'): return
+        current = self.filter_var.get()
+        for value, chip in self.filter_chips.items():
+            if value == current:
+                chip.config(bg="#1877F2", fg="white")
+            else:
+                chip.config(bg="#F0F2F5", fg="#666")
 
     def setup_board_system(self, parent): # 여기서 parent라고 받았으면
         # 1. 상단 버튼 영역
@@ -1301,31 +1376,34 @@ class LogiPanApp:
 
         # --- [신규 추가] 삭제 관련 함수들 ---
     def show_context_menu(self, event):
-        """마우스 우클릭 시 메뉴 팝업"""
-        item = self.chat_tree.identify_row(event.y)
-        if item:
-            self.chat_tree.selection_set(item)
-            self.context_menu.post(event.x_root, event.y_root)
+        """우클릭 메뉴 - 옛날 chat_tree 호환용 (카드 시스템에서는 _selected_card_id 사용)"""
+        if hasattr(self, 'chat_tree') and self.chat_tree.winfo_exists():
+            item = self.chat_tree.identify_row(event.y)
+            if item:
+                self.chat_tree.selection_set(item)
+                self.context_menu.post(event.x_root, event.y_root)
 
     def delete_report(self):
         """선택된 보고서와 하위 댓글들 실제 삭제"""
-        selected_item = self.chat_tree.selection()
-        if not selected_item: return
-        
-        doc_id = selected_item[0]
+        # 카드 시스템: _selected_card_id 우선, 옛 chat_tree fallback
+        doc_id = getattr(self, '_selected_card_id', None)
+        if not doc_id and hasattr(self, 'chat_tree') and self.chat_tree.winfo_exists():
+            selected_item = self.chat_tree.selection()
+            if selected_item:
+                doc_id = selected_item[0]
+        if not doc_id:
+            return
+
         from tkinter import messagebox
-        
+
         if messagebox.askyesno("⚠️ 삭제 확인", "이 보고서와 모든 대화 내역이 영구 삭제됩니다.\n정말 삭제하시겠습니까?"):
             try:
-                # 1. 댓글(서브 컬렉션) 삭제
                 comments = self.db.collection('field_reports').document(doc_id).collection('comments').get()
                 for c in comments:
                     c.reference.delete()
-                
-                # 2. 본문 삭제
                 self.db.collection('field_reports').document(doc_id).delete()
-                
                 messagebox.showinfo("삭제 완료", "데이터가 깨끗하게 정리되었습니다.")
+                self._selected_card_id = None
                 self.update_table_view()
             except Exception as e:
                 messagebox.showerror("삭제 실패", f"오류가 발생했습니다: {e}")
@@ -1783,14 +1861,12 @@ class LogiPanApp:
         try:
             from datetime import datetime, timezone, timedelta
             kst = timezone(timedelta(hours=9))
-            # Firestore timestamp는 보통 datetime 객체 또는 .seconds/.nanoseconds 가짐
             if hasattr(ts, 'astimezone'):
                 dt = ts.astimezone(kst)
             elif hasattr(ts, 'seconds'):
                 dt = datetime.fromtimestamp(ts.seconds, tz=kst)
             else:
                 return ""
-            # 오늘이면 시간만, 다른 날이면 날짜+시간
             now = datetime.now(kst)
             if dt.date() == now.date():
                 return dt.strftime("%H:%M")
@@ -1798,6 +1874,58 @@ class LogiPanApp:
                 return dt.strftime("%m/%d %H:%M")
             else:
                 return dt.strftime("%Y/%m/%d %H:%M")
+        except Exception:
+            return ""
+
+    def _get_kst_date(self, ts):
+        """timestamp의 한국시간 날짜만 반환 (date 객체). None이면 None."""
+        if not ts:
+            return None
+        try:
+            from datetime import datetime, timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+            if hasattr(ts, 'astimezone'):
+                return ts.astimezone(kst).date()
+            elif hasattr(ts, 'seconds'):
+                return datetime.fromtimestamp(ts.seconds, tz=kst).date()
+            return None
+        except Exception:
+            return None
+
+    def _format_date_separator(self, date_obj):
+        """카톡 스타일 날짜 구분선 텍스트. 예: '2026년 4월 29일 수요일'"""
+        if not date_obj:
+            return ""
+        try:
+            from datetime import datetime, timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+            today = datetime.now(kst).date()
+            yesterday = today - timedelta(days=1)
+            weekdays = ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일']
+            wd = weekdays[date_obj.weekday()]
+            if date_obj == today:
+                return f"오늘 · {date_obj.month}월 {date_obj.day}일 {wd}"
+            elif date_obj == yesterday:
+                return f"어제 · {date_obj.month}월 {date_obj.day}일 {wd}"
+            elif date_obj.year == today.year:
+                return f"{date_obj.month}월 {date_obj.day}일 {wd}"
+            else:
+                return f"{date_obj.year}년 {date_obj.month}월 {date_obj.day}일 {wd}"
+        except Exception:
+            return ""
+
+    def _format_kst_time_only(self, ts):
+        """시간만 (HH:MM) 반환. 날짜 구분선이 있으니 시간만 짧게."""
+        if not ts:
+            return ""
+        try:
+            from datetime import datetime, timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+            if hasattr(ts, 'astimezone'):
+                return ts.astimezone(kst).strftime("%H:%M")
+            elif hasattr(ts, 'seconds'):
+                return datetime.fromtimestamp(ts.seconds, tz=kst).strftime("%H:%M")
+            return ""
         except Exception:
             return ""
 
@@ -1809,10 +1937,18 @@ class LogiPanApp:
         import threading
         from tkinter import messagebox
 
-        selected_items = self.chat_tree.selection()
-        if not selected_items: return
-        
-        selected_id = selected_items[0]
+        # [수정] _direct_selected_id (카드 클릭) 우선, 없으면 chat_tree (구 인터페이스)
+        selected_id = getattr(self, '_direct_selected_id', None)
+        self._direct_selected_id = None  # 한 번 쓰고 비움
+
+        if not selected_id:
+            # 호환: 옛날 chat_tree 인터페이스
+            if hasattr(self, 'chat_tree'):
+                selected_items = self.chat_tree.selection()
+                if not selected_items: return
+                selected_id = selected_items[0]
+            else:
+                return
         doc_ref = self.db.collection('field_reports').document(selected_id)
         data = doc_ref.get().to_dict()
         img_urls_raw = data.get('imageUrl', '')
@@ -1847,7 +1983,7 @@ class LogiPanApp:
                  anchor="w").pack(anchor="w")
         sub_text = f"작업자: {data.get('user', '익명')}  ·  {data.get('status', '처리중')}"
         if report_ts:
-            time_str = self._format_kst_time(report_ts)
+            time_str = self._format_kst_time(report_ts)  # 헤더는 날짜+시간 풀 표시
             if time_str:
                 sub_text += f"  ·  📅 {time_str}"
         tk.Label(title_frame, text=sub_text,
@@ -1895,12 +2031,24 @@ class LogiPanApp:
         comment_context_menu = tk.Menu(detail_win, tearoff=0, font=("맑은 고딕", 10))
 
         # ========== [본문 카드 - 카톡 받은 메시지 스타일] ==========
+        # 본문 날짜 구분선
+        body_date = self._get_kst_date(report_ts)
+        if body_date:
+            sep_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+            sep_frame.pack(fill="x", pady=(15, 5))
+            sep_pill = tk.Label(sep_frame,
+                                 text=self._format_date_separator(body_date),
+                                 bg="#9DB0C2", fg="white",
+                                 font=("맑은 고딕", 8, "bold"),
+                                 padx=12, pady=3)
+            sep_pill.pack(anchor="center")
+
         body_outer = tk.Frame(scrollable_frame, bg="#B2C7DA")
-        body_outer.pack(fill="x", pady=(15, 5), padx=15)
+        body_outer.pack(fill="x", pady=(5, 5), padx=15)
 
         # 작업자 표시 (말풍선 위)
         tk.Label(body_outer, text=f"👤 {data.get('user', '익명')}",
-                 font=("맑은 고딕", 9), bg="#B2C7DA", fg="#444",
+                 font=("맑은 고딕", 9, "bold"), bg="#B2C7DA", fg="#444",
                  anchor="w").pack(anchor="w", padx=(8, 0))
 
         # 본문 말풍선 (왼쪽 정렬)
@@ -1912,16 +2060,15 @@ class LogiPanApp:
         body_bubble.pack(side="left", anchor="w", padx=(0, 60))
 
         body_text = data.get('text', '')
-        # 본문 길이에 따라 width 조정
         body_label = tk.Label(body_bubble, text=body_text,
                                 bg="white", fg="#1A1A1A",
                                 font=("맑은 고딕", 11), justify="left",
                                 wraplength=400, padx=14, pady=10)
         body_label.pack(anchor="w")
 
-        # 시간 (말풍선 옆 작게)
+        # 시간 (말풍선 옆 작게) - 시간만
         if report_ts:
-            tt = self._format_kst_time(report_ts)
+            tt = self._format_kst_time_only(report_ts)
             if tt:
                 tk.Label(body_bubble_outer, text=tt,
                          bg="#B2C7DA", fg="#666",
@@ -2038,6 +2185,10 @@ class LogiPanApp:
                          font=("맑은 고딕", 9, "italic")).pack(pady=15)
                 return
 
+            # 본문 날짜 = 첫 구분선 기준
+            body_date_for_compare = self._get_kst_date(report_ts)
+            last_date = body_date_for_compare  # 본문에 이미 날짜 구분선 있으니 같은 날이면 또 안 그림
+
             for c in comments:
                 cid = c.id
                 d = c.to_dict()
@@ -2048,6 +2199,18 @@ class LogiPanApp:
                 ts = d.get('timestamp')
 
                 if not detail_win.winfo_exists(): return
+
+                # [추가] 날짜 바뀌면 구분선 표시
+                cur_date = self._get_kst_date(ts)
+                if cur_date and cur_date != last_date:
+                    sep_frame = tk.Frame(comment_list_frame, bg="#B2C7DA")
+                    sep_frame.pack(fill="x", pady=(10, 5))
+                    tk.Label(sep_frame,
+                             text=self._format_date_separator(cur_date),
+                             bg="#9DB0C2", fg="white",
+                             font=("맑은 고딕", 8, "bold"),
+                             padx=12, pady=3).pack(anchor="center")
+                    last_date = cur_date
 
                 # 작업자(받은) vs 관리자(보낸) 구분
                 if "[답장]" in t:
@@ -2063,7 +2226,7 @@ class LogiPanApp:
                 if clean_text in ("(사진)", ""):
                     clean_text = ""  # 텍스트 없으면 빈칸
 
-                time_str = self._format_kst_time(ts)
+                time_str = self._format_kst_time_only(ts)
 
                 # 말풍선 컨테이너 (카톡처럼 좌우 정렬)
                 row = tk.Frame(comment_list_frame, bg="#B2C7DA")
@@ -2490,26 +2653,31 @@ class LogiPanApp:
 
 # 3. 데이터 목록 갱신 엔진 (오류 수정 및 새 댓글 감지)
     def update_table_view(self, event=None):
-        from datetime import datetime, timedelta
-        from google.cloud.firestore_v1.base_query import FieldFilter
+        from datetime import datetime, timedelta, timezone
 
-        # 1. 화면 초기화
-        for i in self.chat_tree.get_children():
-            self.chat_tree.delete(i)
+        # 카드 리스트 영역이 없으면 무시 (다른 탭에서 호출되거나 아직 초기화 안 된 상태)
+        if not hasattr(self, 'cards_frame') or not self.cards_frame.winfo_exists():
+            return
+
+        # 1. 기존 카드 모두 제거
+        for w in self.cards_frame.winfo_children():
+            w.destroy()
 
         try:
             search_keyword = self.search_var.get().strip().lower()
+            if search_keyword == "제목/작업자/날짜 검색":
+                search_keyword = ""
             current_filter = self.filter_var.get()
             ref = self.db.collection('field_reports')
 
-            # 2. 데이터 가져오기
-            # [수정] order_by/where가 timestamp 필드 없는 문서를 배제하거나 인덱스를 요구하던 이슈가 있어
-            # 일단 전체를 가져와서 파이썬에서 정렬하는 방식으로 변경. 필드가 없는 옛 문서도 안 잘림.
             try:
                 raw_docs = list(ref.limit(500).get())
             except Exception as fetch_err:
                 print(f"❌ Firestore 조회 실패: {fetch_err}")
-                messagebox.showerror("데이터 로딩 실패", f"Firestore 조회 중 오류:\n{fetch_err}")
+                tk.Label(self.cards_frame,
+                         text=f"⚠️ 데이터 로딩 실패\n{fetch_err}",
+                         bg="#F5F6F8", fg="#c00",
+                         font=("맑은 고딕", 10), pady=30).pack()
                 return
 
             def _ts_key(d):
@@ -2520,15 +2688,11 @@ class LogiPanApp:
                     return 0
             raw_docs.sort(key=_ts_key, reverse=True)
 
-            # 검색 모드면 더 많이, 일반 모드면 최근 100건만
             reports = raw_docs if search_keyword else raw_docs[:100]
-            print(f"[디버그] field_reports 조회: 전체 {len(raw_docs)}건, 표시 대상 {len(reports)}건, 필터={current_filter!r}")
-            for _d in raw_docs[:10]:
-                _dd = _d.to_dict()
-                _ts = _dd.get('timestamp')
-                print(f"  └ id={_d.id[:8]} status={_dd.get('status')!r} user={_dd.get('user')!r} date={_dd.get('date')!r} ts={_ts}")
 
-            # 3. 데이터 루프
+            new_comment_count = 0  # 새 댓글 있는 카드 수
+
+            shown = 0
             for idx, doc in enumerate(reports):
                 data = doc.to_dict()
                 status = data.get('status', '⏳ 처리중')
@@ -2537,66 +2701,229 @@ class LogiPanApp:
                 ts = data.get('timestamp')
                 time_str = data.get('date') if data.get('date') else (ts.strftime('%y/%m/%d') if ts else "")
 
-                # [검색어 필터링]
                 if search_keyword:
                     clean_date = time_str.replace("/", "")
                     combined = f"{time_str} {clean_date} {user} {title}".lower()
                     if search_keyword not in combined:
                         continue
 
-                # [상태 필터링]
                 if current_filter != "전체" and status != current_filter:
                     continue
 
-                # 4. 진행 상태 표시
+                # 진행 상태
                 step_text = "🆕 신규"
                 comments_ref = self.db.collection('field_reports').document(doc.id).collection('comments')
-                last_c = comments_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1).get()
+                try:
+                    last_c = comments_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1).get()
+                except Exception:
+                    last_c = []
+
+                # 전체 댓글 수 + 마지막 댓글 정보
+                try:
+                    all_comments = list(comments_ref.get())
+                    comment_total = len(all_comments)
+                    has_image = any('imageUrl' in c.to_dict() and c.to_dict().get('imageUrl') for c in all_comments)
+                except Exception:
+                    comment_total = 0
+                    has_image = False
 
                 is_worker_reply = False
+                last_comment_text = ""
+                last_comment_user = ""
                 if last_c:
                     c_data = last_c[0].to_dict()
+                    last_comment_text = c_data.get('text', '').replace('[답장] ', '')
+                    last_comment_user = c_data.get('user', '')
                     if "[답장]" in c_data.get('text', ''):
-                        step_text = "💬 NEW댓글"; is_worker_reply = True
+                        step_text = "💬 NEW"; is_worker_reply = True
                     else:
                         step_text = "✅ 확인중"
 
-                # 5. 표에 삽입
-                row_tag = "evenrow" if idx % 2 == 0 else "oddrow"
-                item_id = self.chat_tree.insert("", "end", iid=doc.id,
-                                                values=(status, step_text, time_str, user, title),
-                                                tags=(row_tag,))
+                # 본문에 사진 있는지
+                if data.get('imageUrl'):
+                    has_image = True
 
-                # --- [색상 우선순위 수정] 완료를 가장 먼저 체크합니다 ---
+                if is_worker_reply and status != "✅ 완료":
+                    new_comment_count += 1
 
-                # 1. 완료: 가장 최우선 (이미 끝난 일은 무조건 회색)
-                if status == "✅ 완료":
-                    self.chat_tree.tag_configure("done_gray", foreground="#888888", background="white")
-                    self.chat_tree.item(item_id, tags=("done_gray",))
+                # ========== 카드 그리기 ==========
+                self._render_report_card(doc.id, data, status, step_text,
+                                          time_str, user, title, ts,
+                                          is_worker_reply, comment_total,
+                                          has_image, last_comment_text,
+                                          last_comment_user, idx)
+                shown += 1
 
-                # 2. NEW댓글: (완료되지 않은 것 중 답장 온 것)
-                elif is_worker_reply:
-                    self.chat_tree.tag_configure("sky_blue", foreground="#0078D7", background="#E1F5FE")
-                    self.chat_tree.item(item_id, tags=("sky_blue",))
+            if shown == 0:
+                tk.Label(self.cards_frame,
+                         text="📭 표시할 작업이 없습니다",
+                         bg="#F5F6F8", fg="#999",
+                         font=("맑은 고딕", 11), pady=50).pack()
 
-                # 3. 확인중: (완료되지 않은 것 중 내가 확인한 것)
-                elif step_text == "✅ 확인중":
-                    self.chat_tree.tag_configure("light_green", foreground="#328837", background="#E8F5E9")
-                    self.chat_tree.item(item_id, tags=("light_green",))
-
-                # 4. 신규: (완료되지 않은 것 중 아직 안 본 것)
-                elif step_text == "🆕 신규":
-                    self.chat_tree.tag_configure("light_red", foreground="#C62828", background="#FFEBEE")
-                    self.chat_tree.item(item_id, tags=("light_red",))
+            # 새 댓글 카운터 업데이트
+            if hasattr(self, 'new_comment_counter'):
+                if new_comment_count > 0:
+                    self.new_comment_counter.config(text=f"🔔 새 댓글 {new_comment_count}건",
+                                                      fg="#FF4757")
+                else:
+                    self.new_comment_counter.config(text="")
 
         except Exception as e:
             import traceback
-            print(f"❌ 검색 오류: {e}")
+            print(f"❌ 카드 렌더링 오류: {e}")
             traceback.print_exc()
+            tk.Label(self.cards_frame,
+                     text=f"⚠️ 오류: {e}",
+                     bg="#F5F6F8", fg="#c00",
+                     font=("맑은 고딕", 10), pady=30).pack()
+
+    def _render_report_card(self, doc_id, data, status, step_text, time_str, user,
+                             title, ts, is_worker_reply, comment_total, has_image,
+                             last_comment_text, last_comment_user, idx):
+        """모던 카드 한 개 그리기"""
+        # 상태별 색상 테마
+        if status == "✅ 완료":
+            accent_color = "#9CA3AF"
+            badge_bg = "#E5E7EB"
+            badge_fg = "#6B7280"
+            card_bg = "#FAFAFA"
+        elif is_worker_reply:
+            accent_color = "#FF4757"  # 새 댓글 = 빨간색 강조
+            badge_bg = "#FFE5E8"
+            badge_fg = "#FF4757"
+            card_bg = "white"
+        elif step_text == "✅ 확인중":
+            accent_color = "#10B981"
+            badge_bg = "#D1FAE5"
+            badge_fg = "#065F46"
+            card_bg = "white"
+        else:  # 신규
+            accent_color = "#F59E0B"
+            badge_bg = "#FEF3C7"
+            badge_fg = "#92400E"
+            card_bg = "white"
+
+        # 카드 컨테이너 (그림자 효과 흉내)
+        card_outer = tk.Frame(self.cards_frame, bg="#F5F6F8")
+        card_outer.pack(fill="x", padx=2, pady=4)
+
+        card = tk.Frame(card_outer, bg=card_bg,
+                         highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="x")
+
+        # 좌측 컬러 액센트 바
+        accent_bar = tk.Frame(card, bg=accent_color, width=4)
+        accent_bar.pack(side="left", fill="y")
+
+        # 본 컨텐츠
+        content = tk.Frame(card, bg=card_bg, padx=14, pady=12)
+        content.pack(side="left", fill="both", expand=True)
+
+        # 1행: 뱃지 + 시간 + (NEW 표시) + 우측 작업자
+        row1 = tk.Frame(content, bg=card_bg)
+        row1.pack(fill="x")
+
+        # 뱃지 (상태)
+        badge = tk.Label(row1, text=step_text,
+                          bg=badge_bg, fg=badge_fg,
+                          font=("맑은 고딕", 8, "bold"),
+                          padx=8, pady=2)
+        badge.pack(side="left")
+
+        # NEW 점멸 (새 댓글 있을 때)
+        if is_worker_reply and status != "✅ 완료":
+            new_dot = tk.Label(row1, text="●",
+                                bg=card_bg, fg="#FF4757",
+                                font=("맑은 고딕", 12, "bold"))
+            new_dot.pack(side="left", padx=(6, 0))
+            # 깜빡임 애니메이션 (간단 버전)
+            self._blink_dot(new_dot, card_bg)
+
+        # 시간
+        tk.Label(row1, text=f"📅 {time_str}",
+                 bg=card_bg, fg="#9CA3AF",
+                 font=("맑은 고딕", 9)).pack(side="left", padx=(8, 0))
+
+        # 우측: 작업자 + 첨부 표시
+        right_row1 = tk.Frame(row1, bg=card_bg)
+        right_row1.pack(side="right")
+
+        if has_image:
+            tk.Label(right_row1, text="📷",
+                     bg=card_bg, fg="#666",
+                     font=("맑은 고딕", 10)).pack(side="right", padx=(4, 0))
+        if comment_total > 0:
+            tk.Label(right_row1, text=f"💬 {comment_total}",
+                     bg=card_bg, fg="#666",
+                     font=("맑은 고딕", 9)).pack(side="right", padx=(4, 0))
+
+        tk.Label(right_row1, text=f"👤 {user}",
+                 bg=card_bg, fg="#374151",
+                 font=("맑은 고딕", 9, "bold")).pack(side="right", padx=(0, 6))
+
+        # 2행: 제목 (크게)
+        title_label = tk.Label(content, text=title,
+                                bg=card_bg, fg="#111827",
+                                font=("맑은 고딕", 12, "bold"),
+                                anchor="w", justify="left",
+                                wraplength=600)
+        title_label.pack(fill="x", anchor="w", pady=(6, 2))
+
+        # 3행: 마지막 댓글 미리보기 (있으면)
+        if last_comment_text and is_worker_reply:
+            preview = last_comment_text[:60] + ("..." if len(last_comment_text) > 60 else "")
+            tk.Label(content,
+                     text=f"💬 {last_comment_user}: {preview}",
+                     bg=card_bg, fg="#FF4757" if is_worker_reply else "#6B7280",
+                     font=("맑은 고딕", 9),
+                     anchor="w", justify="left").pack(fill="x", anchor="w")
+
+        # 클릭/우클릭 이벤트 (카드 + 모든 자식 위젯에 바인딩)
+        def on_click(e):
+            self._open_report_detail(doc_id)
+        def on_right_click(e):
+            self._selected_card_id = doc_id
+            self.context_menu.post(e.x_root, e.y_root)
+        def on_enter(e):
+            card.config(highlightbackground="#1877F2", highlightthickness=2)
+        def on_leave(e):
+            card.config(highlightbackground="#E5E7EB", highlightthickness=1)
+
+        for widget in [card, content, accent_bar, row1, right_row1, title_label] + list(row1.winfo_children()) + list(content.winfo_children()) + list(right_row1.winfo_children()):
             try:
-                messagebox.showerror("작업보고 로딩 오류", f"{type(e).__name__}: {e}")
-            except Exception:
+                widget.bind("<Double-Button-1>", on_click)
+                widget.bind("<Button-3>", on_right_click)
+                widget.config(cursor="hand2")
+            except:
                 pass
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
+
+    def _blink_dot(self, widget, bg_color):
+        """빨간 점 깜빡임 (NEW 표시용)"""
+        def toggle():
+            try:
+                if not widget.winfo_exists(): return
+                cur = widget.cget("fg")
+                widget.config(fg="#FF4757" if cur == bg_color else bg_color)
+                widget.after(700, toggle)
+            except: pass
+        toggle()
+
+    def _open_report_detail(self, doc_id):
+        """카드 더블클릭 시 상세 팝업 열기 - 기존 on_message_double_click 호환"""
+        # 기존 on_message_double_click이 self.chat_tree.selection() 사용하므로
+        # 임시로 selected_id만 따로 저장 + 호환용 함수 호출
+        self._direct_selected_id = doc_id
+        self._call_detail_directly(doc_id)
+
+    def _call_detail_directly(self, doc_id):
+        """상세 팝업 띄우기 (chat_tree 없이도 동작)"""
+        # 기존 on_message_double_click 본문을 직접 호출하기 위해
+        # selected_items 흉내내는 방법 - 간단하게는 그냥 본문 코드 리팩터해야 하지만,
+        # 우선 chat_tree 없으면 동작 안 하니 selected_id만 _direct_selected_id에 저장하고
+        # on_message_double_click을 살짝 바꿔서 _direct_selected_id 우선 사용하게 함
+        self.on_message_double_click(None)
 
     def change_user_name(self):
         from tkinter import simpledialog, messagebox
