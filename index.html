@@ -88,7 +88,10 @@
         </button>
     </div>
 
-    <div id="userDisplay" style="background:#f0f2f5; padding:10px; border-radius:8px; text-align:center; font-weight:bold; margin-bottom:15px; font-size:14px; cursor:pointer;" onclick="askName()">👤 작업자 등록 (클릭)</div>
+    <div style="display:flex; gap:8px; margin-bottom:15px; align-items:center;">
+        <div id="userDisplay" style="flex:1; background:#f0f2f5; padding:10px; border-radius:8px; text-align:center; font-weight:bold; font-size:14px; cursor:pointer;" onclick="askName()">👤 작업자 등록 (클릭)</div>
+        <button id="notifBtn" onclick="enableNotifications()" style="background:#fbbc04; color:white; border:none; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:bold; cursor:pointer; white-space:nowrap;">🔔 알림 켜기</button>
+    </div>
     <input type="hidden" id="userName">
 
     <div id="section-report">
@@ -204,7 +207,7 @@
     }
 
     window.onload = function() {
-        console.log("%c🚀 로지판 v2.2 로드됨 (푸시 알림 지원)", "color: #1a73e8; font-size: 14px; font-weight: bold;");
+        console.log("%c🚀 로지판 v2.3 로드됨 (푸시 알림 - 버튼 방식)", "color: #1a73e8; font-size: 14px; font-weight: bold;");
         const name = localStorage.getItem("logipan_user_name");
         if (!name) askName();
         else {
@@ -214,8 +217,8 @@
             loadNotice();
             loadMyBoardPosts();
             checkDrafts();
-            // [추가] 푸시 알림 초기화 (1초 뒤에 권한 요청)
-            setTimeout(() => initPushNotifications(name), 1000);
+            // [수정] 자동 권한요청 제거 → 알림 버튼 상태만 체크
+            updateNotifButton();
         }
         document.getElementById('reportText').addEventListener('input', autosaveReport);
         document.getElementById('reportTitle').addEventListener('input', autosaveReport);
@@ -224,38 +227,72 @@
     };
 
     // ---------- [추가] 푸시 알림 ----------
-    async function initPushNotifications(userName) {
+    // 알림 버튼 상태 업데이트
+    function updateNotifButton() {
+        const btn = document.getElementById('notifBtn');
+        if (!btn) return;
         if (!messaging) {
-            console.log("⚠️ 푸시 알림 미지원 환경");
+            btn.style.display = 'none';
+            return;
+        }
+        const perm = Notification.permission;
+        if (perm === 'granted') {
+            btn.innerText = '🔔 알림 ON';
+            btn.style.background = '#34a853';
+        } else if (perm === 'denied') {
+            btn.innerText = '🔕 알림 차단됨';
+            btn.style.background = '#999';
+        } else {
+            btn.innerText = '🔔 알림 켜기';
+            btn.style.background = '#fbbc04';
+        }
+    }
+
+    // 사용자가 버튼 클릭하면 권한 요청 + 토큰 발급
+    async function enableNotifications() {
+        const userName = localStorage.getItem("logipan_user_name");
+        if (!userName) {
+            alert("먼저 작업자 이름을 등록해주세요");
+            return;
+        }
+        if (!messaging) {
+            alert("⚠️ 이 브라우저는 푸시 알림을 지원하지 않습니다.\n\n아이폰: 사파리에서 '홈 화면에 추가' 후 그 어플로 들어와주세요.\n안드로이드: 크롬 사용 권장");
             return;
         }
 
         try {
-            // 1) 권한 요청
+            // 1) 권한 요청 (사용자 직접 클릭 후 - iOS 호환)
             const permission = await Notification.requestPermission();
+            if (permission === 'denied') {
+                alert("🔕 알림이 차단되었습니다.\n\n폰 설정에서 직접 허용해주세요:\n[설정] → [Safari] → [알림]");
+                updateNotifButton();
+                return;
+            }
             if (permission !== 'granted') {
-                console.log("🔕 알림 권한 거부됨");
+                console.log("권한 미허용:", permission);
+                updateNotifButton();
                 return;
             }
             console.log("🔔 알림 권한 허용됨");
 
-            // 2) [수정] 서비스 워커를 명시적으로 현재 경로에서 등록
-            //    GitHub Pages 하위경로(/logipan-report/) 대응
+            // 2) 서비스워커 등록
             const swRegistration = await navigator.serviceWorker.register('firebase-messaging-sw.js');
             console.log("✅ FCM 서비스워커 등록:", swRegistration.scope);
+            // 등록 완료 대기
+            await navigator.serviceWorker.ready;
 
-            // 3) FCM 토큰 받기 (등록된 SW 명시)
+            // 3) FCM 토큰 받기
             const token = await messaging.getToken({
                 vapidKey: VAPID_KEY,
                 serviceWorkerRegistration: swRegistration
             });
             if (!token) {
-                console.warn("⚠️ FCM 토큰 발급 실패");
+                alert("⚠️ 토큰 발급 실패. 다시 시도해주세요.");
                 return;
             }
             console.log("✅ FCM 토큰 발급:", token.substring(0, 20) + "...");
 
-            // 4) Firestore에 저장
+            // 4) Firestore 저장
             await db.collection("fcm_tokens").doc(userName).set({
                 token: token,
                 user: userName,
@@ -271,8 +308,12 @@
                 const body = payload.notification?.body || "";
                 showToast(`🔔 ${title}: ${body}`);
             });
+
+            updateNotifButton();
+            showToast("✅ 알림이 켜졌습니다!");
         } catch (e) {
-            console.error("❌ 푸시 알림 초기화 실패:", e);
+            console.error("❌ 알림 설정 실패:", e);
+            alert("알림 설정에 실패했습니다:\n" + (e.message || e));
         }
     }
 
