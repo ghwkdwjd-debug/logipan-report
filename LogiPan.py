@@ -323,14 +323,13 @@ class LogiPanApp:
                     token = td['token']
                     name = td['name']
                     try:
-                        # [수정] iOS PWA용 - 'data'와 'notification' 둘 다 포함
-                        # notification만 있으면 iOS는 가끔 무시함
+                        # [수정] 중복 방지: data만 보냄
+                        # webpush.notification을 주면 브라우저가 자동으로 띄움 + SW도 띄워서 2번 옴
+                        # data만 보내면 SW의 onBackgroundMessage가 한 번만 띄움
                         msg = messaging.Message(
-                            # data: 항상 SW의 push 이벤트 트리거 (백그라운드 보장)
                             data={
                                 'title': title,
                                 'body': body,
-                                'click_action': 'https://ghwkdwjd-debug.github.io/logipan-report/',
                             },
                             token=token,
                             webpush=messaging.WebpushConfig(
@@ -338,16 +337,6 @@ class LogiPanApp:
                                     'Urgency': 'high',
                                     'TTL': '86400',
                                 },
-                                # webpush.notification: 브라우저가 자동 표시할 알림
-                                notification=messaging.WebpushNotification(
-                                    title=title,
-                                    body=body,
-                                    icon='https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
-                                    badge='https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
-                                    require_interaction=False,
-                                    tag='logipan-' + str(int(__import__('time').time())),
-                                    renotify=True,
-                                ),
                                 fcm_options=messaging.WebpushFCMOptions(
                                     link='https://ghwkdwjd-debug.github.io/logipan-report/',
                                 ),
@@ -784,13 +773,15 @@ class LogiPanApp:
                         self.db.collection('board_posts').add(post_data)
                         # [추가] 푸시 알림 발송
                         if target == "all":
+                            preview = content[:60] + ('...' if len(content) > 60 else '')
                             self.send_fcm_push("all",
-                                                f"📢 새 공지사항",
-                                                content[:50] + ('...' if len(content) > 50 else ''))
+                                                f"📢 공지: {preview}",
+                                                f"- {my_name}")
                         else:
+                            preview = content[:60] + ('...' if len(content) > 60 else '')
                             self.send_fcm_push(receiver_name,
-                                                f"🔒 {my_name}님의 개인지시",
-                                                content[:50] + ('...' if len(content) > 50 else ''))
+                                                f"🔒 {my_name}님의 지시",
+                                                preview)
                         messagebox.showinfo("완료", "전송되었습니다.", parent=notice_win)
                         notice_win.destroy()
                         self.update_board_view()
@@ -1034,9 +1025,9 @@ class LogiPanApp:
                 # [추가] 답장 받은 작업자에게 푸시 알림 발송
                 target = post_data.get('user', '')
                 if target:
-                    preview = content[:50] + ('...' if len(content) > 50 else '')
+                    preview = content[:80] + ('...' if len(content) > 80 else '')
                     self.send_fcm_push(target,
-                                        f"📢 {my_name}님의 답장",
+                                        f"💬 {my_name}님의 답장",
                                         preview)
                 win.destroy()
                 self.update_board_view()
@@ -1923,7 +1914,7 @@ class LogiPanApp:
             # [추가] 작업보고 작성자에게 푸시 알림 발송
             target = data.get('user', '')
             if target:
-                preview = content[:50] + ('...' if len(content) > 50 else '')
+                preview = content[:80] + ('...' if len(content) > 80 else '')
                 self.send_fcm_push(target,
                                     f"💬 {self.current_user}님의 댓글",
                                     preview)
