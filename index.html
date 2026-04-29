@@ -123,7 +123,7 @@
     <div id="section-board" style="display:none;">
         <h2>📢 공지사항 및 소통</h2>
         <div class="notice-box">
-            <small>최근 공지</small>
+            <small>최근 관리자 공지</small>
             <div id="notice-content" style="font-weight:bold; margin-bottom:5px;">불러오는 중...</div>
             <div id="notice-btn-container">
                 <button id="notice-step-btn" onclick="handleNoticeStep(1)" style="background:none; border:none; color:#f39c12; font-size:12px; font-weight:bold; cursor:pointer; padding:0;">
@@ -170,36 +170,6 @@
 
     // [추가] 푸시 알림용 VAPID 키
     const VAPID_KEY = "BJNykZMVNq1d0i8fd0bnHd1dsJgYXOuNDVz9DeneNk9okRbJ7UgJCQeWiOSwWw7CVaJaeaBKaWqFEGM4cX42ZBg";
-
-    // [추가] 로컬 알림 테스트 - Firebase 안 거치고 폰 자체에서 알림 띄우기
-    // 이게 동작하면 = iOS 알림 시스템 자체는 정상
-    // 이게 안 동작하면 = iOS PWA 알림 권한이나 환경 자체 문제
-    async function testLocalNotification() {
-        if (Notification.permission !== 'granted') {
-            alert("먼저 🔔 알림 켜기 버튼을 눌러주세요!");
-            return;
-        }
-        try {
-            const reg = await navigator.serviceWorker.getRegistration();
-            if (reg) {
-                await reg.showNotification("🧪 테스트 알림", {
-                    body: "이 알림이 보이면 폰 알림 시스템은 정상이에요!",
-                    icon: 'https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
-                    tag: 'test-' + Date.now(),
-                    requireInteraction: false
-                });
-                showToast("🧪 알림 발송됨 - 알림 센터/배너 확인");
-            } else {
-                new Notification("🧪 테스트 알림", {
-                    body: "이게 보이면 알림 정상",
-                    icon: 'https://ghwkdwjd-debug.github.io/logipan-report/icon.png'
-                });
-                showToast("🧪 (구식) 알림 발송됨");
-            }
-        } catch (e) {
-            alert("로컬 알림 실패: " + e.message);
-        }
-    }
 
     // [추가] FCM (메시징) 객체 - 브라우저 지원 시에만 초기화
     let messaging = null;
@@ -427,17 +397,18 @@
         db.collection("board_posts")
         .where("receiver", "in", ["all", currentWorker])
         .orderBy("timestamp", "desc")
-        .limit(10)
+        .limit(20)
         .onSnapshot(snap => {
             const box = document.getElementById("notice-content");
             let shown = false;
             snap.forEach(doc => {
                 if (shown) return;
                 const d = doc.data();
+                // [수정] '공지' 카테고리만 표시 (개인지시/문의/기타는 제외)
+                if (d.category !== "공지") return;
                 if (d.status && (d.status.includes("완료") || d.status.includes("확인완료"))) return;
-                const prefix = d.category === "개인지시" ? "🔒[개인] " : "📢 ";
                 const sender = d.real_sender || d.user || "관리자";
-                const fullText = `${prefix}${d.text}\n— ${sender}`;
+                const fullText = `📢 ${d.text}\n— ${sender}`;
                 box.innerHTML = '';
                 const txtDiv = document.createElement('div');
                 txtDiv.className = 'notice-text-collapsed';
