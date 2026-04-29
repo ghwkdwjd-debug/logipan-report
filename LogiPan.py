@@ -62,7 +62,8 @@ class LogiPanApp:
         self.chk_files = {"target": "", "master": ""}
         self.filter_var = tk.StringVar(value="전체")
         self.search_var = tk.StringVar()
-        self.current_user = "장정호"
+        # [수정] current_user를 config 파일에서 로드 (없으면 기본값 "장정호")
+        self.current_user = self.load_user_name()
         self.start_realtime_listener()
 
         self.style = ttk.Style()
@@ -272,6 +273,35 @@ class LogiPanApp:
         except Exception as e:
             print(f"⚠️ 설정 파일 저장 실패: {e}")
 
+    def load_user_name(self):
+        """설정 파일에서 사용자 이름 불러오기. 없으면 기본값 '장정호'."""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                name = cfg.get("user_name", "").strip()
+                if name:
+                    return name
+        except Exception as e:
+            print(f"⚠️ 사용자 이름 로드 실패: {e}")
+        return "장정호"
+
+    def save_user_name(self, name):
+        """사용자 이름을 설정 파일에 기록 (업데이트 후에도 유지)."""
+        try:
+            cfg = {}
+            if os.path.exists(self.config_path):
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except Exception:
+                    cfg = {}
+            cfg["user_name"] = name
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"⚠️ 사용자 이름 저장 실패: {e}")
+
     def change_save_dir(self):
         """경로 변경 버튼 - 폴더 선택 다이얼로그 띄우고 변경 후 영구 저장."""
         new_dir = filedialog.askdirectory(
@@ -292,6 +322,29 @@ class LogiPanApp:
         messagebox.showinfo("경로 변경 완료", f"저장 위치가 변경되었습니다.\n\n{self.save_dir}\n\n(앞으로 모든 파일은 여기에 저장됩니다)")
 
     # ========== [추가] FCM 푸시 알림 발송 ==========
+    def _upload_image_to_imgbb(self, image_path, parent_win=None):
+        """이미지 파일을 imgBB에 업로드하고 URL 반환. 실패시 None."""
+        try:
+            import requests
+            IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12"
+            with open(image_path, 'rb') as f:
+                files = {'image': f}
+                response = requests.post(
+                    f"https://api.imgbb.com/1/upload?key={IMGBB_KEY}",
+                    files=files, timeout=30
+                )
+            data = response.json()
+            if data.get('success'):
+                return data['data']['url']
+            else:
+                from tkinter import messagebox
+                messagebox.showerror("업로드 실패", f"이미지 업로드 실패: {data}", parent=parent_win)
+                return None
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("업로드 오류", f"이미지 업로드 오류:\n{e}", parent=parent_win)
+            return None
+
     def send_fcm_push(self, target_user, title, body):
         """작업자에게 푸시 알림 발송. (iOS PWA 호환 버전)"""
         if self.db is None:
@@ -1837,7 +1890,7 @@ class LogiPanApp:
         comment_card = tk.Frame(scrollable_frame, bg="white", highlightthickness=1, highlightbackground="#E1E4E8")
         comment_card.pack(padx=25, pady=20, fill="x")
 
-        tk.Label(comment_card, text="💬 댓글 (우클릭 댓글 삭제)", font=("맑은 고딕", 11, "bold"), bg="white", fg="#262626").pack(anchor="w", padx=15, pady=(15, 5))
+        tk.Label(comment_card, text="💬 댓글 (우클릭: 수정/삭제)", font=("맑은 고딕", 11, "bold"), bg="white", fg="#262626").pack(anchor="w", padx=15, pady=(15, 5))
         comment_list_frame = tk.Frame(comment_card, bg="white")
         comment_list_frame.pack(padx=15, pady=(0, 15), fill="x")
 
@@ -1848,17 +1901,37 @@ class LogiPanApp:
                 refresh_comments()
                 messagebox.showinfo("완료", "댓글이 삭제되었습니다.")
 
+        # [추가] 댓글 수정 함수
+        def edit_this_comment(comment_id, current_text):
+            from tkinter import simpledialog
+            new_text = simpledialog.askstring("댓글 수정", "내용을 수정하세요:",
+                                                initialvalue=current_text, parent=detail_win)
+            if new_text is not None and new_text.strip():
+                doc_ref.collection('comments').document(comment_id).update({
+                    'text': new_text.strip(),
+                    'edited': True,
+                    'editedAt': firestore.SERVER_TIMESTAMP
+                })
+                refresh_comments()
+
+        # [추가] 인라인 이미지 캐시 (PIL 이미지 참조 유지용)
+        if not hasattr(self, '_inline_img_cache'):
+            self._inline_img_cache = []
+
         def refresh_comments():
             if not detail_win.winfo_exists(): return
             for w in comment_list_frame.winfo_children(): w.destroy()
-            
+            self._inline_img_cache.clear()
+
             comments = doc_ref.collection('comments').order_by('timestamp').stream()
             
             for c in comments:
-                cid = c.id # 댓글 문서 ID
+                cid = c.id
                 d = c.to_dict()
                 u = d.get('user', '관리자')
                 t = d.get('text', '')
+                img_url = d.get('imageUrl', '')
+                edited = d.get('edited', False)
                 
                 if detail_win.winfo_exists():
                     if "[답장]" in t:
@@ -1870,55 +1943,167 @@ class LogiPanApp:
                         tag_text = f"📢 {u} (관리자)"; fg_color = "#0056b3"
                         clean_text = t
 
+                    if edited:
+                        clean_text += "  (수정됨)"
+
                     f = tk.Frame(comment_list_frame, bg=bg_color, padx=10, pady=6,
                                  highlightthickness=1, highlightbackground=border_color)
                     f.pack(fill="x", pady=3)
 
-                    # 우클릭 이벤트 바인딩 (개별 댓글 삭제)
-                    f.bind("<Button-3>", lambda e, id=cid: show_comment_menu(e, id))
+                    # 우클릭 - 수정/삭제 메뉴
+                    f.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
                     
                     l1 = tk.Label(f, text=tag_text, font=("맑은 고딕", 8, "bold"), bg=bg_color, fg=fg_color)
                     l1.pack(anchor="w")
-                    l1.bind("<Button-3>", lambda e, id=cid: show_comment_menu(e, id))
+                    l1.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
 
                     l2 = tk.Label(f, text=clean_text, bg=bg_color, fg="#262626",
-                                 anchor="w", font=("맑은 고딕", 10), justify="left")
+                                 anchor="w", font=("맑은 고딕", 10), justify="left", wraplength=550)
                     l2.pack(fill="x")
-                    l2.bind("<Button-3>", lambda e, id=cid: show_comment_menu(e, id))
+                    l2.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
 
-        def show_comment_menu(event, cid):
+                    # [추가] 첨부 이미지 표시
+                    if img_url:
+                        try:
+                            import requests
+                            from io import BytesIO
+                            from PIL import Image, ImageTk
+                            resp = requests.get(img_url, timeout=10)
+                            pil_img = Image.open(BytesIO(resp.content))
+                            # 가로 250px로 축소 (작게 미리보기)
+                            w, h = pil_img.size
+                            max_w = 250
+                            if w > max_w:
+                                ratio = max_w / w
+                                pil_img = pil_img.resize((max_w, int(h * ratio)), Image.LANCZOS)
+                            tk_img = ImageTk.PhotoImage(pil_img)
+                            self._inline_img_cache.append(tk_img)  # GC 방지
+                            img_label = tk.Label(f, image=tk_img, bg=bg_color, cursor="hand2")
+                            img_label.pack(anchor="w", pady=(4, 0))
+                            # 클릭하면 원본 보기 (브라우저)
+                            img_label.bind("<Button-1>", lambda e, url=img_url: __import__('webbrowser').open(url))
+                            img_label.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
+                        except Exception as e:
+                            tk.Label(f, text=f"[사진 로드 실패: {e}]", bg=bg_color, fg="#999",
+                                    font=("맑은 고딕", 8)).pack(anchor="w")
+
+        def show_comment_menu(event, cid, current_text):
             comment_context_menu.delete(0, tk.END)
-            comment_context_menu.add_command(label="🗑️ 이 댓글 삭제", command=lambda: delete_this_comment(cid))
+            comment_context_menu.add_command(label="✏️ 이 댓글 수정",
+                                              command=lambda: edit_this_comment(cid, current_text))
+            comment_context_menu.add_command(label="🗑️ 이 댓글 삭제",
+                                              command=lambda: delete_this_comment(cid))
             comment_context_menu.post(event.x_root, event.y_root)
 
         refresh_comments()
 
         # 하단 입력창
         entry = tk.Entry(footer, font=("맑은 고딕", 12), bd=1, relief="solid", highlightthickness=0)
-        entry.pack(fill="x", pady=(0, 15), ipady=8)
-        
+        entry.pack(fill="x", pady=(0, 5), ipady=8)
+
+        # [추가] 사진 첨부 상태 (Entry 위젯에 attribute로 들고있음)
+        self._pending_image_path = None
+
+        # [추가] 첨부 사진 미리보기 영역
+        photo_status_frame = tk.Frame(footer, bg="white")
+        photo_status_frame.pack(fill="x", pady=(0, 5))
+        photo_status_label = tk.Label(photo_status_frame, text="", bg="white",
+                                       fg="#1a73e8", font=("맑은 고딕", 9))
+        photo_status_label.pack(side="left")
+
+        def clear_pending_image():
+            self._pending_image_path = None
+            photo_status_label.config(text="")
+
+        def attach_image_from_clipboard():
+            """클립보드의 이미지를 임시 파일로 저장 후 첨부"""
+            try:
+                from PIL import ImageGrab
+                import tempfile
+                img = ImageGrab.grabclipboard()
+                if img is None:
+                    messagebox.showinfo("알림", "클립보드에 이미지가 없습니다.\n캡처 도구로 캡처 후 시도해주세요.", parent=detail_win)
+                    return False
+                # 클립보드 이미지가 PIL.Image면 그대로, 파일경로 리스트면 첫번째
+                if isinstance(img, list):
+                    if not img:
+                        return False
+                    self._pending_image_path = img[0]
+                else:
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    img.save(tmp.name, "PNG")
+                    self._pending_image_path = tmp.name
+                photo_status_label.config(text="📎 클립보드 이미지 첨부됨 (전송하면 업로드)")
+                return True
+            except Exception as e:
+                messagebox.showerror("오류", f"클립보드 이미지 가져오기 실패:\n{e}", parent=detail_win)
+                return False
+
+        def attach_image_from_file():
+            """파일 선택 다이얼로그로 이미지 첨부"""
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(
+                title="첨부할 이미지 선택",
+                filetypes=[("이미지 파일", "*.png *.jpg *.jpeg *.gif *.bmp"), ("모든 파일", "*.*")],
+                parent=detail_win
+            )
+            if path:
+                self._pending_image_path = path
+                photo_status_label.config(text=f"📎 {os.path.basename(path)}")
+
+        # [추가] Ctrl+V로 클립보드 이미지 붙여넣기
+        def on_paste(event):
+            # 먼저 클립보드에서 이미지 시도. 이미지가 있으면 첨부, 없으면 텍스트는 기본 동작
+            try:
+                from PIL import ImageGrab
+                img = ImageGrab.grabclipboard()
+                if img is not None and not isinstance(img, list):
+                    attach_image_from_clipboard()
+                    return "break"  # 텍스트 붙여넣기 막음 (이미지로 처리됨)
+            except Exception:
+                pass
+            return None  # 텍스트 붙여넣기는 정상 동작
+        entry.bind("<Control-v>", on_paste)
+
         btn_container = tk.Frame(footer, bg="white")
         btn_container.pack(fill="x")
 
         def send_cmd():
-            if not entry.get(): return
-            content = entry.get()
+            content = entry.get().strip()
+            image_url = ""
+            if self._pending_image_path:
+                # 이미지 업로드
+                image_url = self._upload_image_to_imgbb(self._pending_image_path, detail_win)
+                if image_url is None:
+                    return  # 업로드 실패 시 중단
+            if not content and not image_url:
+                return
             doc_ref.collection('comments').add({
                 'user': self.current_user,
-                'role': 'admin',  # [추가] 명시적으로 관리자 표시
-                'text': content,
+                'role': 'admin',
+                'text': content if content else "(사진)",
+                'imageUrl': image_url,
                 'timestamp': firestore.SERVER_TIMESTAMP
             })
             entry.delete(0, tk.END)
+            clear_pending_image()
             refresh_comments()
-            # [추가] 작업보고 작성자에게 푸시 알림 발송
+            # 푸시 알림 발송
             target = data.get('user', '')
             if target:
-                preview = content[:80] + ('...' if len(content) > 80 else '')
+                preview = (content if content else "(사진)")[:80]
+                if len(content) > 80: preview += '...'
                 self.send_fcm_push(target,
                                     f"💬 {self.current_user}님의 댓글",
                                     preview)
 
+        # [추가] 사진 첨부 버튼들
+        tk.Button(btn_container, text="📎 사진(파일)", command=attach_image_from_file,
+                  bg="#f0f2f5", fg="#444", font=("맑은 고딕", 9),
+                  relief="flat", pady=8).pack(side="left", padx=(0, 3))
+        tk.Button(btn_container, text="📋 클립보드", command=attach_image_from_clipboard,
+                  bg="#f0f2f5", fg="#444", font=("맑은 고딕", 9),
+                  relief="flat", pady=8).pack(side="left", padx=(0, 5))
         tk.Button(btn_container, text="🚀 댓글 전송", command=send_cmd, bg="#1877F2", fg="white", 
                   font=("맑은 고딕", 10, "bold"), relief="flat", pady=10).pack(side="left", expand=True, fill="x", padx=(0, 5))
         
@@ -2170,14 +2355,17 @@ class LogiPanApp:
 
     def change_user_name(self):
         from tkinter import simpledialog, messagebox
-        # 현재 이름 가져오기 (없으면 기본값 '관리자')
         current = getattr(self, 'current_user', '관리자')
 
         new_name = simpledialog.askstring("사용자 설정", "사용하실 이름을 입력하세요:",
                                           initialvalue=current)
         if new_name:
+            new_name = new_name.strip()
+            if not new_name:
+                return
             self.current_user = new_name
-            messagebox.showinfo("완료", f"이제부터 '{new_name}' 이름으로 댓글이 달립니다.")
+            self.save_user_name(new_name)  # [추가] 영구 저장 (업데이트 후에도 유지)
+            messagebox.showinfo("완료", f"이제부터 '{new_name}' 이름으로 댓글이 달립니다.\n(다음 실행에도 유지됩니다)")
 
 # --- 여기서부터는 클래스 밖 ---
 if __name__ == "__main__":
