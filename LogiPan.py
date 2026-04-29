@@ -12,7 +12,7 @@ from firebase_admin import credentials, firestore, messaging
 class LogiPanApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("로지판 (Logi-Pan) v11.0 - 통합 물류 파트너")
+        self.root.title("로지판 (Logi-Pan) - 통합 물류 파트너")
 
         # --- 구글 비밀기지 연결 시작 ---
         try:
