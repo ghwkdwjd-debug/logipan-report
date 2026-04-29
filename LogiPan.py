@@ -1776,6 +1776,31 @@ class LogiPanApp:
         except Exception as e:
             print(f"❌ 데이터 통합 로딩 실패: {e}")
 
+    def _format_kst_time(self, ts):
+        """Firestore timestamp를 한국시간 문자열로 변환. ts가 None/잘못된 값이면 빈 문자열."""
+        if not ts:
+            return ""
+        try:
+            from datetime import datetime, timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+            # Firestore timestamp는 보통 datetime 객체 또는 .seconds/.nanoseconds 가짐
+            if hasattr(ts, 'astimezone'):
+                dt = ts.astimezone(kst)
+            elif hasattr(ts, 'seconds'):
+                dt = datetime.fromtimestamp(ts.seconds, tz=kst)
+            else:
+                return ""
+            # 오늘이면 시간만, 다른 날이면 날짜+시간
+            now = datetime.now(kst)
+            if dt.date() == now.date():
+                return dt.strftime("%H:%M")
+            elif dt.year == now.year:
+                return dt.strftime("%m/%d %H:%M")
+            else:
+                return dt.strftime("%Y/%m/%d %H:%M")
+        except Exception:
+            return ""
+
     def on_message_double_click(self, event):
         import requests
         from io import BytesIO
@@ -1791,57 +1816,126 @@ class LogiPanApp:
         doc_ref = self.db.collection('field_reports').document(selected_id)
         data = doc_ref.get().to_dict()
         img_urls_raw = data.get('imageUrl', '')
+        report_ts = data.get('timestamp')
 
-        # 1. 팝업창 설정
+        # 1. 팝업창 설정 - 카톡 스타일
         detail_win = tk.Toplevel(self.root)
-        detail_win.title("📋 보고 상세 내용")
-        # [수정] 노트북 화면에 맞게 높이 자동 조정 + 메인 창 근처에 띄움
+        detail_win.title(f"💬 {data.get('user', '익명')} - {data.get('title', '')[:20]}")
         screen_h = self.root.winfo_screenheight()
         win_h = min(900, int(screen_h * 0.85))
-        self.position_popup(detail_win, 550, win_h)
-        detail_win.configure(bg="#F0F2F5")
+        self.position_popup(detail_win, 580, win_h)
+        detail_win.configure(bg="#B2C7DA")  # 카톡 배경 푸르스름
 
-        main_container = tk.Frame(detail_win, bg="#F0F2F5")
+        # ========== [카톡 스타일 상단 헤더 - 고정] ==========
+        header = tk.Frame(detail_win, bg="white", height=70,
+                          highlightthickness=0, bd=0)
+        header.pack(side="top", fill="x")
+        header.pack_propagate(False)
+
+        # 작업자 아이콘 (원형 박스)
+        avatar_frame = tk.Frame(header, bg="#1877F2", width=44, height=44)
+        avatar_frame.place(x=15, y=13)
+        avatar_frame.pack_propagate(False)
+        tk.Label(avatar_frame, text="👤", bg="#1877F2", fg="white",
+                 font=("맑은 고딕", 16)).pack(expand=True)
+
+        # 제목 + 부제
+        title_frame = tk.Frame(header, bg="white")
+        title_frame.place(x=70, y=10)
+        tk.Label(title_frame, text=data.get('title', '제목 없음'),
+                 font=("맑은 고딕", 13, "bold"), bg="white", fg="#262626",
+                 anchor="w").pack(anchor="w")
+        sub_text = f"작업자: {data.get('user', '익명')}  ·  {data.get('status', '처리중')}"
+        if report_ts:
+            time_str = self._format_kst_time(report_ts)
+            if time_str:
+                sub_text += f"  ·  📅 {time_str}"
+        tk.Label(title_frame, text=sub_text,
+                 font=("맑은 고딕", 9), bg="white", fg="#65676B",
+                 anchor="w").pack(anchor="w", pady=(3, 0))
+
+        # 헤더 아래 구분선
+        tk.Frame(detail_win, bg="#E1E4E8", height=1).pack(side="top", fill="x")
+
+        # ========== [메인 스크롤 영역] ==========
+        main_container = tk.Frame(detail_win, bg="#B2C7DA")
         main_container.pack(side="top", fill="both", expand=True)
 
-        canvas = tk.Canvas(main_container, bg="#F0F2F5", highlightthickness=0)
+        canvas = tk.Canvas(main_container, bg="#B2C7DA", highlightthickness=0)
         scrollbar = tk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg="#F0F2F5")
+        scrollable_frame = tk.Frame(canvas, bg="#B2C7DA")
 
         scrollable_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
 
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=520)
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=560)
         canvas.configure(yscrollcommand=scrollbar.set)
 
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
         # 하단 고정 영역
-        footer = tk.Frame(detail_win, bg="white", pady=15, padx=20, bd=1, relief="flat",
+        footer = tk.Frame(detail_win, bg="white", pady=10, padx=15, bd=0,
                           highlightthickness=1, highlightbackground="#E1E4E8")
         footer.pack(side="bottom", fill="x")
 
+        # 마우스 휠 스크롤 (Linux/Windows 모두 대응)
         def _safe_scroll(event):
             try:
                 if canvas.winfo_exists():
                     canvas.yview_scroll(int(-1*(event.delta/120)), "units")
             except: pass
-
         detail_win.bind("<MouseWheel>", _safe_scroll)
+        canvas.bind("<MouseWheel>", _safe_scroll)
+        scrollable_frame.bind("<MouseWheel>", _safe_scroll)
 
-        # --- [댓글 개별 삭제를 위한 우클릭 메뉴 정의] ---
+        # 우클릭 메뉴
         comment_context_menu = tk.Menu(detail_win, tearoff=0, font=("맑은 고딕", 10))
 
-        # 상단 타이틀
-        tk.Label(scrollable_frame, text=f"📌 {data.get('title', '제목 없음')}", 
-                 font=("맑은 고딕", 16, "bold"), fg="#1877F2", bg="#F0F2F5").pack(pady=(25, 5))
-        tk.Label(scrollable_frame, text=f"작업자: {data.get('user', '익명')}  |  상태: {data.get('status', '처리중')}", 
-                 font=("맑은 고딕", 10), fg="#65676B", bg="#F0F2F5").pack(pady=(0, 20))
+        # ========== [본문 카드 - 카톡 받은 메시지 스타일] ==========
+        body_outer = tk.Frame(scrollable_frame, bg="#B2C7DA")
+        body_outer.pack(fill="x", pady=(15, 5), padx=15)
 
-        # 사진 로드 영역
+        # 작업자 표시 (말풍선 위)
+        tk.Label(body_outer, text=f"👤 {data.get('user', '익명')}",
+                 font=("맑은 고딕", 9), bg="#B2C7DA", fg="#444",
+                 anchor="w").pack(anchor="w", padx=(8, 0))
+
+        # 본문 말풍선 (왼쪽 정렬)
+        body_bubble_outer = tk.Frame(body_outer, bg="#B2C7DA")
+        body_bubble_outer.pack(fill="x", anchor="w")
+
+        body_bubble = tk.Frame(body_bubble_outer, bg="white",
+                                highlightthickness=0)
+        body_bubble.pack(side="left", anchor="w", padx=(0, 60))
+
+        body_text = data.get('text', '')
+        # 본문 길이에 따라 width 조정
+        body_label = tk.Label(body_bubble, text=body_text,
+                                bg="white", fg="#1A1A1A",
+                                font=("맑은 고딕", 11), justify="left",
+                                wraplength=400, padx=14, pady=10)
+        body_label.pack(anchor="w")
+
+        # 시간 (말풍선 옆 작게)
+        if report_ts:
+            tt = self._format_kst_time(report_ts)
+            if tt:
+                tk.Label(body_bubble_outer, text=tt,
+                         bg="#B2C7DA", fg="#666",
+                         font=("맑은 고딕", 8)).pack(side="left", anchor="s", padx=(4, 0), pady=(0, 4))
+
+        # ========== [본문 사진들 - 본문 아래에 자연스럽게] ==========
+        photo_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+        photo_frame.pack(fill="x", padx=15, pady=(0, 5))
+
+        # 사진 PhotoImage 참조 유지 (GC 방지)
+        if not hasattr(self, '_detail_img_cache'):
+            self._detail_img_cache = []
+        self._detail_img_cache.clear()
+
         def load_images_async():
             if img_urls_raw:
                 url_list = [u.strip() for u in img_urls_raw.split(",") if u.strip()]
@@ -1850,49 +1944,58 @@ class LogiPanApp:
                         if not detail_win.winfo_exists(): return
                         response = requests.get(url, timeout=10)
                         img_raw = Image.open(BytesIO(response.content))
-                        img_raw.thumbnail((450, 600)) 
+                        img_raw.thumbnail((420, 500))
                         photo = ImageTk.PhotoImage(img_raw)
-                        
-                        if detail_win.winfo_exists():
-                            lbl = tk.Label(scrollable_frame, image=photo, bg="#F0F2F5")
-                            lbl.image = photo 
-                            lbl.pack(pady=10)
-                            
-                            def save_this(u=url, idx=i):
-                                res = requests.get(u)
-                                desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-                                path = os.path.join(desktop, f"현장보고_{selected_id[:5]}_{idx+1}.jpg")
-                                with open(path, "wb") as f: f.write(res.content)
-                                messagebox.showinfo("완료", f"{idx+1}번 사진 저장 완료!")
+                        self._detail_img_cache.append(photo)
 
-                            tk.Button(scrollable_frame, text=f"💾 사진 {i+1} 저장", bg="#E7F3FF", fg="#1877F2",
-                                      font=("맑은 고딕", 9, "bold"), relief="flat", command=save_this).pack(pady=(0, 15))
-                    except:
                         if detail_win.winfo_exists():
-                            tk.Label(scrollable_frame, text=f"❌ 사진 {i+1} 로드 실패", fg="red", bg="#F0F2F5").pack()
-            else:
-                if detail_win.winfo_exists():
-                    tk.Label(scrollable_frame, text="🖼️ 첨부된 사진이 없습니다.", bg="#F0F2F5", fg="#8E8E8E").pack(pady=20)
+                            # 사진 컨테이너 (본문처럼 왼쪽 정렬)
+                            pf = tk.Frame(photo_frame, bg="#B2C7DA")
+                            pf.pack(fill="x", anchor="w", pady=4)
+
+                            img_holder = tk.Frame(pf, bg="white", padx=2, pady=2)
+                            img_holder.pack(side="left", anchor="w")
+                            lbl = tk.Label(img_holder, image=photo, bg="white",
+                                           cursor="hand2")
+                            lbl.pack()
+                            # 클릭하면 원본 보기
+                            lbl.bind("<Button-1>", lambda e, u=url: __import__('webbrowser').open(u))
+
+                            # 우클릭으로 저장 메뉴
+                            def save_this(u=url, idx=i):
+                                try:
+                                    res = requests.get(u)
+                                    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+                                    path = os.path.join(desktop, f"현장보고_{selected_id[:5]}_{idx+1}.jpg")
+                                    with open(path, "wb") as f: f.write(res.content)
+                                    messagebox.showinfo("완료", f"바탕화면에 저장됨:\n{path}", parent=detail_win)
+                                except Exception as ex:
+                                    messagebox.showerror("실패", f"저장 실패: {ex}", parent=detail_win)
+
+                            save_menu = tk.Menu(detail_win, tearoff=0, font=("맑은 고딕", 9))
+                            save_menu.add_command(label="🔍 원본 크기로 보기",
+                                                   command=lambda u=url: __import__('webbrowser').open(u))
+                            save_menu.add_command(label="💾 바탕화면에 저장",
+                                                   command=save_this)
+                            lbl.bind("<Button-3>", lambda e, m=save_menu: m.post(e.x_root, e.y_root))
+                    except Exception as e:
+                        if detail_win.winfo_exists():
+                            tk.Label(photo_frame, text=f"❌ 사진 {i+1} 로드 실패: {e}",
+                                     fg="#c00", bg="#B2C7DA",
+                                     font=("맑은 고딕", 9)).pack(anchor="w", pady=2)
 
         threading.Thread(target=load_images_async, daemon=True).start()
 
-        # 현장 메시지 카드
-        msg_card = tk.Frame(scrollable_frame, bg="white", highlightthickness=1, highlightbackground="#E1E4E8")
-        msg_card.pack(padx=25, pady=(20, 0), fill="x")
+        # ========== [댓글 영역 - 카톡 스타일 채팅] ==========
+        # 구분선
+        divider_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+        divider_frame.pack(fill="x", pady=(15, 5), padx=15)
+        tk.Frame(divider_frame, bg="#9DB0C2", height=1).pack(fill="x", pady=8)
+        tk.Label(divider_frame, text="💬 대화", bg="#B2C7DA", fg="#444",
+                 font=("맑은 고딕", 9, "bold")).pack(anchor="center")
 
-        tk.Label(msg_card, text="📝 상세 내용", font=("맑은 고딕", 11, "bold"), bg="white", fg="#262626").pack(anchor="w", padx=15, pady=(15, 5))
-        txt = tk.Text(msg_card, height=6, font=("맑은 고딕", 11), bg="#F8F9FA", relief="flat", padx=10, pady=10)
-        txt.insert("1.0", data.get('text', ''))
-        txt.config(state="disabled")
-        txt.pack(padx=15, pady=(0, 15), fill="x")
-
-        # 댓글 카드
-        comment_card = tk.Frame(scrollable_frame, bg="white", highlightthickness=1, highlightbackground="#E1E4E8")
-        comment_card.pack(padx=25, pady=20, fill="x")
-
-        tk.Label(comment_card, text="💬 댓글 (우클릭: 수정/삭제)", font=("맑은 고딕", 11, "bold"), bg="white", fg="#262626").pack(anchor="w", padx=15, pady=(15, 5))
-        comment_list_frame = tk.Frame(comment_card, bg="white")
-        comment_list_frame.pack(padx=15, pady=(0, 15), fill="x")
+        comment_list_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+        comment_list_frame.pack(fill="x", padx=10, pady=(5, 15))
 
         # [댓글 개별 삭제 함수]
         def delete_this_comment(comment_id):
@@ -1923,8 +2026,14 @@ class LogiPanApp:
             for w in comment_list_frame.winfo_children(): w.destroy()
             self._inline_img_cache.clear()
 
-            comments = doc_ref.collection('comments').order_by('timestamp').stream()
-            
+            comments = list(doc_ref.collection('comments').order_by('timestamp').stream())
+
+            if not comments:
+                tk.Label(comment_list_frame, text="아직 댓글이 없습니다",
+                         bg="#B2C7DA", fg="#666",
+                         font=("맑은 고딕", 9, "italic")).pack(pady=15)
+                return
+
             for c in comments:
                 cid = c.id
                 d = c.to_dict()
@@ -1932,60 +2041,122 @@ class LogiPanApp:
                 t = d.get('text', '')
                 img_url = d.get('imageUrl', '')
                 edited = d.get('edited', False)
-                
-                if detail_win.winfo_exists():
-                    if "[답장]" in t:
-                        bg_color = "#F0F2F5"; border_color = "#CCD0D5"
-                        tag_text = f"👤 {u} (작업자)"; fg_color = "#262626"
-                        clean_text = t.replace("[답장] ", "")
+                ts = d.get('timestamp')
+
+                if not detail_win.winfo_exists(): return
+
+                # 작업자(받은) vs 관리자(보낸) 구분
+                if "[답장]" in t:
+                    is_admin = False
+                    clean_text = t.replace("[답장] ", "").replace("[답장]", "").strip()
+                else:
+                    is_admin = True
+                    clean_text = t
+
+                if edited:
+                    clean_text = clean_text + "  (수정됨)"
+                # 사진만 있는 경우 (사진) 텍스트 처리
+                if clean_text in ("(사진)", ""):
+                    clean_text = ""  # 텍스트 없으면 빈칸
+
+                time_str = self._format_kst_time(ts)
+
+                # 말풍선 컨테이너 (카톡처럼 좌우 정렬)
+                row = tk.Frame(comment_list_frame, bg="#B2C7DA")
+                row.pack(fill="x", pady=4, padx=5)
+                row.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+
+                if is_admin:
+                    # 관리자(나): 오른쪽 정렬, 노란 카톡 말풍선
+                    bubble_color = "#FFEB33"
+                    text_color = "#1A1A1A"
+                    name_color = "#444"
+                    align_side = "right"
+                    text_anchor = "e"
+                else:
+                    # 작업자(상대): 왼쪽 정렬, 흰 말풍선
+                    bubble_color = "white"
+                    text_color = "#1A1A1A"
+                    name_color = "#444"
+                    align_side = "left"
+                    text_anchor = "w"
+
+                # 작업자만 이름 표시 (카톡처럼 받는 사람만)
+                if not is_admin:
+                    name_label = tk.Label(row, text=f"👤 {u}",
+                                           bg="#B2C7DA", fg=name_color,
+                                           font=("맑은 고딕", 8))
+                    name_label.pack(anchor="w", padx=(2, 0))
+                    name_label.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+
+                # 말풍선 + 시간 묶음
+                bubble_row = tk.Frame(row, bg="#B2C7DA")
+                bubble_row.pack(fill="x", anchor=text_anchor)
+                bubble_row.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+
+                # 말풍선 컨테이너
+                bubble_container = tk.Frame(bubble_row, bg="#B2C7DA")
+                if is_admin:
+                    bubble_container.pack(side="right", padx=(60, 0))
+                else:
+                    bubble_container.pack(side="left", padx=(0, 60))
+
+                # 말풍선 본체
+                bubble = tk.Frame(bubble_container, bg=bubble_color)
+                if is_admin:
+                    bubble.pack(side="right")
+                else:
+                    bubble.pack(side="left")
+                bubble.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+
+                # 텍스트가 있으면 라벨, 없으면 패스
+                if clean_text:
+                    text_label = tk.Label(bubble, text=clean_text,
+                                           bg=bubble_color, fg=text_color,
+                                           font=("맑은 고딕", 11),
+                                           justify="left", wraplength=380,
+                                           padx=12, pady=8)
+                    text_label.pack(anchor="w" if not is_admin else "e")
+                    text_label.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+
+                # 첨부 이미지
+                if img_url:
+                    try:
+                        import requests as _rq
+                        from io import BytesIO
+                        from PIL import Image, ImageTk
+                        resp = _rq.get(img_url, timeout=10)
+                        pil_img = Image.open(BytesIO(resp.content))
+                        w, h = pil_img.size
+                        max_w = 280
+                        if w > max_w:
+                            ratio = max_w / w
+                            pil_img = pil_img.resize((max_w, int(h * ratio)), Image.LANCZOS)
+                        tk_img = ImageTk.PhotoImage(pil_img)
+                        self._inline_img_cache.append(tk_img)
+                        # 사진은 말풍선과 별도 박스로 (카톡처럼)
+                        img_holder = tk.Frame(bubble, bg=bubble_color, padx=4, pady=4)
+                        img_holder.pack()
+                        img_label = tk.Label(img_holder, image=tk_img,
+                                              bg=bubble_color, cursor="hand2")
+                        img_label.pack()
+                        img_label.bind("<Button-1>", lambda e, url=img_url: __import__('webbrowser').open(url))
+                        img_label.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+                    except Exception as ex:
+                        tk.Label(bubble, text=f"[사진 로드 실패]",
+                                 bg=bubble_color, fg="#999",
+                                 font=("맑은 고딕", 8), padx=12, pady=4).pack()
+
+                # 시간 (말풍선 옆 작게, 카톡처럼)
+                if time_str:
+                    time_label = tk.Label(bubble_container, text=time_str,
+                                           bg="#B2C7DA", fg="#555",
+                                           font=("맑은 고딕", 8))
+                    if is_admin:
+                        time_label.pack(side="right", anchor="s", padx=(0, 4), pady=(0, 2),
+                                        before=bubble)
                     else:
-                        bg_color = "#E7F3FF"; border_color = "#1877F2"
-                        tag_text = f"📢 {u} (관리자)"; fg_color = "#0056b3"
-                        clean_text = t
-
-                    if edited:
-                        clean_text += "  (수정됨)"
-
-                    f = tk.Frame(comment_list_frame, bg=bg_color, padx=10, pady=6,
-                                 highlightthickness=1, highlightbackground=border_color)
-                    f.pack(fill="x", pady=3)
-
-                    # 우클릭 - 수정/삭제 메뉴
-                    f.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
-                    
-                    l1 = tk.Label(f, text=tag_text, font=("맑은 고딕", 8, "bold"), bg=bg_color, fg=fg_color)
-                    l1.pack(anchor="w")
-                    l1.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
-
-                    l2 = tk.Label(f, text=clean_text, bg=bg_color, fg="#262626",
-                                 anchor="w", font=("맑은 고딕", 10), justify="left", wraplength=550)
-                    l2.pack(fill="x")
-                    l2.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
-
-                    # [추가] 첨부 이미지 표시
-                    if img_url:
-                        try:
-                            import requests
-                            from io import BytesIO
-                            from PIL import Image, ImageTk
-                            resp = requests.get(img_url, timeout=10)
-                            pil_img = Image.open(BytesIO(resp.content))
-                            # 가로 250px로 축소 (작게 미리보기)
-                            w, h = pil_img.size
-                            max_w = 250
-                            if w > max_w:
-                                ratio = max_w / w
-                                pil_img = pil_img.resize((max_w, int(h * ratio)), Image.LANCZOS)
-                            tk_img = ImageTk.PhotoImage(pil_img)
-                            self._inline_img_cache.append(tk_img)  # GC 방지
-                            img_label = tk.Label(f, image=tk_img, bg=bg_color, cursor="hand2")
-                            img_label.pack(anchor="w", pady=(4, 0))
-                            # 클릭하면 원본 보기 (브라우저)
-                            img_label.bind("<Button-1>", lambda e, url=img_url: __import__('webbrowser').open(url))
-                            img_label.bind("<Button-3>", lambda e, id=cid, txt=clean_text.replace("  (수정됨)", ""): show_comment_menu(e, id, txt))
-                        except Exception as e:
-                            tk.Label(f, text=f"[사진 로드 실패: {e}]", bg=bg_color, fg="#999",
-                                    font=("맑은 고딕", 8)).pack(anchor="w")
+                        time_label.pack(side="left", anchor="s", padx=(4, 0), pady=(0, 2))
 
         def show_comment_menu(event, cid, current_text):
             comment_context_menu.delete(0, tk.END)
@@ -1998,6 +2169,9 @@ class LogiPanApp:
         refresh_comments()
 
         # 하단 입력창
+        # [추가] 안내 문구
+        tk.Label(footer, text="💡 댓글 입력 + Ctrl+V로 캡처 이미지 바로 붙여넣기 가능",
+                 bg="white", fg="#888", font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 2))
         entry = tk.Entry(footer, font=("맑은 고딕", 12), bd=1, relief="solid", highlightthickness=0)
         entry.pack(fill="x", pady=(0, 5), ipady=8)
 
@@ -2138,11 +2312,8 @@ class LogiPanApp:
                                     f"💬 {self.current_user}님의 댓글",
                                     preview)
 
-        # [추가] 사진 첨부 버튼들
+        # [추가] 사진 첨부 버튼들 (Ctrl+V로 클립보드 이미지 자동 첨부)
         tk.Button(btn_container, text="📎 사진(파일)", command=attach_image_from_file,
-                  bg="#f0f2f5", fg="#444", font=("맑은 고딕", 9),
-                  relief="flat", pady=8).pack(side="left", padx=(0, 3))
-        tk.Button(btn_container, text="📋 클립보드", command=attach_image_from_clipboard,
                   bg="#f0f2f5", fg="#444", font=("맑은 고딕", 9),
                   relief="flat", pady=8).pack(side="left", padx=(0, 5))
         tk.Button(btn_container, text="🚀 댓글 전송", command=send_cmd, bg="#1877F2", fg="white", 
