@@ -93,12 +93,6 @@
         <button id="notifBtn" onclick="enableNotifications()" style="background:#fbbc04; color:white; border:none; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:bold; cursor:pointer; white-space:nowrap;">🔔 알림 켜기</button>
     </div>
 
-    <!-- 진단 패널 (알림 안 올 때 디버그용) -->
-    <div style="margin-bottom:10px; text-align:right;">
-        <button onclick="testLocalNotification()" style="background:#9333ea; color:white; border:none; border-radius:6px; padding:6px 10px; font-size:11px; cursor:pointer;">🧪 로컬 알림 테스트</button>
-    </div>
-    <pre id="debugPanel" style="display:none; background:#1e1e1e; color:#0f0; padding:10px; border-radius:6px; font-size:10px; line-height:1.4; max-height:300px; overflow:auto; margin-bottom:15px; white-space:pre-wrap; word-break:break-all;"></pre>
-
     <input type="hidden" id="userName">
 
     <div id="section-report">
@@ -297,18 +291,11 @@
             return;
         }
 
-        const debugLog = [];
-        const log = (msg) => {
-            console.log(msg);
-            debugLog.push(msg);
-        };
-
         try {
-            log("1️⃣ 알림 권한 요청 중...");
+            // 권한 요청
             const permission = await Notification.requestPermission();
-            log(`   결과: ${permission}`);
             if (permission === 'denied') {
-                alert("🔕 알림이 차단되었습니다.\n\n폰 설정에서 직접 허용해주세요:\n[설정] → [Safari] → [알림]");
+                alert("🔕 알림이 차단되었습니다.\n\n폰 설정에서 직접 허용해주세요:\n[설정] → [알림] → [로지판]");
                 updateNotifButton();
                 return;
             }
@@ -317,85 +304,59 @@
                 return;
             }
 
-            log("2️⃣ 기존 서비스워커 모두 해제 중...");
+            // 기존 서비스워커 모두 해제 (깨끗한 상태로)
             const allRegs = await navigator.serviceWorker.getRegistrations();
             for (const reg of allRegs) {
-                log(`   해제: ${reg.scope}`);
                 await reg.unregister();
             }
 
-            log("3️⃣ 새 FCM 서비스워커 등록 중...");
+            // 새 FCM 서비스워커 등록
             const swRegistration = await navigator.serviceWorker.register('firebase-messaging-sw.js');
-            log(`   scope: ${swRegistration.scope}`);
-
-            log("4️⃣ 서비스워커 활성화 대기...");
             await navigator.serviceWorker.ready;
-            log("   활성화 완료");
 
-            log("5️⃣ 기존 토큰 삭제 (강제 새 토큰)...");
+            // 기존 토큰 삭제 후 새 토큰 발급
             try {
                 await messaging.deleteToken();
-                log("   삭제 완료");
-            } catch (e) {
-                log(`   삭제 스킵: ${e.message}`);
-            }
+            } catch (e) {}
 
-            log("6️⃣ 새 FCM 토큰 발급 중...");
             const token = await messaging.getToken({
                 vapidKey: VAPID_KEY,
                 serviceWorkerRegistration: swRegistration
             });
             if (!token) {
-                log("   ❌ 토큰 발급 실패");
-                alert("토큰 발급 실패\n\n진단 로그:\n" + debugLog.join('\n'));
+                alert("토큰 발급 실패. 다시 시도해주세요.");
                 return;
             }
-            log(`   ✅ 토큰: ${token.substring(0, 30)}...`);
+            console.log("✅ FCM 토큰:", token.substring(0, 30) + "...");
 
-            log("7️⃣ Firestore 저장 중...");
+            // Firestore 저장
             await db.collection("fcm_tokens").doc(userName).set({
                 token: token,
                 user: userName,
                 updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
                 userAgent: navigator.userAgent
             });
-            log("   ✅ 저장 완료");
 
-            log("8️⃣ 포그라운드 메시지 리스너 등록...");
+            // 포그라운드 메시지 수신
             messaging.onMessage(payload => {
-                console.log("📨 포그라운드 메시지:", payload);
-                const title = payload.notification?.title || "새 알림";
-                const body = payload.notification?.body || "";
+                console.log("📨 메시지:", payload);
+                const title = payload.data?.title || payload.notification?.title || "새 알림";
+                const body = payload.data?.body || payload.notification?.body || "";
                 showToast(`🔔 ${title}: ${body}`);
-                // 포그라운드에서도 시스템 알림 띄우기 (iOS는 안 뜰 수 있지만 시도)
                 if (Notification.permission === 'granted' && swRegistration) {
                     swRegistration.showNotification(title, {
                         body: body,
                         icon: 'https://ghwkdwjd-debug.github.io/logipan-report/icon.png',
-                        tag: 'logipan-fg'
+                        tag: 'logipan-fg-' + Date.now()
                     });
                 }
             });
-            log("   ✅ 리스너 등록 완료");
 
             updateNotifButton();
-            // 진단 패널에 결과 표시
-            const debugBox = document.getElementById('debugPanel');
-            if (debugBox) {
-                debugBox.style.display = 'block';
-                debugBox.innerText = "🔧 알림 진단 결과\n\n" + debugLog.join('\n') +
-                    "\n\n토큰 (앞 50자):\n" + token.substring(0, 50);
-            }
             showToast("✅ 알림이 켜졌습니다!");
         } catch (e) {
-            log(`❌ 오류: ${e.name}: ${e.message}`);
-            const debugBox = document.getElementById('debugPanel');
-            if (debugBox) {
-                debugBox.style.display = 'block';
-                debugBox.innerText = "🔧 알림 진단 결과 (실패)\n\n" + debugLog.join('\n') +
-                    "\n\n오류 상세:\n" + (e.stack || e.message);
-            }
-            alert("알림 설정 실패:\n" + e.message + "\n\n자세한 내용은 화면 하단 진단 패널 확인");
+            console.error("알림 설정 실패:", e);
+            alert("알림 설정 실패: " + (e.message || e));
         }
     }
 
