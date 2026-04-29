@@ -1056,8 +1056,8 @@ class LogiPanApp:
             self._open_notice_view(item_id, post_data)
             return
 
-        # 개인지시/문의는 대화 스레드 창
-        self._open_thread_window(item_id, post_data, row_values)
+        # 개인지시/문의는 대화 스레드 창 (post_data만으로 호출)
+        self._open_thread_window(item_id, post_data, None)
 
     def _open_notice_view(self, item_id, post_data):
         """전체공지는 단순 열람 + 숨김 버튼"""
@@ -1104,233 +1104,574 @@ class LogiPanApp:
                   command=win.destroy, relief="flat", cursor="hand2",
                   padx=15, pady=5).pack(side="right", padx=20)
 
-    def _open_thread_window(self, item_id, post_data, row_values):
-        """개인지시/문의에 대한 대화형 스레드 창"""
-        win = tk.Toplevel(self.root)
-        win.title(f"💬 {post_data.get('user', '작업자')}님과의 대화")
-        win.configure(bg="#F0F2F5")
-        self.position_popup(win, 580, 740)
+    def _open_thread_window(self, item_id, post_data, row_values=None):
+        """개인지시/문의 대화창 - 작업보고와 동일한 카톡 스타일"""
+        import threading
+        from tkinter import messagebox
 
-        # 상단 헤더
-        header = tk.Frame(win, bg="#1a73e8", pady=12)
-        header.pack(fill="x")
-        tk.Label(header, text=f"👤 {post_data.get('user', '작업자')}",
-                 font=("맑은 고딕", 13, "bold"), bg="#1a73e8", fg="white").pack()
-        ts = post_data.get('timestamp')
-        time_str = ts.strftime('%Y-%m-%d %H:%M') if ts else ""
-        tk.Label(header, text=f"📅 시작: {time_str} | 📁 {post_data.get('category', '')}",
-                 font=("맑은 고딕", 9), bg="#1a73e8", fg="#d4e3fc").pack()
+        doc_ref = self.db.collection('board_posts').document(item_id)
+        category = post_data.get('category', '')
+        report_ts = post_data.get('timestamp')
+        # 원글 작성자 (real_sender 우선, 없으면 user)
+        original_writer = post_data.get('real_sender') or post_data.get('user', '익명')
+        # '지시'면 관리자가 보낸 거 = is_admin_origin True
+        is_admin_origin = '지시' in category
 
-        # 하단 입력창 (먼저 배치해서 공간 확보)
-        input_frame = tk.Frame(win, bg="white", bd=1, relief="flat",
-                               highlightthickness=1, highlightbackground="#E1E4E8")
-        input_frame.pack(fill="x", side="bottom")
+        # 팝업 창
+        detail_win = tk.Toplevel(self.root)
+        title_short = post_data.get('text', '')[:20]
+        detail_win.title(f"💬 {original_writer} - {title_short}")
+        screen_h = self.root.winfo_screenheight()
+        win_h = min(900, int(screen_h * 0.85))
+        self.position_popup(detail_win, 580, win_h)
+        detail_win.configure(bg="#B2C7DA")
 
-        reply_text = tk.Text(input_frame, font=("맑은 고딕", 10), height=3,
-                             bg="white", padx=10, pady=8, relief="flat", wrap="word")
-        reply_text.pack(fill="x", padx=10, pady=(8, 4))
-        reply_text.focus_set()
+        # ========== [상단 헤더] ==========
+        header = tk.Frame(detail_win, bg="white", height=70,
+                          highlightthickness=0, bd=0)
+        header.pack(side="top", fill="x")
+        header.pack_propagate(False)
 
-        btn_bar = tk.Frame(input_frame, bg="white")
-        btn_bar.pack(fill="x", padx=10, pady=(0, 10))
+        # 아이콘
+        icon_color = "#8B5CF6" if is_admin_origin else "#3B82F6"
+        icon_emoji = "🔒" if is_admin_origin else "💬"
+        avatar_frame = tk.Frame(header, bg=icon_color, width=44, height=44)
+        avatar_frame.place(x=15, y=13)
+        avatar_frame.pack_propagate(False)
+        tk.Label(avatar_frame, text=icon_emoji, bg=icon_color, fg="white",
+                 font=("맑은 고딕", 16)).pack(expand=True)
 
-        # 대화 스크롤 영역
-        chat_container = tk.Frame(win, bg="#F0F2F5")
-        chat_container.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+        # 제목 + 부제
+        title_frame = tk.Frame(header, bg="white")
+        title_frame.place(x=70, y=10)
 
-        canvas = tk.Canvas(chat_container, bg="#F0F2F5", highlightthickness=0)
-        sb = tk.Scrollbar(chat_container, orient="vertical", command=canvas.yview)
-        chat_frame = tk.Frame(canvas, bg="#F0F2F5")
+        cat_label = "🔒 개인지시" if is_admin_origin else "💬 문의"
+        if is_admin_origin and post_data.get('user'):
+            cat_label += f" → {post_data.get('user')}"
 
-        chat_frame.bind("<Configure>",
-                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=chat_frame, anchor="nw", width=540)
-        canvas.configure(yscrollcommand=sb.set)
+        # 제목 = 카테고리 표시
+        title_text_widget = tk.Text(title_frame, height=1, bd=0,
+                                     font=("맑은 고딕", 13, "bold"),
+                                     bg="white", fg="#262626",
+                                     wrap="none", cursor="xterm",
+                                     highlightthickness=0, width=40)
+        title_text_widget.insert("1.0", cat_label)
+        def _readonly_handler(event):
+            if event.state & 0x0004:
+                return None
+            if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Prior', 'Next'):
+                return None
+            return "break"
+        title_text_widget.bind("<Key>", _readonly_handler)
+        title_text_widget.pack(anchor="w")
 
-        sb.pack(side="right", fill="y")
+        sub_text = f"작성: {original_writer}  ·  {post_data.get('status', '신규')}"
+        if report_ts:
+            time_str = self._format_kst_time(report_ts)
+            if time_str:
+                sub_text += f"  ·  📅 {time_str}"
+        tk.Label(title_frame, text=sub_text,
+                 font=("맑은 고딕", 9), bg="white", fg="#65676B",
+                 anchor="w").pack(anchor="w", pady=(3, 0))
+
+        # 헤더 아래 구분선
+        tk.Frame(detail_win, bg="#E1E4E8", height=1).pack(side="top", fill="x")
+
+        # ========== [메인 스크롤 영역] ==========
+        main_container = tk.Frame(detail_win, bg="#B2C7DA")
+        main_container.pack(side="top", fill="both", expand=True)
+
+        canvas = tk.Canvas(main_container, bg="#B2C7DA", highlightthickness=0)
+        scrollbar = tk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg="#B2C7DA")
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=560)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
-        def _add_bubble(text, sender_name, side, bg_color, fg_color="#111", time_str=""):
-            row = tk.Frame(chat_frame, bg="#F0F2F5")
-            row.pack(fill="x", padx=5, pady=4)
-            anchor = "w" if side == "left" else "e"
-            lbl_name = tk.Label(row, text=sender_name, font=("맑은 고딕", 8),
-                                bg="#F0F2F5", fg="#777")
-            # [수정] Label → Text 위젯으로 변경 (드래그 복사 가능)
-            # 텍스트 줄 수 계산해서 높이 동적 결정
-            wraplen_chars = 32  # wraplength 380px 기준 대략적인 글자 수
-            line_count = 1
-            for paragraph in text.split('\n'):
-                line_count += max(1, (len(paragraph) + wraplen_chars - 1) // wraplen_chars) - 1
-                line_count += 1
-            line_count = max(1, min(20, line_count - 1))  # 1~20줄 제한
+        # 하단 고정 영역
+        footer = tk.Frame(detail_win, bg="white", pady=10, padx=15, bd=0,
+                          highlightthickness=1, highlightbackground="#E1E4E8")
+        footer.pack(side="bottom", fill="x")
 
-            bubble = tk.Text(row, font=("맑은 고딕", 10),
-                             bg=bg_color, fg=fg_color, wrap="word",
-                             padx=12, pady=8, bd=0, relief="flat",
-                             height=line_count, width=38,
-                             cursor="xterm",
-                             highlightthickness=0)
-            bubble.insert("1.0", text)
-            bubble.config(state="disabled")  # 편집은 막되 선택/복사는 허용
+        def _safe_scroll(event):
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            except: pass
+        detail_win.bind("<MouseWheel>", _safe_scroll)
+        canvas.bind("<MouseWheel>", _safe_scroll)
+        scrollable_frame.bind("<MouseWheel>", _safe_scroll)
 
-            # disabled 상태에서도 마우스 드래그 선택 가능하도록
-            def _enable_select(e):
-                bubble.config(state="normal")
-            def _disable_after(e):
-                bubble.config(state="disabled")
-            bubble.bind("<Button-1>", lambda e: bubble.config(state="normal"))
-            bubble.bind("<FocusOut>", lambda e: bubble.config(state="disabled"))
+        # ========== [본문 - 카톡 말풍선] ==========
+        body_date = self._get_kst_date(report_ts)
+        if body_date:
+            sep_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+            sep_frame.pack(fill="x", pady=(15, 5))
+            tk.Label(sep_frame,
+                     text=self._format_date_separator(body_date),
+                     bg="#9DB0C2", fg="white",
+                     font=("맑은 고딕", 8, "bold"),
+                     padx=12, pady=3).pack(anchor="center")
 
-            # Ctrl+C 복사 단축키도 동작하게
-            def _copy(e):
-                try:
-                    sel = bubble.get("sel.first", "sel.last")
-                    self.root.clipboard_clear()
-                    self.root.clipboard_append(sel)
-                except tk.TclError:
-                    pass
-                return "break"
-            bubble.bind("<Control-c>", _copy)
-            bubble.bind("<Control-C>", _copy)
+        body_outer = tk.Frame(scrollable_frame, bg="#B2C7DA")
+        body_outer.pack(fill="x", pady=(5, 5), padx=15)
 
-            lbl_time = tk.Label(row, text=time_str, font=("맑은 고딕", 7),
-                                bg="#F0F2F5", fg="#999")
-            lbl_name.pack(anchor=anchor, padx=8)
-            bubble.pack(anchor=anchor, padx=8)
-            lbl_time.pack(anchor=anchor, padx=8)
+        # 본문 작성자 표시
+        body_align_anchor = "e" if is_admin_origin else "w"
+        tk.Label(body_outer, text=f"{'📢' if is_admin_origin else '👤'} {original_writer}",
+                 font=("맑은 고딕", 9, "bold"), bg="#B2C7DA", fg="#444",
+                 anchor=body_align_anchor).pack(anchor=body_align_anchor, padx=(8, 8))
 
-        # 1) 첫 메시지 = 원글 (작업자 쪽 / 왼쪽 흰 말풍선)
-        orig_ts = post_data.get('timestamp')
-        orig_time = orig_ts.strftime('%m/%d %H:%M') if orig_ts else ""
-        # 개인지시는 관리자가 보낸 것이므로 오른쪽, 문의는 작업자가 보낸 것이므로 왼쪽
-        category = post_data.get('category', '')
-        if '지시' in category:
-            # [수정] '관리자' 하드코딩 제거, real_sender 우선 사용
-            sender_name = post_data.get('real_sender') or '관리자'
-            _add_bubble(post_data.get('text', ''), sender_name,
-                        "right", "#D8E7FF", "#0d3b78", orig_time)
+        # 본문 말풍선
+        body_bubble_outer = tk.Frame(body_outer, bg="#B2C7DA")
+        body_bubble_outer.pack(fill="x", anchor=body_align_anchor)
+
+        body_color = "#FFEB33" if is_admin_origin else "white"
+
+        body_bubble = tk.Frame(body_bubble_outer, bg=body_color, highlightthickness=0)
+        if is_admin_origin:
+            body_bubble.pack(side="right", anchor="e", padx=(60, 0))
         else:
-            _add_bubble(post_data.get('text', ''), post_data.get('user', '작업자'),
-                        "left", "white", "#111", orig_time)
+            body_bubble.pack(side="left", anchor="w", padx=(0, 60))
 
-        # 2) 레거시 reply 필드가 있으면 관리자 답변으로 표시 (과거 단일 답장 시스템)
-        legacy_reply = (post_data.get('reply') or '').strip()
-        if legacy_reply:
-            reply_ts = post_data.get('reply_time')
-            reply_time = reply_ts.strftime('%m/%d %H:%M') if reply_ts else ""
-            _add_bubble(legacy_reply, "관리자 (예전 답장)",
-                        "right", "#FEF7CD", "#5c4b00", reply_time)
+        body_text = post_data.get('text', '')
+        body_longest = max((len(line) for line in body_text.split('\n')), default=0)
+        body_kor_ratio = sum(1 for ch in body_text if ord(ch) > 127) / max(1, len(body_text))
+        body_char_w = 1.7 if body_kor_ratio > 0.5 else 1.0
+        body_width = min(42, max(5, int(body_longest * body_char_w) + 1))
 
-        # 3) messages 서브컬렉션 로드
-        try:
-            msgs = self.db.collection('board_posts').document(item_id) \
-                       .collection('messages').order_by('timestamp').get()
+        lines = body_text.count('\n') + 1
+        approx_extra = sum(max(0, (len(line) - 30) // 30) for line in body_text.split('\n'))
+        text_height = max(1, min(20, lines + approx_extra))
+
+        body_label = tk.Text(body_bubble, font=("맑은 고딕", 11),
+                              bg=body_color, fg="#1A1A1A",
+                              wrap="word", bd=0, padx=14, pady=10,
+                              height=text_height, width=body_width,
+                              highlightthickness=0, cursor="xterm")
+        body_label.insert("1.0", body_text)
+        def _body_readonly(event):
+            if event.state & 0x0004:
+                return None
+            if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Prior', 'Next'):
+                return None
+            return "break"
+        body_label.bind("<Key>", _body_readonly)
+        body_label.pack(anchor=body_align_anchor)
+
+        # 시간
+        if report_ts:
+            tt = self._format_kst_time_only(report_ts)
+            if tt:
+                tk.Label(body_bubble_outer, text=tt,
+                         bg="#B2C7DA", fg="#666",
+                         font=("맑은 고딕", 8)).pack(side="right" if is_admin_origin else "left",
+                                                  anchor="s",
+                                                  padx=(4, 0) if not is_admin_origin else (0, 4),
+                                                  pady=(0, 4))
+
+        # ========== [댓글(messages) 영역] ==========
+        divider_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+        divider_frame.pack(fill="x", pady=(15, 5), padx=15)
+        tk.Frame(divider_frame, bg="#9DB0C2", height=1).pack(fill="x", pady=8)
+        tk.Label(divider_frame, text="💬 대화", bg="#B2C7DA", fg="#444",
+                 font=("맑은 고딕", 9, "bold")).pack(anchor="center")
+
+        comment_list_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+        comment_list_frame.pack(fill="x", padx=10, pady=(5, 15))
+
+        # 댓글 영역 우클릭 메뉴 (수정/삭제)
+        msg_context_menu = tk.Menu(detail_win, tearoff=0, font=("맑은 고딕", 10))
+
+        if not hasattr(self, '_inline_img_cache_board'):
+            self._inline_img_cache_board = []
+
+        def delete_message(msg_id):
+            if messagebox.askyesno("삭제", "이 메시지를 삭제하시겠습니까?", parent=detail_win):
+                doc_ref.collection('messages').document(msg_id).delete()
+                refresh_messages()
+
+        def edit_message(msg_id, current_text):
+            from tkinter import simpledialog
+            new_text = simpledialog.askstring("메시지 수정", "내용을 수정하세요:",
+                                                initialvalue=current_text, parent=detail_win)
+            if new_text is not None and new_text.strip():
+                doc_ref.collection('messages').document(msg_id).update({
+                    'text': new_text.strip(),
+                    'edited': True,
+                    'editedAt': firestore.SERVER_TIMESTAMP
+                })
+                refresh_messages()
+
+        def show_msg_menu(event, mid, current_text):
+            msg_context_menu.delete(0, tk.END)
+            msg_context_menu.add_command(label="✏️ 수정",
+                                          command=lambda: edit_message(mid, current_text))
+            msg_context_menu.add_command(label="🗑️ 삭제",
+                                          command=lambda: delete_message(mid))
+            msg_context_menu.post(event.x_root, event.y_root)
+
+        def refresh_messages():
+            if not detail_win.winfo_exists(): return
+            for w in comment_list_frame.winfo_children(): w.destroy()
+            self._inline_img_cache_board.clear()
+
+            try:
+                msgs = list(doc_ref.collection('messages').order_by('timestamp').get())
+            except Exception as e:
+                tk.Label(comment_list_frame, text=f"⚠️ 메시지 로딩 실패: {e}",
+                         bg="#B2C7DA", fg="#c00",
+                         font=("맑은 고딕", 9)).pack(pady=10)
+                return
+
+            if not msgs:
+                tk.Label(comment_list_frame, text="아직 답장이 없습니다",
+                         bg="#B2C7DA", fg="#666",
+                         font=("맑은 고딕", 9, "italic")).pack(pady=15)
+                return
+
+            last_date = body_date
+
             for m in msgs:
+                if not detail_win.winfo_exists(): return
+                mid = m.id
                 md = m.to_dict()
                 role = md.get('role', 'worker')
                 sender = md.get('sender', '?')
-                text = md.get('text', '')
+                msg_text = md.get('text', '')
+                msg_img = md.get('imageUrl', '')
+                edited = md.get('edited', False)
                 mts = md.get('timestamp')
-                mtime = mts.strftime('%m/%d %H:%M') if mts else ""
-                if role == "admin":
-                    _add_bubble(text, sender, "right", "#D8E7FF", "#0d3b78", mtime)
-                else:
-                    _add_bubble(text, sender, "left", "white", "#111", mtime)
-        except Exception as e:
-            print(f"메시지 로딩 실패: {e}")
 
-        # 하단 버튼 동작
+                cur_date = self._get_kst_date(mts)
+                if cur_date and cur_date != last_date:
+                    sep_frame = tk.Frame(comment_list_frame, bg="#B2C7DA")
+                    sep_frame.pack(fill="x", pady=(10, 5))
+                    tk.Label(sep_frame,
+                             text=self._format_date_separator(cur_date),
+                             bg="#9DB0C2", fg="white",
+                             font=("맑은 고딕", 8, "bold"),
+                             padx=12, pady=3).pack(anchor="center")
+                    last_date = cur_date
+
+                is_admin = (role == 'admin')
+                clean_text = msg_text
+                if edited:
+                    clean_text += "  (수정됨)"
+
+                time_str = self._format_kst_time_only(mts)
+
+                if is_admin:
+                    bubble_color = "#FFEB33"
+                    text_anchor = "e"
+                else:
+                    bubble_color = "white"
+                    text_anchor = "w"
+
+                row = tk.Frame(comment_list_frame, bg="#B2C7DA")
+                row.pack(fill="x", pady=4, padx=5)
+                row.bind("<Button-3>", lambda e, id=mid, txt=msg_text: show_msg_menu(e, id, txt))
+
+                # 이름 표시
+                name_label = tk.Label(row, text=f"{'📢' if is_admin else '👤'} {sender}",
+                                       bg="#B2C7DA", fg="#444",
+                                       font=("맑은 고딕", 8, "bold"))
+                name_label.pack(anchor=text_anchor, padx=(8 if is_admin else 2, 8 if is_admin else 0))
+                name_label.bind("<Button-3>", lambda e, id=mid, txt=msg_text: show_msg_menu(e, id, txt))
+
+                bubble_row = tk.Frame(row, bg="#B2C7DA")
+                bubble_row.pack(fill="x", anchor=text_anchor)
+                bubble_row.bind("<Button-3>", lambda e, id=mid, txt=msg_text: show_msg_menu(e, id, txt))
+
+                bubble_container = tk.Frame(bubble_row, bg="#B2C7DA")
+                if is_admin:
+                    bubble_container.pack(side="right", padx=(60, 0))
+                else:
+                    bubble_container.pack(side="left", padx=(0, 60))
+
+                bubble = tk.Frame(bubble_container, bg=bubble_color)
+                if is_admin:
+                    bubble.pack(side="right")
+                else:
+                    bubble.pack(side="left")
+                bubble.bind("<Button-3>", lambda e, id=mid, txt=msg_text: show_msg_menu(e, id, txt))
+
+                if clean_text and clean_text not in ("(사진)", ""):
+                    # 글자수에 맞춰 width 조절
+                    longest_line = max((len(line) for line in clean_text.split('\n')), default=0)
+                    korean_ratio = sum(1 for ch in clean_text if ord(ch) > 127) / max(1, len(clean_text))
+                    char_w = 1.7 if korean_ratio > 0.5 else 1.0
+                    cmt_width = min(38, max(3, int(longest_line * char_w) + 1))
+
+                    cmt_lines = clean_text.count('\n') + 1
+                    cmt_extra = sum(max(0, (len(line) - 28) // 28) for line in clean_text.split('\n'))
+                    cmt_height = max(1, min(10, cmt_lines + cmt_extra))
+
+                    text_label = tk.Text(bubble, font=("맑은 고딕", 11),
+                                          bg=bubble_color, fg="#1A1A1A",
+                                          wrap="word", bd=0, padx=12, pady=8,
+                                          height=cmt_height, width=cmt_width,
+                                          highlightthickness=0, cursor="xterm")
+                    text_label.insert("1.0", clean_text)
+                    def _ro(event):
+                        if event.state & 0x0004: return None
+                        if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End'):
+                            return None
+                        return "break"
+                    text_label.bind("<Key>", _ro)
+                    text_label.bind("<Button-3>", lambda e, id=mid, txt=msg_text: show_msg_menu(e, id, txt))
+                    text_label.pack(anchor=text_anchor)
+
+                # 첨부 이미지
+                if msg_img:
+                    try:
+                        import requests as _rq
+                        from io import BytesIO
+                        from PIL import Image, ImageTk
+                        resp = _rq.get(msg_img, timeout=10)
+                        pil_img = Image.open(BytesIO(resp.content))
+                        w, h = pil_img.size
+                        max_w = 280
+                        if w > max_w:
+                            ratio = max_w / w
+                            pil_img = pil_img.resize((max_w, int(h * ratio)), Image.LANCZOS)
+                        tk_img = ImageTk.PhotoImage(pil_img)
+                        self._inline_img_cache_board.append(tk_img)
+                        img_holder = tk.Frame(bubble, bg=bubble_color, padx=4, pady=4)
+                        img_holder.pack()
+                        img_lbl = tk.Label(img_holder, image=tk_img, bg=bubble_color, cursor="hand2")
+                        img_lbl.pack()
+                        img_lbl.bind("<Button-1>", lambda e, url=msg_img: __import__('webbrowser').open(url))
+                    except Exception as ex:
+                        tk.Label(bubble, text=f"[사진 로드 실패]",
+                                 bg=bubble_color, fg="#999",
+                                 font=("맑은 고딕", 8), padx=12, pady=4).pack()
+
+                if time_str:
+                    time_label = tk.Label(bubble_container, text=time_str,
+                                           bg="#B2C7DA", fg="#555",
+                                           font=("맑은 고딕", 8))
+                    if is_admin:
+                        time_label.pack(side="right", anchor="s", padx=(0, 4), pady=(0, 2),
+                                        before=bubble)
+                    else:
+                        time_label.pack(side="left", anchor="s", padx=(4, 0), pady=(0, 2))
+
+        refresh_messages()
+
+        # ========== [입력창 - 작업보고와 동일] ==========
+        tk.Label(footer, text="💡 Ctrl+V로 사진 붙여넣기 · Enter로 전송 · Shift+Enter로 줄바꿈",
+                 bg="white", fg="#888", font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 2))
+
+        entry_frame = tk.Frame(footer, bg="white", highlightthickness=1, highlightbackground="#CCC")
+        entry_frame.pack(fill="x", pady=(0, 5))
+        entry = tk.Text(entry_frame, font=("맑은 고딕", 12), bd=0, relief="flat",
+                         height=3, padx=10, pady=8, wrap="word")
+        entry.pack(fill="x", expand=True)
+
+        _orig_get = entry.get
+        _orig_delete = entry.delete
+        def _entry_get(*args, **kwargs):
+            if not args:
+                return _orig_get("1.0", "end-1c")
+            return _orig_get(*args, **kwargs)
+        def _entry_delete(*args, **kwargs):
+            if len(args) >= 1 and args[0] == 0:
+                return _orig_delete("1.0", "end")
+            return _orig_delete(*args, **kwargs)
+        entry.get = _entry_get
+        entry.delete = _entry_delete
+
+        # 사진 첨부 시스템 (작업보고와 동일)
+        self._board_pending_image_path = None
+        self._board_pending_thumb_img = None
+
+        photo_status_frame = tk.Frame(footer, bg="#FFF9E6", relief="flat",
+                                       highlightthickness=1, highlightbackground="#FFD966")
+        photo_status_frame.pack(fill="x", pady=(0, 5))
+        photo_status_frame.pack_forget()
+
+        thumb_label = tk.Label(photo_status_frame, bg="#FFF9E6")
+        thumb_label.pack(side="left", padx=8, pady=8)
+
+        info_label = tk.Label(photo_status_frame, text="", bg="#FFF9E6",
+                              fg="#444", font=("맑은 고딕", 10, "bold"))
+        info_label.pack(side="left", padx=(0, 10))
+
+        def clear_pending_image():
+            self._board_pending_image_path = None
+            self._board_pending_thumb_img = None
+            thumb_label.config(image="")
+            info_label.config(text="")
+            photo_status_frame.pack_forget()
+
+        cancel_btn = tk.Button(photo_status_frame, text="✕ 취소",
+                                command=clear_pending_image, bg="#FF6B6B", fg="white",
+                                font=("맑은 고딕", 9, "bold"), relief="flat", padx=10, pady=5,
+                                cursor="hand2")
+        cancel_btn.pack(side="right", padx=8, pady=8)
+
+        def show_thumbnail(image_source):
+            try:
+                from PIL import Image, ImageTk
+                if isinstance(image_source, str):
+                    pil_img = Image.open(image_source)
+                else:
+                    pil_img = image_source
+                pil_thumb = pil_img.copy()
+                pil_thumb.thumbnail((60, 60), Image.LANCZOS)
+                self._board_pending_thumb_img = ImageTk.PhotoImage(pil_thumb)
+                thumb_label.config(image=self._board_pending_thumb_img)
+                w, h = pil_img.size
+                info_label.config(text=f"📎 첨부됨 ({w}×{h})\n전송 시 자동 업로드")
+                photo_status_frame.pack_forget()
+                photo_status_frame.pack(fill="x", pady=(0, 5))
+            except Exception as e:
+                info_label.config(text=f"썸네일 생성 실패: {e}")
+
+        def attach_image_from_clipboard():
+            try:
+                from PIL import ImageGrab
+                import tempfile
+                img = ImageGrab.grabclipboard()
+                if img is None:
+                    messagebox.showinfo("알림", "클립보드에 이미지가 없습니다.", parent=detail_win)
+                    return False
+                if isinstance(img, list):
+                    if not img: return False
+                    self._board_pending_image_path = img[0]
+                    show_thumbnail(img[0])
+                else:
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    img.save(tmp.name, "PNG")
+                    self._board_pending_image_path = tmp.name
+                    show_thumbnail(img)
+                return True
+            except Exception as e:
+                messagebox.showerror("오류", f"클립보드 이미지 가져오기 실패:\n{e}", parent=detail_win)
+                return False
+
+        def attach_image_from_file():
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(
+                title="첨부할 이미지 선택",
+                filetypes=[("이미지 파일", "*.png *.jpg *.jpeg *.gif *.bmp"), ("모든 파일", "*.*")],
+                parent=detail_win
+            )
+            if path:
+                self._board_pending_image_path = path
+                show_thumbnail(path)
+
+        def on_paste(event):
+            try:
+                from PIL import ImageGrab
+                img = ImageGrab.grabclipboard()
+                if img is not None and not isinstance(img, list):
+                    attach_image_from_clipboard()
+                    return "break"
+            except: pass
+            return None
+        entry.bind("<Control-v>", on_paste)
+
+        btn_container = tk.Frame(footer, bg="white")
+        btn_container.pack(fill="x")
+
         def do_send_reply():
-            content = reply_text.get("1.0", tk.END).strip()
-            if not content:
-                messagebox.showwarning("입력 필요", "답장 내용을 입력해주세요.", parent=win)
+            content = entry.get().strip()
+            image_url = ""
+            if self._board_pending_image_path:
+                image_url = self._upload_image_to_imgbb(self._board_pending_image_path, detail_win)
+                if image_url is None:
+                    return
+            if not content and not image_url:
                 return
             try:
-                # [수정] 작성자 = 내가 설정한 이름 (관리자 하드코딩 제거)
                 my_name = getattr(self, 'current_user', '관리자')
-                self.db.collection('board_posts').document(item_id) \
-                    .collection('messages').add({
-                        'sender': my_name,
-                        'role': 'admin',
-                        'text': content,
-                        'timestamp': firestore.SERVER_TIMESTAMP
-                    })
-                # 상태가 아직 '신규' 등이면 '💬 대화중'으로 업데이트
+                doc_ref.collection('messages').add({
+                    'sender': my_name,
+                    'role': 'admin',
+                    'text': content if content else "(사진)",
+                    'imageUrl': image_url,
+                    'timestamp': firestore.SERVER_TIMESTAMP
+                })
+                # 상태 업데이트
                 current_status = post_data.get('status', '')
-                if '확인완료' not in current_status:
-                    self.db.collection('board_posts').document(item_id).update({
+                if '확인완료' not in current_status and '완료' not in current_status:
+                    doc_ref.update({
                         'status': '💬 대화중',
                         'last_reply_time': firestore.SERVER_TIMESTAMP
                     })
-                # [추가] 답장 받은 작업자에게 푸시 알림 발송
+                # 푸시 알림
                 target = post_data.get('user', '')
-                if target:
-                    preview = content[:80] + ('...' if len(content) > 80 else '')
+                if target and target != 'all':
+                    preview = (content if content else "(사진)")[:80]
                     self.send_fcm_push(target,
                                         f"💬 {my_name}님의 답장",
                                         preview)
-                win.destroy()
-                self.update_board_view()
+                entry.delete(0, tk.END)
+                clear_pending_image()
+                refresh_messages()
             except Exception as e:
-                messagebox.showerror("전송 실패", f"{e}", parent=win)
+                messagebox.showerror("전송 실패", f"{e}", parent=detail_win)
 
         def do_close_thread():
-            pending = reply_text.get("1.0", tk.END).strip()
-            msg = "이 대화를 '확인완료' 처리하시겠습니까?\n(리스트에서 숨겨집니다)"
+            pending = entry.get().strip()
+            msg = "이 대화를 '확인완료' 처리하시겠습니까?\n(미완료 탭에서 사라집니다)"
             if pending:
-                msg = "입력창에 남은 내용을 마지막 답장으로 보낸 뒤\n'확인완료' 처리하시겠습니까?\n(리스트에서 숨겨집니다)"
-            if not messagebox.askyesno("확인", msg, parent=win):
+                msg = "입력창에 남은 내용을 마지막 답장으로 보낸 뒤\n'확인완료' 처리하시겠습니까?"
+            if not messagebox.askyesno("확인", msg, parent=detail_win):
                 return
             try:
                 if pending:
-                    # [수정] 작성자 = 내 이름
                     my_name = getattr(self, 'current_user', '관리자')
-                    self.db.collection('board_posts').document(item_id) \
-                        .collection('messages').add({
-                            'sender': my_name,
-                            'role': 'admin',
-                            'text': pending,
-                            'timestamp': firestore.SERVER_TIMESTAMP
-                        })
-                self.db.collection('board_posts').document(item_id).update({
+                    doc_ref.collection('messages').add({
+                        'sender': my_name,
+                        'role': 'admin',
+                        'text': pending,
+                        'timestamp': firestore.SERVER_TIMESTAMP
+                    })
+                doc_ref.update({
                     'status': '✅ 확인완료',
                     'closed_time': firestore.SERVER_TIMESTAMP
                 })
-                win.destroy()
+                detail_win.destroy()
                 self.update_board_view()
             except Exception as e:
-                messagebox.showerror("오류", f"처리 실패: {e}", parent=win)
+                messagebox.showerror("오류", f"처리 실패: {e}", parent=detail_win)
 
-        tk.Button(btn_bar, text="✅ 확인완료 (숨김)", bg="#34a853", fg="white",
-                  font=("맑은 고딕", 10, "bold"), command=do_close_thread,
-                  relief="flat", cursor="hand2", padx=12, pady=5).pack(side="left")
-        tk.Button(btn_bar, text="🚀 답장 전송", bg="#1a73e8", fg="white",
-                  font=("맑은 고딕", 10, "bold"), command=do_send_reply,
-                  relief="flat", cursor="hand2", padx=12, pady=5).pack(side="right")
+        # Enter로 전송
+        def _on_enter(event):
+            if event.state & 0x0001:  # Shift
+                return None
+            do_send_reply()
+            return "break"
+        entry.bind("<Return>", _on_enter)
 
-        # 맨 아래로 스크롤
+        # 버튼들
+        tk.Button(btn_container, text="📎 사진(파일)", command=attach_image_from_file,
+                  bg="#f0f2f5", fg="#444", font=("맑은 고딕", 9),
+                  relief="flat", pady=8).pack(side="left", padx=(0, 5))
+        tk.Button(btn_container, text="🚀 답장 전송", command=do_send_reply,
+                  bg="#1877F2", fg="white", font=("맑은 고딕", 10, "bold"),
+                  relief="flat", pady=10).pack(side="left", expand=True, fill="x", padx=(0, 5))
+        tk.Button(btn_container, text="✅ 확인완료", command=do_close_thread,
+                  bg="#4CAF50", fg="white", font=("맑은 고딕", 10, "bold"),
+                  relief="flat", pady=10).pack(side="left", expand=True, fill="x", padx=(5, 0))
+
+        # 맨 아래 스크롤
         def _scroll_to_bottom():
             try:
                 canvas.update_idletasks()
                 canvas.yview_moveto(1.0)
-            except Exception:
-                pass
-        win.after(80, _scroll_to_bottom)
-
-        # 마우스 휠 스크롤
-        def _on_mousewheel(event):
-            try:
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-        win.bind("<MouseWheel>", _on_mousewheel)
-
-        # Ctrl+Enter로 빠른 전송
-        def _key_send(event):
-            do_send_reply()
-            return "break"
-        reply_text.bind("<Control-Return>", _key_send)
+            except: pass
+        detail_win.after(80, _scroll_to_bottom)
 
     # --- [기능 2: 소통 글 리스트 업데이트 및 색상 적용] ---
     def update_board_view(self):
@@ -2362,17 +2703,20 @@ class LogiPanApp:
         body_bubble.pack(side="left", anchor="w", padx=(0, 60))
 
         body_text = data.get('text', '')
-        # [수정] Label → Text로 변경 (복사 가능)
-        # 줄 수 계산 (자동 wrap 고려)
+        # [수정] 글자수에 맞춰 width 동적 계산
+        body_longest = max((len(line) for line in body_text.split('\n')), default=0)
+        body_kor_ratio = sum(1 for ch in body_text if ord(ch) > 127) / max(1, len(body_text))
+        body_char_w = 1.7 if body_kor_ratio > 0.5 else 1.0
+        body_width = min(42, max(5, int(body_longest * body_char_w) + 1))
+
         lines = body_text.count('\n') + 1
-        # 길이가 긴 줄도 wrap 되니 대략 보정
         approx_extra = sum(max(0, (len(line) - 30) // 30) for line in body_text.split('\n'))
         text_height = max(1, min(20, lines + approx_extra))
 
         body_label = tk.Text(body_bubble, font=("맑은 고딕", 11),
                               bg="white", fg="#1A1A1A",
                               wrap="word", bd=0, padx=14, pady=10,
-                              height=text_height, width=42,
+                              height=text_height, width=body_width,
                               highlightthickness=0, cursor="xterm")
         body_label.insert("1.0", body_text)
         # 읽기 전용 (복사는 가능)
@@ -2603,7 +2947,14 @@ class LogiPanApp:
 
                 # 텍스트가 있으면 Text 위젯 (복사 가능), 없으면 패스
                 if clean_text:
-                    # 줄 수 계산
+                    # [수정] 글자수에 맞춰 width 동적 계산
+                    # 한글은 한 글자가 약 2칸, 영문은 1칸
+                    longest_line = max((len(line) for line in clean_text.split('\n')), default=0)
+                    # 한글 비중 추정 (간단히 ord > 127인 글자 비율)
+                    korean_ratio = sum(1 for ch in clean_text if ord(ch) > 127) / max(1, len(clean_text))
+                    char_w = 1.7 if korean_ratio > 0.5 else 1.0
+                    cmt_width = min(38, max(3, int(longest_line * char_w) + 1))
+
                     cmt_lines = clean_text.count('\n') + 1
                     cmt_extra = sum(max(0, (len(line) - 28) // 28) for line in clean_text.split('\n'))
                     cmt_height = max(1, min(10, cmt_lines + cmt_extra))
@@ -2611,7 +2962,7 @@ class LogiPanApp:
                     text_label = tk.Text(bubble, font=("맑은 고딕", 11),
                                           bg=bubble_color, fg=text_color,
                                           wrap="word", bd=0, padx=12, pady=8,
-                                          height=cmt_height, width=38,
+                                          height=cmt_height, width=cmt_width,
                                           highlightthickness=0, cursor="xterm")
                     text_label.insert("1.0", clean_text)
                     # 읽기 전용
