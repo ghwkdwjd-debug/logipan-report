@@ -1928,61 +1928,65 @@ class LogiPanApp:
                          font=("맑은 고딕", 8)).pack(side="left", anchor="s", padx=(4, 0), pady=(0, 4))
 
         # ========== [본문 사진들 - 본문 아래에 자연스럽게] ==========
-        photo_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
-        photo_frame.pack(fill="x", padx=15, pady=(0, 5))
-
         # 사진 PhotoImage 참조 유지 (GC 방지)
         if not hasattr(self, '_detail_img_cache'):
             self._detail_img_cache = []
         self._detail_img_cache.clear()
 
+        # 사진 있을 때만 frame 생성
+        photo_frame = None
+        if img_urls_raw and img_urls_raw.strip():
+            photo_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+            photo_frame.pack(fill="x", padx=15, pady=(0, 5))
+
         def load_images_async():
-            if img_urls_raw:
-                url_list = [u.strip() for u in img_urls_raw.split(",") if u.strip()]
-                for i, url in enumerate(url_list):
-                    try:
-                        if not detail_win.winfo_exists(): return
-                        response = requests.get(url, timeout=10)
-                        img_raw = Image.open(BytesIO(response.content))
-                        img_raw.thumbnail((420, 500))
-                        photo = ImageTk.PhotoImage(img_raw)
-                        self._detail_img_cache.append(photo)
+            if not img_urls_raw or not img_urls_raw.strip():
+                return
+            url_list = [u.strip() for u in img_urls_raw.split(",") if u.strip()]
+            for i, url in enumerate(url_list):
+                try:
+                    if not detail_win.winfo_exists(): return
+                    response = requests.get(url, timeout=10)
+                    img_raw = Image.open(BytesIO(response.content))
+                    img_raw.thumbnail((420, 500))
+                    photo = ImageTk.PhotoImage(img_raw)
+                    self._detail_img_cache.append(photo)
 
-                        if detail_win.winfo_exists():
-                            # 사진 컨테이너 (본문처럼 왼쪽 정렬)
-                            pf = tk.Frame(photo_frame, bg="#B2C7DA")
-                            pf.pack(fill="x", anchor="w", pady=4)
+                    if detail_win.winfo_exists() and photo_frame is not None:
+                        # 사진 컨테이너 (본문처럼 왼쪽 정렬)
+                        pf = tk.Frame(photo_frame, bg="#B2C7DA")
+                        pf.pack(fill="x", anchor="w", pady=4)
 
-                            img_holder = tk.Frame(pf, bg="white", padx=2, pady=2)
-                            img_holder.pack(side="left", anchor="w")
-                            lbl = tk.Label(img_holder, image=photo, bg="white",
-                                           cursor="hand2")
-                            lbl.pack()
-                            # 클릭하면 원본 보기
-                            lbl.bind("<Button-1>", lambda e, u=url: __import__('webbrowser').open(u))
+                        img_holder = tk.Frame(pf, bg="white", padx=2, pady=2)
+                        img_holder.pack(side="left", anchor="w")
+                        lbl = tk.Label(img_holder, image=photo, bg="white",
+                                       cursor="hand2")
+                        lbl.pack()
+                        # 클릭하면 원본 보기
+                        lbl.bind("<Button-1>", lambda e, u=url: __import__('webbrowser').open(u))
 
-                            # 우클릭으로 저장 메뉴
-                            def save_this(u=url, idx=i):
-                                try:
-                                    res = requests.get(u)
-                                    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-                                    path = os.path.join(desktop, f"현장보고_{selected_id[:5]}_{idx+1}.jpg")
-                                    with open(path, "wb") as f: f.write(res.content)
-                                    messagebox.showinfo("완료", f"바탕화면에 저장됨:\n{path}", parent=detail_win)
-                                except Exception as ex:
-                                    messagebox.showerror("실패", f"저장 실패: {ex}", parent=detail_win)
+                        # 우클릭으로 저장 메뉴
+                        def save_this(u=url, idx=i):
+                            try:
+                                res = requests.get(u)
+                                desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+                                path = os.path.join(desktop, f"현장보고_{selected_id[:5]}_{idx+1}.jpg")
+                                with open(path, "wb") as f: f.write(res.content)
+                                messagebox.showinfo("완료", f"바탕화면에 저장됨:\n{path}", parent=detail_win)
+                            except Exception as ex:
+                                messagebox.showerror("실패", f"저장 실패: {ex}", parent=detail_win)
 
-                            save_menu = tk.Menu(detail_win, tearoff=0, font=("맑은 고딕", 9))
-                            save_menu.add_command(label="🔍 원본 크기로 보기",
-                                                   command=lambda u=url: __import__('webbrowser').open(u))
-                            save_menu.add_command(label="💾 바탕화면에 저장",
-                                                   command=save_this)
-                            lbl.bind("<Button-3>", lambda e, m=save_menu: m.post(e.x_root, e.y_root))
-                    except Exception as e:
-                        if detail_win.winfo_exists():
-                            tk.Label(photo_frame, text=f"❌ 사진 {i+1} 로드 실패: {e}",
-                                     fg="#c00", bg="#B2C7DA",
-                                     font=("맑은 고딕", 9)).pack(anchor="w", pady=2)
+                        save_menu = tk.Menu(detail_win, tearoff=0, font=("맑은 고딕", 9))
+                        save_menu.add_command(label="🔍 원본 크기로 보기",
+                                               command=lambda u=url: __import__('webbrowser').open(u))
+                        save_menu.add_command(label="💾 바탕화면에 저장",
+                                               command=save_this)
+                        lbl.bind("<Button-3>", lambda e, m=save_menu: m.post(e.x_root, e.y_root))
+                except Exception as e:
+                    if detail_win.winfo_exists() and photo_frame is not None:
+                        tk.Label(photo_frame, text=f"❌ 사진 {i+1} 로드 실패: {e}",
+                                 fg="#c00", bg="#B2C7DA",
+                                 font=("맑은 고딕", 9)).pack(anchor="w", pady=2)
 
         threading.Thread(target=load_images_async, daemon=True).start()
 
@@ -2081,13 +2085,12 @@ class LogiPanApp:
                     align_side = "left"
                     text_anchor = "w"
 
-                # 작업자만 이름 표시 (카톡처럼 받는 사람만)
-                if not is_admin:
-                    name_label = tk.Label(row, text=f"👤 {u}",
-                                           bg="#B2C7DA", fg=name_color,
-                                           font=("맑은 고딕", 8))
-                    name_label.pack(anchor="w", padx=(2, 0))
-                    name_label.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+                # [수정] 관리자/작업자 모두 이름 표시 (4명이 같이 쓰니까 누가 썼는지 봐야함)
+                name_label = tk.Label(row, text=f"{'📢' if is_admin else '👤'} {u}",
+                                       bg="#B2C7DA", fg=name_color,
+                                       font=("맑은 고딕", 8, "bold"))
+                name_label.pack(anchor=text_anchor, padx=(8 if is_admin else 2, 8 if is_admin else 0))
+                name_label.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
 
                 # 말풍선 + 시간 묶음
                 bubble_row = tk.Frame(row, bg="#B2C7DA")
@@ -2170,10 +2173,32 @@ class LogiPanApp:
 
         # 하단 입력창
         # [추가] 안내 문구
-        tk.Label(footer, text="💡 댓글 입력 + Ctrl+V로 캡처 이미지 바로 붙여넣기 가능",
+        tk.Label(footer, text="💡 Ctrl+V로 사진 붙여넣기 · Enter로 전송 · Shift+Enter로 줄바꿈",
                  bg="white", fg="#888", font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 2))
-        entry = tk.Entry(footer, font=("맑은 고딕", 12), bd=1, relief="solid", highlightthickness=0)
-        entry.pack(fill="x", pady=(0, 5), ipady=8)
+
+        # [수정] Entry → Text로 변경 (더 크고 여러 줄 입력 가능)
+        entry_frame = tk.Frame(footer, bg="white", highlightthickness=1, highlightbackground="#CCC")
+        entry_frame.pack(fill="x", pady=(0, 5))
+        entry = tk.Text(entry_frame, font=("맑은 고딕", 12), bd=0, relief="flat",
+                         height=3, padx=10, pady=8, wrap="word")
+        entry.pack(fill="x", expand=True)
+
+        # Text 위젯에서 .get/.delete를 Entry처럼 쓸 수 있도록 헬퍼 메서드 흉내
+        # (송신 함수에서 entry.get(), entry.delete(0, tk.END) 같이 호출해도 동작하게)
+        _orig_get = entry.get
+        _orig_delete = entry.delete
+        def _entry_get(*args, **kwargs):
+            # Entry처럼 인자 없이 호출하면 전체 텍스트 반환
+            if not args:
+                return _orig_get("1.0", "end-1c")
+            return _orig_get(*args, **kwargs)
+        def _entry_delete(*args, **kwargs):
+            # Entry.delete(0, tk.END) 호출 시 전체 삭제로 변환
+            if len(args) >= 1 and args[0] == 0:
+                return _orig_delete("1.0", "end")
+            return _orig_delete(*args, **kwargs)
+        entry.get = _entry_get
+        entry.delete = _entry_delete
 
         # [추가] 사진 첨부 상태 (Entry 위젯에 attribute로 들고있음)
         self._pending_image_path = None
@@ -2311,6 +2336,14 @@ class LogiPanApp:
                 self.send_fcm_push(target,
                                     f"💬 {self.current_user}님의 댓글",
                                     preview)
+
+        # [추가] Enter로 전송 (Shift+Enter는 줄바꿈)
+        def _on_enter(event):
+            if event.state & 0x0001:  # Shift 키
+                return None  # 기본 동작 (줄바꿈)
+            send_cmd()
+            return "break"  # 기본 줄바꿈 막음
+        entry.bind("<Return>", _on_enter)
 
         # [추가] 사진 첨부 버튼들 (Ctrl+V로 클립보드 이미지 자동 첨부)
         tk.Button(btn_container, text="📎 사진(파일)", command=attach_image_from_file,
