@@ -692,7 +692,6 @@ class LogiPanApp:
             chip.pack(side="left", padx=2)
             self.filter_chips[value] = chip
 
-        make_chip("전체", "전체")
         make_chip("⏳ 처리중", "⏳ 처리중")
         make_chip("✅ 완료", "✅ 완료")
 
@@ -713,15 +712,15 @@ class LogiPanApp:
         search_entry.bind("<Return>", lambda e: self.update_table_view())
         # placeholder 흉내
         def on_focus_in(e):
-            if search_entry.get() == "제목/작업자/날짜 검색":
+            if search_entry.get() == "제목·작업자·날짜·내용 검색":
                 search_entry.delete(0, tk.END)
                 search_entry.config(fg="#333")
         def on_focus_out(e):
             if not search_entry.get():
-                search_entry.insert(0, "제목/작업자/날짜 검색")
+                search_entry.insert(0, "제목·작업자·날짜·내용 검색")
                 search_entry.config(fg="#999")
         if not self.search_var.get():
-            search_entry.insert(0, "제목/작업자/날짜 검색")
+            search_entry.insert(0, "제목·작업자·날짜·내용 검색")
             search_entry.config(fg="#999")
         search_entry.bind("<FocusIn>", on_focus_in)
         search_entry.bind("<FocusOut>", on_focus_out)
@@ -1978,12 +1977,27 @@ class LogiPanApp:
         # 제목 + 부제
         title_frame = tk.Frame(header, bg="white")
         title_frame.place(x=70, y=10)
-        tk.Label(title_frame, text=data.get('title', '제목 없음'),
-                 font=("맑은 고딕", 13, "bold"), bg="white", fg="#262626",
-                 anchor="w").pack(anchor="w")
+
+        # [수정] 제목을 복사 가능한 Text 위젯으로 (Label은 복사 안됨)
+        title_text_widget = tk.Text(title_frame, height=1, bd=0,
+                                     font=("맑은 고딕", 13, "bold"),
+                                     bg="white", fg="#262626",
+                                     wrap="none", cursor="xterm",
+                                     highlightthickness=0, width=40)
+        title_text_widget.insert("1.0", data.get('title', '제목 없음'))
+        # 읽기 전용처럼 동작 (선택/복사는 가능, 수정은 막음)
+        def _readonly_handler(event):
+            if event.state & 0x0004:  # Ctrl 누른 상태 (복사 등 허용)
+                return None
+            if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Prior', 'Next', 'shift'):
+                return None
+            return "break"
+        title_text_widget.bind("<Key>", _readonly_handler)
+        title_text_widget.pack(anchor="w")
+
         sub_text = f"작업자: {data.get('user', '익명')}  ·  {data.get('status', '처리중')}"
         if report_ts:
-            time_str = self._format_kst_time(report_ts)  # 헤더는 날짜+시간 풀 표시
+            time_str = self._format_kst_time(report_ts)
             if time_str:
                 sub_text += f"  ·  📅 {time_str}"
         tk.Label(title_frame, text=sub_text,
@@ -2060,10 +2074,27 @@ class LogiPanApp:
         body_bubble.pack(side="left", anchor="w", padx=(0, 60))
 
         body_text = data.get('text', '')
-        body_label = tk.Label(body_bubble, text=body_text,
-                                bg="white", fg="#1A1A1A",
-                                font=("맑은 고딕", 11), justify="left",
-                                wraplength=400, padx=14, pady=10)
+        # [수정] Label → Text로 변경 (복사 가능)
+        # 줄 수 계산 (자동 wrap 고려)
+        lines = body_text.count('\n') + 1
+        # 길이가 긴 줄도 wrap 되니 대략 보정
+        approx_extra = sum(max(0, (len(line) - 30) // 30) for line in body_text.split('\n'))
+        text_height = max(1, min(20, lines + approx_extra))
+
+        body_label = tk.Text(body_bubble, font=("맑은 고딕", 11),
+                              bg="white", fg="#1A1A1A",
+                              wrap="word", bd=0, padx=14, pady=10,
+                              height=text_height, width=42,
+                              highlightthickness=0, cursor="xterm")
+        body_label.insert("1.0", body_text)
+        # 읽기 전용 (복사는 가능)
+        def _body_readonly(event):
+            if event.state & 0x0004:
+                return None
+            if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Prior', 'Next'):
+                return None
+            return "break"
+        body_label.bind("<Key>", _body_readonly)
         body_label.pack(anchor="w")
 
         # 시간 (말풍선 옆 작게) - 시간만
@@ -2282,15 +2313,29 @@ class LogiPanApp:
                     bubble.pack(side="left")
                 bubble.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
 
-                # 텍스트가 있으면 라벨, 없으면 패스
+                # 텍스트가 있으면 Text 위젯 (복사 가능), 없으면 패스
                 if clean_text:
-                    text_label = tk.Label(bubble, text=clean_text,
-                                           bg=bubble_color, fg=text_color,
-                                           font=("맑은 고딕", 11),
-                                           justify="left", wraplength=380,
-                                           padx=12, pady=8)
-                    text_label.pack(anchor="w" if not is_admin else "e")
+                    # 줄 수 계산
+                    cmt_lines = clean_text.count('\n') + 1
+                    cmt_extra = sum(max(0, (len(line) - 28) // 28) for line in clean_text.split('\n'))
+                    cmt_height = max(1, min(10, cmt_lines + cmt_extra))
+
+                    text_label = tk.Text(bubble, font=("맑은 고딕", 11),
+                                          bg=bubble_color, fg=text_color,
+                                          wrap="word", bd=0, padx=12, pady=8,
+                                          height=cmt_height, width=38,
+                                          highlightthickness=0, cursor="xterm")
+                    text_label.insert("1.0", clean_text)
+                    # 읽기 전용
+                    def _cmt_readonly(event):
+                        if event.state & 0x0004:
+                            return None
+                        if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End', 'Prior', 'Next'):
+                            return None
+                        return "break"
+                    text_label.bind("<Key>", _cmt_readonly)
                     text_label.bind("<Button-3>", lambda e, id=cid, txt=t.replace("[답장] ", ""): show_comment_menu(e, id, txt))
+                    text_label.pack(anchor="w" if not is_admin else "e")
 
                 # 첨부 이미지
                 if img_url:
@@ -2684,28 +2729,28 @@ class LogiPanApp:
 
         try:
             search_keyword = self.search_var.get().strip().lower()
-            if search_keyword == "제목/작업자/날짜 검색":
+            if search_keyword == "제목·작업자·날짜·내용 검색":
                 search_keyword = ""
             current_filter = self.filter_var.get()
             ref = self.db.collection('field_reports')
 
             # [최적화] 필터별 다른 쿼리
-            # - 처리중: 처리중인 것만 (보통 적음, 전부 가져와도 OK)
-            # - 완료/전체: 검색어 없으면 최근 7일치만 (비용 절약)
+            # - 처리중: 처리중인 것만
+            # - 완료: 검색어 없으면 최근 7일치만
             try:
                 if search_keyword:
                     # 검색 모드는 더 많이 가져옴
                     raw_docs = list(ref.limit(500).get())
                 elif current_filter == "⏳ 처리중":
-                    # 처리중만 (가벼움)
                     raw_docs = list(ref.where('status', '==', '⏳ 처리중').limit(200).get())
                 else:
-                    # 완료/전체: 최근 7일만
+                    # 완료: 최근 7일만
                     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-                    raw_docs = list(ref.where('timestamp', '>=', seven_days_ago).limit(200).get())
+                    raw_docs = list(ref.where('status', '==', '✅ 완료')
+                                       .where('timestamp', '>=', seven_days_ago)
+                                       .limit(200).get())
             except Exception as fetch_err:
                 print(f"❌ Firestore 조회 실패: {fetch_err}")
-                # 인덱스 없을 수도 있어서 fallback
                 try:
                     raw_docs = list(ref.limit(200).get())
                 except Exception:
@@ -2737,12 +2782,15 @@ class LogiPanApp:
                 time_str = data.get('date') if data.get('date') else (ts.strftime('%y/%m/%d') if ts else "")
 
                 if search_keyword:
+                    # [개선] 본문(text) + 댓글 미리보기까지 검색 대상에 포함
+                    text_body = data.get('text', '')
+                    last_cmt = data.get('last_comment_text', '')
                     clean_date = time_str.replace("/", "")
-                    combined = f"{time_str} {clean_date} {user} {title}".lower()
+                    combined = f"{time_str} {clean_date} {user} {title} {text_body} {last_cmt}".lower()
                     if search_keyword not in combined:
                         continue
 
-                if current_filter != "전체" and status != current_filter:
+                if status != current_filter:
                     continue
 
                 # [최적화] 댓글 컬렉션 읽지 않고 본문에 캐싱된 메타 사용
@@ -2777,19 +2825,18 @@ class LogiPanApp:
                 shown += 1
 
             if shown == 0:
-                # 안내 메시지: 필터에 따라 다르게
                 if current_filter == "⏳ 처리중":
                     msg = "🎉 처리중인 작업이 없습니다!"
                 elif search_keyword:
                     msg = f"🔍 '{search_keyword}' 검색 결과가 없습니다"
                 else:
-                    msg = "📭 최근 7일간 표시할 작업이 없습니다\n(더 보려면 검색하세요)"
+                    msg = "📭 최근 7일간 완료된 작업이 없습니다\n(더 보려면 검색하세요)"
                 tk.Label(self.cards_frame,
                          text=msg,
                          bg="#F5F6F8", fg="#999",
                          font=("맑은 고딕", 11), pady=50, justify="center").pack()
 
-            # 새 댓글 카운터 업데이트
+            # 새 댓글 카운터
             if hasattr(self, 'new_comment_counter'):
                 if new_comment_count > 0:
                     self.new_comment_counter.config(text=f"🔔 새 댓글 {new_comment_count}건",
@@ -2797,12 +2844,12 @@ class LogiPanApp:
                 else:
                     self.new_comment_counter.config(text="")
 
-            # [추가] 검색 안내 (전체/완료 모드일 때 7일 제한 안내)
-            if not search_keyword and current_filter != "⏳ 처리중":
+            # 검색 안내 - 완료 모드일 때만 7일 제한 안내
+            if not search_keyword and current_filter == "✅ 완료":
                 hint = tk.Label(self.cards_frame,
-                                 text="💡 최근 7일치만 표시됩니다. 더 오래된 데이터는 위 검색창에 키워드를 입력해주세요.",
+                                 text="💡 최근 7일치만 표시됩니다. 더 오래된 데이터는 위 검색창에 키워드를 입력하세요\n(제목·작업자·날짜·내용 모두 검색 가능)",
                                  bg="#F5F6F8", fg="#999",
-                                 font=("맑은 고딕", 8), pady=15)
+                                 font=("맑은 고딕", 8), pady=15, justify="center")
                 hint.pack(side="bottom")
 
         except Exception as e:
