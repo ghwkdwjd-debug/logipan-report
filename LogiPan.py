@@ -2152,6 +2152,13 @@ class LogiPanApp:
         def delete_this_comment(comment_id):
             if messagebox.askyesno("삭제", "이 댓글을 삭제하시겠습니까?"):
                 doc_ref.collection('comments').document(comment_id).delete()
+                # [추가] 본문 메타 카운트 감소
+                try:
+                    doc_ref.update({
+                        'comment_count': firestore.Increment(-1)
+                    })
+                except Exception as e:
+                    print(f"⚠️ 카운트 감소 실패: {e}")
                 refresh_comments()
                 messagebox.showinfo("완료", "댓글이 삭제되었습니다.")
 
@@ -2488,6 +2495,18 @@ class LogiPanApp:
                 'imageUrl': image_url,
                 'timestamp': firestore.SERVER_TIMESTAMP
             })
+            # [추가] 본문 문서에 메타 캐싱 (Firestore 읽기 절약)
+            try:
+                doc_ref.update({
+                    'comment_count': firestore.Increment(1),
+                    'last_comment_text': content if content else "(사진)",
+                    'last_comment_user': self.current_user,
+                    'last_comment_role': 'admin',
+                    'last_comment_at': firestore.SERVER_TIMESTAMP,
+                    'has_attached_image': True if (image_url or data.get('has_attached_image')) else False
+                })
+            except Exception as e:
+                print(f"⚠️ 메타 업데이트 실패: {e}")
             entry.delete(0, tk.END)
             clear_pending_image()
             refresh_comments()
@@ -2655,7 +2674,7 @@ class LogiPanApp:
     def update_table_view(self, event=None):
         from datetime import datetime, timedelta, timezone
 
-        # 카드 리스트 영역이 없으면 무시 (다른 탭에서 호출되거나 아직 초기화 안 된 상태)
+        # 카드 리스트 영역이 없으면 무시
         if not hasattr(self, 'cards_frame') or not self.cards_frame.winfo_exists():
             return
 
@@ -2670,15 +2689,31 @@ class LogiPanApp:
             current_filter = self.filter_var.get()
             ref = self.db.collection('field_reports')
 
+            # [최적화] 필터별 다른 쿼리
+            # - 처리중: 처리중인 것만 (보통 적음, 전부 가져와도 OK)
+            # - 완료/전체: 검색어 없으면 최근 7일치만 (비용 절약)
             try:
-                raw_docs = list(ref.limit(500).get())
+                if search_keyword:
+                    # 검색 모드는 더 많이 가져옴
+                    raw_docs = list(ref.limit(500).get())
+                elif current_filter == "⏳ 처리중":
+                    # 처리중만 (가벼움)
+                    raw_docs = list(ref.where('status', '==', '⏳ 처리중').limit(200).get())
+                else:
+                    # 완료/전체: 최근 7일만
+                    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+                    raw_docs = list(ref.where('timestamp', '>=', seven_days_ago).limit(200).get())
             except Exception as fetch_err:
                 print(f"❌ Firestore 조회 실패: {fetch_err}")
-                tk.Label(self.cards_frame,
-                         text=f"⚠️ 데이터 로딩 실패\n{fetch_err}",
-                         bg="#F5F6F8", fg="#c00",
-                         font=("맑은 고딕", 10), pady=30).pack()
-                return
+                # 인덱스 없을 수도 있어서 fallback
+                try:
+                    raw_docs = list(ref.limit(200).get())
+                except Exception:
+                    tk.Label(self.cards_frame,
+                             text=f"⚠️ 데이터 로딩 실패\n{fetch_err}",
+                             bg="#F5F6F8", fg="#c00",
+                             font=("맑은 고딕", 10), pady=30).pack()
+                    return
 
             def _ts_key(d):
                 ts = d.to_dict().get('timestamp')
@@ -2690,7 +2725,7 @@ class LogiPanApp:
 
             reports = raw_docs if search_keyword else raw_docs[:100]
 
-            new_comment_count = 0  # 새 댓글 있는 카드 수
+            new_comment_count = 0
 
             shown = 0
             for idx, doc in enumerate(reports):
@@ -2710,38 +2745,25 @@ class LogiPanApp:
                 if current_filter != "전체" and status != current_filter:
                     continue
 
-                # 진행 상태
+                # [최적화] 댓글 컬렉션 읽지 않고 본문에 캐싱된 메타 사용
+                comment_total = data.get('comment_count', 0)
+                last_comment_text = data.get('last_comment_text', '')
+                last_comment_user = data.get('last_comment_user', '')
+                last_comment_role = data.get('last_comment_role', '')
+                has_image = bool(data.get('imageUrl')) or bool(data.get('has_attached_image', False))
+
+                # 진행 상태 결정 (캐싱된 정보 기반)
                 step_text = "🆕 신규"
-                comments_ref = self.db.collection('field_reports').document(doc.id).collection('comments')
-                try:
-                    last_c = comments_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1).get()
-                except Exception:
-                    last_c = []
-
-                # 전체 댓글 수 + 마지막 댓글 정보
-                try:
-                    all_comments = list(comments_ref.get())
-                    comment_total = len(all_comments)
-                    has_image = any('imageUrl' in c.to_dict() and c.to_dict().get('imageUrl') for c in all_comments)
-                except Exception:
-                    comment_total = 0
-                    has_image = False
-
                 is_worker_reply = False
-                last_comment_text = ""
-                last_comment_user = ""
-                if last_c:
-                    c_data = last_c[0].to_dict()
-                    last_comment_text = c_data.get('text', '').replace('[답장] ', '')
-                    last_comment_user = c_data.get('user', '')
-                    if "[답장]" in c_data.get('text', ''):
-                        step_text = "💬 NEW"; is_worker_reply = True
+                if comment_total > 0:
+                    if last_comment_role == 'worker' or (last_comment_text.startswith('[답장]')):
+                        step_text = "💬 NEW"
+                        is_worker_reply = True
                     else:
                         step_text = "✅ 확인중"
-
-                # 본문에 사진 있는지
-                if data.get('imageUrl'):
-                    has_image = True
+                # 답장 표시 텍스트 정리
+                if last_comment_text.startswith('[답장]'):
+                    last_comment_text = last_comment_text.replace('[답장]', '').strip()
 
                 if is_worker_reply and status != "✅ 완료":
                     new_comment_count += 1
@@ -2755,10 +2777,17 @@ class LogiPanApp:
                 shown += 1
 
             if shown == 0:
+                # 안내 메시지: 필터에 따라 다르게
+                if current_filter == "⏳ 처리중":
+                    msg = "🎉 처리중인 작업이 없습니다!"
+                elif search_keyword:
+                    msg = f"🔍 '{search_keyword}' 검색 결과가 없습니다"
+                else:
+                    msg = "📭 최근 7일간 표시할 작업이 없습니다\n(더 보려면 검색하세요)"
                 tk.Label(self.cards_frame,
-                         text="📭 표시할 작업이 없습니다",
+                         text=msg,
                          bg="#F5F6F8", fg="#999",
-                         font=("맑은 고딕", 11), pady=50).pack()
+                         font=("맑은 고딕", 11), pady=50, justify="center").pack()
 
             # 새 댓글 카운터 업데이트
             if hasattr(self, 'new_comment_counter'):
@@ -2767,6 +2796,14 @@ class LogiPanApp:
                                                       fg="#FF4757")
                 else:
                     self.new_comment_counter.config(text="")
+
+            # [추가] 검색 안내 (전체/완료 모드일 때 7일 제한 안내)
+            if not search_keyword and current_filter != "⏳ 처리중":
+                hint = tk.Label(self.cards_frame,
+                                 text="💡 최근 7일치만 표시됩니다. 더 오래된 데이터는 위 검색창에 키워드를 입력해주세요.",
+                                 bg="#F5F6F8", fg="#999",
+                                 font=("맑은 고딕", 8), pady=15)
+                hint.pack(side="bottom")
 
         except Exception as e:
             import traceback
