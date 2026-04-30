@@ -31,14 +31,14 @@ class LogiPanApp:
         # --- 구글 비밀기지 연결 끝 ---
 
         # [창 크기 설정]
-        # 노트북 화면 기준으로 컴팩트하게. 화면이 작으면 90%까지만.
+        # 노트북에 적당한 컴팩트 사이즈
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        width = min(820, int(sw * 0.9))
-        height = min(720, int(sh * 0.85))
+        width = min(920, int(sw * 0.92))
+        height = min(740, int(sh * 0.92))
         self.root.geometry(f"{width}x{height}+{(sw-width)//2}+{(sh-height)//2}")
         # 버튼이 잘리지 않을 최소 크기
-        self.root.minsize(760, 640)
+        self.root.minsize(880, 700)
         self.root.configure(bg="#F5F6F8")        
         self.desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         # [추가] 사용자 설정 파일 경로 (저장 위치를 기억해두는 곳)
@@ -2785,10 +2785,12 @@ class LogiPanApp:
                                         command=list_canvas.yview)
         self.cards_frame = tk.Frame(list_canvas, bg="#F5F6F8")
 
-        self.cards_frame.bind(
-            "<Configure>",
-            lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all"))
-        )
+        def _update_field_scrollregion(e):
+            list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+            # [수정] 카드 새로 그릴 때 항상 맨 위로
+            list_canvas.yview_moveto(0)
+
+        self.cards_frame.bind("<Configure>", _update_field_scrollregion)
         canvas_window = list_canvas.create_window((0, 0), window=self.cards_frame, anchor="nw")
         # 캔버스 크기에 맞춰 cards_frame 너비 조절
         def _on_canvas_resize(event):
@@ -2951,10 +2953,12 @@ class LogiPanApp:
                                         command=list_canvas.yview)
         self.board_cards_frame = tk.Frame(list_canvas, bg="#F5F6F8")
 
-        self.board_cards_frame.bind(
-            "<Configure>",
-            lambda e: list_canvas.configure(scrollregion=list_canvas.bbox("all"))
-        )
+        def _update_scrollregion(e):
+            list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+            # [수정] 카드 새로 그릴 때 항상 맨 위로
+            list_canvas.yview_moveto(0)
+
+        self.board_cards_frame.bind("<Configure>", _update_scrollregion)
         canvas_window = list_canvas.create_window((0, 0), window=self.board_cards_frame, anchor="nw")
         def _on_canvas_resize(event):
             list_canvas.itemconfig(canvas_window, width=event.width)
@@ -3799,7 +3803,6 @@ class LogiPanApp:
                 tk.Label(self.board_cards_frame, text=msg,
                          bg="#F5F6F8", fg="#999",
                          font=("맑은 고딕", 11), pady=50, justify="center").pack()
-
             # 새 메시지 카운터
             if hasattr(self, 'board_new_counter'):
                 if new_count > 0:
