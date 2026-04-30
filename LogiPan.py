@@ -2854,7 +2854,7 @@ class LogiPanApp:
                    cursor="hand2").pack(side="right")
 
         tk.Label(input_inner,
-                 text="💡 바코드 한 줄에 하나씩 스캔. 같은 바코드 여러 번 스캔하면 자동 합쳐짐",
+                 text="💡 바코드 한 줄에 하나씩 스캔 · 같은 바코드 자동 합산 · 모두 정상 입고로 처리됨",
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
@@ -2953,6 +2953,7 @@ class LogiPanApp:
 
         # 입고 등록 양식 (입고탭과 동일):
         # 박스번호 | 바코드 | 정상수량 | 불량수량 | 정상로케이션 | 불량로케이션
+        # RT 입고는 정상만 처리 → 불량수량 0, 불량로케이션 00-00-00-00 고정
         rows = []
         for bc, qty in cnt.items():
             rows.append({
@@ -2961,7 +2962,7 @@ class LogiPanApp:
                 '정상수량': qty,
                 '불량수량': 0,
                 '정상로케이션': location,
-                '불량로케이션': '',
+                '불량로케이션': '00-00-00-00',
             })
 
         df = pd.DataFrame(rows)
