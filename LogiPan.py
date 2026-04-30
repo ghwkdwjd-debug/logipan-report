@@ -1390,9 +1390,18 @@ class LogiPanApp:
                       "lbl_mom_out", self.sel_mom_out, default_text="파일 미선택")
         make_action_btn(c4, "📋 출고 리스트 생성", "#8B5CF6", self.run_mom_out_logic)
 
-    # --- [탭: 마스터 등록] ---
+
+    # ========================================================================
+    # [탭: 마스터 등록] - 바코드표 → 마스터 등록 + 옵션 등록 양식 자동 변환
+    # ========================================================================
+    # 아이템 코드 매핑 (품번 9번째 글자 → 아이템코드)
+    ITEM_CODE_MAP = {
+        'R': 'RTW', 'S': 'SHOES', 'A': 'ACC',
+        'B': 'BAG', 'E': 'ETC', 'K': 'RAF'
+    }
+
     def setup_master_registration(self):
-        """바코드표 붙여넣기 → 자동 브랜드 매칭 → EMP 양식으로 변환 후 클립보드 복사"""
+        """바코드표 붙여넣기 → 마스터 등록 + 옵션 등록 양식 변환"""
         container = tk.Frame(self.t_master, bg="#F5F6F8")
         container.pack(fill="both", expand=True)
 
@@ -1409,7 +1418,7 @@ class LogiPanApp:
         tk.Label(title_text_box, text="마스터 등록",
                  font=("맑은 고딕", 15, "bold"),
                  bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
-        tk.Label(title_text_box, text="바코드표 붙여넣기 → EMP 양식 자동 변환",
+        tk.Label(title_text_box, text="바코드표 붙여넣기 → 마스터/옵션 양식 자동 변환",
                  font=("맑은 고딕", 8),
                  bg="#F5F6F8", fg="#888").pack(anchor="w")
 
@@ -1435,7 +1444,6 @@ class LogiPanApp:
         input_inner = tk.Frame(input_card, bg="white", padx=16, pady=12)
         input_inner.pack(side="left", fill="both", expand=True)
 
-        # 헤더
         head = tk.Frame(input_inner, bg="white")
         head.pack(fill="x", pady=(0, 4))
         tk.Label(head, text="📥",
@@ -1444,18 +1452,16 @@ class LogiPanApp:
                  font=("맑은 고딕", 10, "bold"),
                  bg="white", fg="#111827").pack(side="left")
 
-        # 지우기 버튼
         clr_btn = tk.Button(head, text="🗑️ 지우기",
-                             command=lambda: self._clear_master_input(),
+                             command=self._clear_master_input,
                              bg="#F3F4F6", fg="#6B7280",
                              font=("맑은 고딕", 8, "bold"),
                              relief="flat", padx=8, pady=2,
                              cursor="hand2")
         clr_btn.pack(side="right")
 
-        # 안내
         tk.Label(input_inner,
-                 text="💡 브랜드 시트의 바코드표를 그대로 붙여넣으세요 (앞 3자리로 브랜드 자동 매칭)",
+                 text="💡 바코드표에서 [상품명, 바코드번호, 상품메모1, 상품메모2, 대표판매가, 옵션내용, 수량] 컬럼 그대로 복붙",
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
@@ -1465,7 +1471,7 @@ class LogiPanApp:
                                        bg="#FAFAFA", padx=8, pady=6)
         self.txt_master_in.pack(fill="both", expand=True)
 
-        # ========== [결과 미리보기 카드 - 작게] ==========
+        # ========== [결과 리포트 카드] ==========
         preview_card_outer = tk.Frame(container, bg="#F5F6F8")
         preview_card_outer.pack(fill="x", padx=18, pady=(0, 8))
 
@@ -1478,13 +1484,11 @@ class LogiPanApp:
         preview_inner = tk.Frame(preview_card, bg="white", padx=14, pady=10)
         preview_inner.pack(side="left", fill="both", expand=True)
 
-        ph = tk.Frame(preview_inner, bg="white")
-        ph.pack(fill="x", pady=(0, 4))
-        tk.Label(ph, text="📝  변환 결과 / 매칭 리포트",
+        tk.Label(preview_inner, text="📝  변환 결과 / 매칭 리포트",
                  bg="white", fg="#111827",
-                 font=("맑은 고딕", 10, "bold")).pack(side="left")
+                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 4))
 
-        self.txt_master_report = tk.Text(preview_inner, height=4,
+        self.txt_master_report = tk.Text(preview_inner, height=5,
                                            font=("Consolas", 10),
                                            bg="#FAFAFA", bd=1, relief="solid",
                                            highlightthickness=1, highlightbackground="#E5E7EB",
@@ -1494,7 +1498,7 @@ class LogiPanApp:
         self.txt_master_report.tag_config("warn", foreground="#DC2626", font=("Consolas", 10, "bold"))
         self.txt_master_report.tag_config("info", foreground="#555", font=("Consolas", 10))
 
-        # ========== [액션 버튼 - 하단] ==========
+        # ========== [액션 버튼 - 하단 3개] ==========
         action_outer = tk.Frame(container, bg="#F5F6F8")
         action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
 
@@ -1517,12 +1521,16 @@ class LogiPanApp:
         make_modern_btn(action_outer, "🔄  변환 실행",
                          bg="#F59E0B", hover_bg="#D97706",
                          command=self.run_master_conversion)
-        make_modern_btn(action_outer, "📎  EMP 양식 복사",
+        make_modern_btn(action_outer, "📎  마스터 등록 복사",
+                         bg="#3B82F6", hover_bg="#1D4ED8",
+                         command=self.copy_master_table_to_clipboard)
+        make_modern_btn(action_outer, "📎  옵션 등록 복사",
                          bg="#10B981", hover_bg="#059669",
-                         command=self.copy_master_to_clipboard)
+                         command=self.copy_option_table_to_clipboard)
 
         # 마지막 결과 보관용
-        self._last_master_df = None
+        self._last_master_table_df = None  # 마스터 등록용
+        self._last_option_table_df = None  # 옵션 등록용
 
         # 브랜드 캐시 (Firestore에서 받아옴)
         self._brand_cache = {}
@@ -1535,9 +1543,10 @@ class LogiPanApp:
             return
         self.txt_master_in.delete("1.0", tk.END)
         self.txt_master_report.delete("1.0", tk.END)
-        self._last_master_df = None
+        self._last_master_table_df = None
+        self._last_option_table_df = None
 
-    # ========== [브랜드 매니저] ==========
+    # ========== [브랜드 캐시 + 매니저] ==========
     def refresh_brand_cache(self):
         """Firestore의 brand_master 컬렉션을 메모리에 로드"""
         try:
@@ -1608,7 +1617,6 @@ class LogiPanApp:
                 messagebox.showwarning("형식 오류", "코드는 정확히 3자리여야 합니다.", parent=win)
                 return
             try:
-                # 이미 있으면 확인
                 if code in self._brand_cache:
                     if not messagebox.askyesno("덮어쓰기",
                             f"코드 '{code}'는 이미 '{self._brand_cache[code]}'로 등록되어 있습니다.\n"
@@ -1650,7 +1658,6 @@ class LogiPanApp:
                                 font=("맑은 고딕", 10, "bold"))
         list_title.pack(side="left")
 
-        # 검색
         search_var = tk.StringVar()
         search_entry = tk.Entry(list_head, textvariable=search_var,
                                   font=("맑은 고딕", 9),
@@ -1659,7 +1666,6 @@ class LogiPanApp:
         tk.Label(list_head, text="🔍", bg="white",
                  font=("맑은 고딕", 9)).pack(side="right", padx=(0, 4))
 
-        # 리스트 (Treeview)
         tree_frame = tk.Frame(list_inner, bg="white")
         tree_frame.pack(fill="both", expand=True)
 
@@ -1690,7 +1696,6 @@ class LogiPanApp:
 
         search_var.trace_add("write", lambda *a: refresh_list())
 
-        # 우클릭 메뉴: 수정/삭제
         ctx_menu = tk.Menu(win, tearoff=0, font=("맑은 고딕", 10))
 
         def edit_brand():
@@ -1743,99 +1748,234 @@ class LogiPanApp:
 
         refresh_list()
 
-    # ========== [바코드표 → EMP 양식 변환] ==========
-    def run_master_conversion(self):
-        """입력창의 바코드표를 EMP 양식으로 변환.
-        ※ 정확한 컬럼 매핑은 EMP 양식 샘플 받은 후 보강 필요."""
+    # ========== [바코드표 → 마스터/옵션 양식 변환] ==========
+    def _parse_master_input(self):
+        """입력창의 바코드표를 파싱.
+        헤더 행은 자동 스킵, 컬럼 위치를 자동 인식.
+        Returns: list of dict [{상품명, 바코드번호, 상품메모1, 상품메모2, 대표판매가, 옵션내용, 수량}]
+        """
         raw = self.txt_master_in.get("1.0", "end-1c").strip()
         if not raw:
-            messagebox.showwarning("주의", "바코드표를 먼저 붙여넣어주세요.")
+            return None
+
+        rows = []
+        lines = raw.split('\n')
+
+        # 헤더 행 찾기 (위 5행까지) - "상품명", "바코드", "상품메모" 같은 키워드 있는 행
+        header_idx = -1
+        col_map = {}  # {필드명: 컬럼 인덱스}
+
+        header_keywords = {
+            '상품명': 'product_name',
+            '바코드': 'barcode',
+            '바코드번호': 'barcode',
+            '상품메모1': 'memo1',
+            '상품메모2': 'memo2',
+            '대표판매가': 'price',
+            '판매가': 'price',
+            '옵션내용': 'size',
+            '옵션': 'size',
+            '사이즈': 'size',
+            '수량': 'qty',
+        }
+
+        for i, line in enumerate(lines[:5]):
+            tokens = re.split(r'\t', line)  # 엑셀 복붙은 탭 구분이 정상
+            if len(tokens) < 4:
+                continue
+
+            tmp_map = {}
+            for col_idx, tok in enumerate(tokens):
+                tok_clean = tok.strip()
+                # 정확 매칭 우선
+                if tok_clean in header_keywords:
+                    field = header_keywords[tok_clean]
+                    if field not in tmp_map:
+                        tmp_map[field] = col_idx
+
+            # 헤더로 인식: 적어도 바코드 + memo1이 있어야 함
+            if 'barcode' in tmp_map and 'memo1' in tmp_map:
+                header_idx = i
+                col_map = tmp_map
+                break
+
+        if header_idx == -1:
+            # 헤더 못 찾음 → 위치 기반으로 추정 (스샷 형식 기준)
+            # 상품명 | 바코드번호 | 상품메모1 | 상품메모2 | 대표판매가 | 옵션내용 | 수량
+            col_map = {
+                'product_name': 0, 'barcode': 1, 'memo1': 2, 'memo2': 3,
+                'price': 4, 'size': 5, 'qty': 6
+            }
+            data_lines = lines
+        else:
+            data_lines = lines[header_idx + 1:]
+
+        # 데이터 파싱
+        for line in data_lines:
+            if not line.strip():
+                continue
+            tokens = re.split(r'\t', line)
+            if len(tokens) < 3:
+                continue
+
+            def get_col(field, default=''):
+                idx = col_map.get(field)
+                if idx is None or idx >= len(tokens):
+                    return default
+                return tokens[idx].strip()
+
+            barcode = get_col('barcode')
+            memo1 = get_col('memo1')
+
+            # 바코드와 품번 둘 다 비어있으면 스킵
+            if not barcode and not memo1:
+                continue
+
+            rows.append({
+                '상품명': get_col('product_name'),
+                '바코드': barcode,
+                '품번': memo1,  # 상품메모1 = 품번
+                '상품명_상세': get_col('memo2'),  # 상품메모2 = 상세 상품명
+                '대표판매가': get_col('price'),
+                '옵션내용': get_col('size'),
+                '수량': get_col('qty'),
+            })
+
+        return rows if rows else None
+
+    def run_master_conversion(self):
+        """입력 바코드표 → 마스터 등록용 + 옵션 등록용 두 양식으로 변환"""
+        rows = self._parse_master_input()
+        if not rows:
+            messagebox.showwarning("주의",
+                "바코드표를 인식하지 못했습니다.\n"
+                "엑셀에서 [상품명/바코드번호/상품메모1/상품메모2/대표판매가/옵션내용/수량] 컬럼이 있는 행을 복사해주세요.")
             return
 
         # 리포트 비우기
         self.txt_master_report.delete("1.0", tk.END)
 
-        # 줄별로 파싱 (탭/공백 구분)
-        rows = []
-        unknown_codes = set()  # 등록 안 된 브랜드 코드들
+        # 브랜드 매칭
+        unknown_brands = set()
+        unknown_items = set()
 
-        for line in raw.split('\n'):
-            line = line.strip()
-            if not line: continue
-            tokens = re.split(r'[\t]+', line) if '\t' in line else re.split(r'\s{2,}', line)
-            tokens = [t.strip() for t in tokens if t.strip()]
-            if not tokens: continue
-
-            # 첫 토큰이 바코드일 가능성 (헤더 행 자동 스킵)
-            first = tokens[0]
-            if not self._looks_like_barcode(first):
-                # 헤더 행으로 보고 스킵
+        for r in rows:
+            품번 = r['품번']
+            if not 품번:
                 continue
+            # 브랜드 코드 = 품번 앞 3자리
+            brand_code = 품번[:3].upper() if len(품번) >= 3 else ''
+            r['브랜드코드'] = brand_code
+            r['브랜드명'] = self._brand_cache.get(brand_code, '')
+            if brand_code and not r['브랜드명']:
+                unknown_brands.add(brand_code)
 
-            # 브랜드 코드 = 앞 3자리
-            brand_code = first[:3].upper()
-            brand_name = self._brand_cache.get(brand_code, '')
-            if not brand_name:
-                unknown_codes.add(brand_code)
+            # 아이템 코드 = 품번 9번째 글자
+            if len(품번) >= 9:
+                item_letter = 품번[8].upper()
+                r['아이템코드'] = self.ITEM_CODE_MAP.get(item_letter, '')
+                if not r['아이템코드']:
+                    unknown_items.add(item_letter)
+            else:
+                r['아이템코드'] = ''
 
-            rows.append({
-                '바코드': first,
-                '브랜드코드': brand_code,
-                '브랜드명': brand_name,
-                '원본행': tokens
+        # ========== [출력 1: 마스터 등록 양식] ==========
+        # 같은 품번끼리 합치기 (한 행으로)
+        seen_품번 = set()
+        master_rows = []
+        for r in rows:
+            품번 = r['품번']
+            if not 품번 or 품번 in seen_품번:
+                continue
+            seen_품번.add(품번)
+
+            # 상품명: 메모2 우선, 없으면 상품명
+            상품명 = r['상품명_상세'] or r['상품명']
+            # 가격: 콤마 제거
+            try:
+                가격 = int(str(r['대표판매가']).replace(',', '').replace(' ', '').strip() or 0)
+            except:
+                가격 = 0
+
+            master_rows.append({
+                '품번': 품번,
+                '대표코드': 품번,
+                '상품명': 상품명,
+                '사이즈체계코드': '엠프티',
+                '브랜드코드': r['브랜드명'] or f"[미등록:{r['브랜드코드']}]",
+                '년도코드': '999',
+                '시즌코드': '999',
+                '성별코드': '999',
+                '아이템코드': r['아이템코드'] or f"[미등록:{품번[8] if len(품번)>=9 else '?'}]",
+                '택가': 0,
+                '정상가': 가격,
+                '판가': 0,
+                '원가': 0,
             })
 
-        if not rows:
-            self.txt_master_report.insert(tk.END, "⚠️ 인식된 바코드가 없습니다.\n", "warn")
-            messagebox.showwarning("결과 없음", "바코드를 인식하지 못했습니다.")
-            return
+        # ========== [출력 2: 옵션 등록 양식] ==========
+        # 행 단위 = 바코드 단위
+        option_rows = []
+        for r in rows:
+            if not r['바코드']:
+                continue
+            option_rows.append({
+                '품번': r['품번'],
+                '색상코드': '999',
+                '사이즈코드': r['옵션내용'],
+                '바코드': r['바코드'],
+                '고정로케이션': '00-00-00-00',
+            })
 
-        # 등록 안 된 브랜드가 있으면 경고
-        if unknown_codes:
-            self.txt_master_report.insert(tk.END,
-                f"⚠️ 등록되지 않은 브랜드 코드: {', '.join(sorted(unknown_codes))}\n", "warn")
-            self.txt_master_report.insert(tk.END,
-                "    → 우측 [🗂️ 브랜드 관리]에서 먼저 등록해주세요.\n\n", "info")
+        self._last_master_table_df = pd.DataFrame(master_rows)
+        self._last_option_table_df = pd.DataFrame(option_rows)
 
-        # 등록된 브랜드별 카운트
-        from collections import Counter
-        cnt = Counter(r['브랜드코드'] for r in rows if r['브랜드명'])
-        total = len(rows)
-        ok_count = sum(1 for r in rows if r['브랜드명'])
-        unknown_count = total - ok_count
+        # ========== [리포트 작성] ==========
+        report = self.txt_master_report
+        report.insert(tk.END,
+            f"✅ 인식: 입력 {len(rows)}건 → 마스터 {len(master_rows)}품번 / 옵션 {len(option_rows)}바코드\n", "ok")
 
-        self.txt_master_report.insert(tk.END,
-            f"✅ 인식: {total}건 (매칭 OK: {ok_count} / 등록 필요: {unknown_count})\n", "ok")
-        for code, c in sorted(cnt.items()):
-            name = self._brand_cache.get(code, '?')
-            self.txt_master_report.insert(tk.END,
-                f"  • {code} ({name}): {c}건\n", "info")
+        if unknown_brands:
+            report.insert(tk.END,
+                f"⚠️ 등록되지 않은 브랜드 코드: {', '.join(sorted(unknown_brands))}\n", "warn")
+            report.insert(tk.END,
+                "    → 우측 [🗂️ 브랜드 관리]에서 먼저 등록해주세요.\n", "info")
 
-        # ※ 실제 EMP 양식 변환은 양식 샘플 받은 후 보강
-        # 일단 임시로 기본 컬럼만 채워두기
-        df_out = pd.DataFrame([{
-            '브랜드명': r['브랜드명'] or f"[미등록:{r['브랜드코드']}]",
-            '바코드': r['바코드'],
-            '상품코드': r['바코드'],  # 임시 - EMP 양식 받으면 보강
-        } for r in rows])
+        if unknown_items:
+            report.insert(tk.END,
+                f"⚠️ 알 수 없는 아이템 코드 글자: {', '.join(sorted(unknown_items))}\n", "warn")
+            report.insert(tk.END,
+                f"    → 알려진 코드: {', '.join(f'{k}={v}' for k,v in self.ITEM_CODE_MAP.items())}\n", "info")
 
-        self._last_master_df = df_out
+        # 브랜드별 요약
+        if master_rows:
+            from collections import Counter
+            cnt = Counter(r['브랜드코드'] for r in rows if r['품번'])
+            for code, c in sorted(cnt.items()):
+                if not code:
+                    continue
+                name = self._brand_cache.get(code, '?')
+                report.insert(tk.END, f"  • {code} ({name}): {c}건\n", "info")
 
-    def copy_master_to_clipboard(self):
-        """마스터 변환 결과를 클립보드에 복사 (TSV 헤더 제외)"""
-        df = getattr(self, '_last_master_df', None)
+    def copy_master_table_to_clipboard(self):
+        """마스터 등록 양식을 클립보드에 복사 (TSV 헤더 제외)"""
+        df = getattr(self, '_last_master_table_df', None)
         if df is None or df.empty:
             messagebox.showwarning("복사 불가",
                 "복사할 데이터가 없습니다.\n먼저 [🔄 변환 실행]을 눌러주세요.")
             return
 
-        # 미등록 브랜드 있으면 경고
-        unknown = df[df['브랜드명'].str.startswith('[미등록:', na=False)]
-        if len(unknown) > 0:
-            if not messagebox.askyesno("미등록 브랜드 포함",
-                f"⚠️ 미등록 브랜드 {len(unknown)}건이 포함되어 있습니다.\n"
-                "그래도 복사하시겠습니까?\n"
-                "(브랜드 관리에서 먼저 등록하는 걸 권장합니다)"):
+        # 미등록 검사
+        unknown = df[df['브랜드코드'].astype(str).str.startswith('[미등록:')]
+        unknown_item = df[df['아이템코드'].astype(str).str.startswith('[미등록:')]
+        if len(unknown) > 0 or len(unknown_item) > 0:
+            msg = []
+            if len(unknown) > 0:
+                msg.append(f"⚠️ 미등록 브랜드 {len(unknown)}건")
+            if len(unknown_item) > 0:
+                msg.append(f"⚠️ 미등록 아이템 {len(unknown_item)}건")
+            if not messagebox.askyesno("미등록 포함",
+                f"{', '.join(msg)}이 포함되어 있습니다.\n그래도 복사하시겠습니까?"):
                 return
 
         try:
@@ -1844,9 +1984,28 @@ class LogiPanApp:
             self.root.clipboard_append(tsv)
             self.root.update()
             messagebox.showinfo("복사 완료",
-                f"✅ 클립보드에 복사되었습니다!\n\n"
-                f"📊 {len(df)}건\n"
-                f"📋 EMP에 Ctrl+V로 붙여넣기")
+                f"✅ 마스터 등록 양식 복사 완료!\n\n"
+                f"📊 {len(df)}품번\n"
+                f"📋 [상품관리 시트]에 Ctrl+V")
+        except Exception as e:
+            messagebox.showerror("복사 실패", f"{e}")
+
+    def copy_option_table_to_clipboard(self):
+        """옵션 등록 양식을 클립보드에 복사 (TSV 헤더 제외)"""
+        df = getattr(self, '_last_option_table_df', None)
+        if df is None or df.empty:
+            messagebox.showwarning("복사 불가",
+                "복사할 데이터가 없습니다.\n먼저 [🔄 변환 실행]을 눌러주세요.")
+            return
+        try:
+            tsv = df.to_csv(sep='\t', index=False, header=False)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(tsv)
+            self.root.update()
+            messagebox.showinfo("복사 완료",
+                f"✅ 옵션 등록 양식 복사 완료!\n\n"
+                f"📊 {len(df)}바코드\n"
+                f"📋 [상품옵션 시트]에 Ctrl+V")
         except Exception as e:
             messagebox.showerror("복사 실패", f"{e}")
 
