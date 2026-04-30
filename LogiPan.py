@@ -12,7 +12,7 @@ from firebase_admin import credentials, firestore, messaging
 class LogiPanApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("로지판 (Logi-Pan) v11.0 - 통합 물류 파트너")
+        self.root.title("로지판 (Logi-Pan) - 통합 물류 파트너")
 
         # --- 구글 비밀기지 연결 시작 ---
         try:
@@ -34,7 +34,7 @@ class LogiPanApp:
         # 화면 크기에 비례. 노트북에서도 데스크탑에서도 적당하게.
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        # 화면의 60% 정도 (최대는 980x800)
+        # 화면의 60% 정도 (최대는 900x800)
         width = min(980, int(sw * 0.62))
         height = min(800, int(sh * 0.78))
         self.root.geometry(f"{width}x{height}+{(sw-width)//2}+{(sh-height)//2}")
