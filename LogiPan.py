@@ -606,8 +606,10 @@ class LogiPanApp:
         # ========== [카드 컨테이너 - 2열 그리드] ==========
         cards_frame = tk.Frame(container, bg="#F5F6F8")
         cards_frame.pack(fill="both", expand=True, padx=18, pady=(0, 12))
-        cards_frame.columnconfigure(0, weight=1)
-        cards_frame.columnconfigure(1, weight=1)
+        cards_frame.columnconfigure(0, weight=1, uniform="col")
+        cards_frame.columnconfigure(1, weight=1, uniform="col")
+        cards_frame.rowconfigure(0, weight=1, uniform="row")
+        cards_frame.rowconfigure(1, weight=1, uniform="row")
 
         # 카드 그리는 공통 함수
         def make_card(parent, row, col, accent_color, badge_text, badge_bg, badge_fg, title, desc):
@@ -662,14 +664,14 @@ class LogiPanApp:
             setattr(self, label_widget_attr, lbl)
             return lbl
 
-        # 액션 버튼 그리는 공통 함수
+        # 액션 버튼 그리는 공통 함수 (하단 고정)
         def make_action_btn(parent, text, bg, command):
             btn = tk.Button(parent, text=text, command=command,
                               bg=bg, fg="white",
                               font=("맑은 고딕", 9, "bold"),
                               relief="flat", pady=9,
                               cursor="hand2")
-            btn.pack(fill="x", pady=(8, 0))
+            btn.pack(fill="x", side="bottom", pady=(8, 0))
             return btn
 
         # ========== [카드 1: 신규 마스터 생성] ==========
@@ -694,8 +696,6 @@ class LogiPanApp:
                         desc="성수 → 여주 전체 재고 이동용 입고 파일 생성")
         make_file_row(c2, "📁 출고리스트 (성수)", "#ECFDF5",
                       "lbl_inbound_send", self.sel_inbound_send)
-        # 빈 줄 (높이 맞춤)
-        tk.Frame(c2, bg="white", height=24).pack(fill="x")
         make_action_btn(c2, "📋 입고 리스트 생성", "#10B981", self.run_mom_inbound_logic)
 
         # ========== [카드 3: 제외 적용 입고] ==========
