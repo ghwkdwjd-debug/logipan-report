@@ -2744,6 +2744,53 @@ class LogiPanApp:
                    relief="flat", padx=8, pady=4,
                    cursor="hand2").pack(side="right", anchor="se")
 
+        # ========== [매장 선택 카드] ==========
+        store_card_outer = tk.Frame(container, bg="#F5F6F8")
+        store_card_outer.pack(fill="x", padx=18, pady=(0, 8))
+
+        store_card = tk.Frame(store_card_outer, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        store_card.pack(fill="x")
+        tk.Frame(store_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+
+        store_inner = tk.Frame(store_card, bg="white", padx=14, pady=10)
+        store_inner.pack(side="left", fill="both", expand=True)
+
+        store_row = tk.Frame(store_inner, bg="white")
+        store_row.pack(fill="x")
+        tk.Label(store_row, text="🏬",
+                 bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
+        tk.Label(store_row, text="매장 선택",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(0, 12))
+
+        # 매장 버튼들
+        self.rt_store_var = tk.StringVar(value="성수RT")
+        self._rt_store_btns = {}
+
+        rt_stores = ["성수RT", "압구정RT", "갤러리아RT"]
+
+        def select_rt_store(store):
+            self.rt_store_var.set(store)
+            for k, btn in self._rt_store_btns.items():
+                if k == store:
+                    btn.config(bg="#1877F2", fg="white")
+                else:
+                    btn.config(bg="#F0F2F5", fg="#666")
+
+        for s in rt_stores:
+            btn = tk.Button(store_row, text=s,
+                             command=lambda x=s: select_rt_store(x),
+                             bg="#F0F2F5", fg="#666",
+                             font=("맑은 고딕", 9, "bold"),
+                             relief="flat", padx=14, pady=6,
+                             cursor="hand2")
+            btn.pack(side="left", padx=2)
+            self._rt_store_btns[s] = btn
+
+        # 기본값 강조
+        self._rt_store_btns["성수RT"].config(bg="#1877F2", fg="white")
+
         # ========== [액션 버튼 - 하단] ==========
         action_outer = tk.Frame(container, bg="#F5F6F8")
         action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
@@ -2767,6 +2814,9 @@ class LogiPanApp:
         make_btn(action_outer, "📎  입고 양식 복사",
                   bg="#10B981", hover_bg="#059669",
                   command=self.copy_rt_to_clipboard)
+        make_btn(action_outer, "💾  CSV 저장",
+                  bg="#8B5CF6", hover_bg="#7C3AED",
+                  command=self.save_rt_csv)
 
         # ========== [총 스캔 수량 - 큰 표시] ==========
         total_outer = tk.Frame(container, bg="#F5F6F8")
@@ -2989,6 +3039,45 @@ class LogiPanApp:
                 f"✅ 클립보드에 복사 완료!\n\n📊 {len(df)}종 / 총 {int(df['정상수량'].sum())}개\n📋 EMP에 Ctrl+V")
         except Exception as e:
             messagebox.showerror("복사 실패", f"{e}")
+
+    def save_rt_csv(self):
+        """[추가] RT 입고 CSV 저장 - 파일명: 날짜+매장RT입고"""
+        # 변환 안 됐으면 자동으로 한번 돌림
+        df = getattr(self, '_last_rt_df', None)
+        if df is None or df.empty:
+            # 자동 변환 시도
+            raw = self.txt_rt_in.get("1.0", "end-1c").strip()
+            if not raw:
+                messagebox.showwarning("저장 불가", "스캔한 바코드가 없습니다.")
+                return
+            self.run_rt_conversion()
+            df = getattr(self, '_last_rt_df', None)
+            if df is None or df.empty:
+                return
+
+        # CSV 양식: 입고탭과 동일하게 [바코드, 수량, 메모] 형식
+        # (정상+불량 합산이지만 RT는 정상만이라 정상수량과 동일)
+        store = self.rt_store_var.get()  # 예: 성수RT
+        today = datetime.now().strftime('%y%m%d')
+
+        try:
+            # CSV용 데이터프레임 (입고 CSV 양식과 동일)
+            csv_df = df[['바코드', '정상수량']].copy()
+            csv_df.columns = ['바코드', '수량']
+            csv_df['메모'] = f"{today} {store}입고"
+
+            # 파일명: 날짜 + 매장RT + 입고
+            fn = self.get_unique_filename(f"{today} {store}입고", "csv")
+            full_path = os.path.join(self.save_dir, fn)
+            csv_df.to_csv(full_path, index=False, encoding="utf-8-sig")
+
+            messagebox.showinfo("저장 완료",
+                f"✅ CSV 저장 완료!\n\n"
+                f"📄 파일: {fn}\n"
+                f"📊 {len(csv_df)}종 / 총 {int(csv_df['수량'].sum())}개\n\n"
+                f"💡 작업 종료 후 우측 상단 🔄 리셋 버튼을 눌러주세요.")
+        except Exception as e:
+            messagebox.showerror("저장 실패", f"{e}")
 
     def setup_closing_stock(self):
         """마감재고 - 진행바 차트 + 캐파 대비 % + 드래그앤드롭"""
