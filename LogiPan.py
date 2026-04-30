@@ -82,11 +82,11 @@ class LogiPanApp:
         self.style.configure("TNotebook",
                               background="#F5F6F8",
                               borderwidth=0,
-                              tabmargins=[16, 12, 16, 0])
-        # 탭 (기본 상태)
+                              tabmargins=[12, 10, 12, 0])
+        # 탭 (기본 상태) - 패딩 줄여서 8개 탭 다 보이게
         self.style.configure("TNotebook.Tab",
-                              padding=[20, 10],
-                              font=("맑은 고딕", 10, "bold"),
+                              padding=[12, 8],
+                              font=("맑은 고딕", 9, "bold"),
                               background="#F5F6F8",
                               foreground="#6B7280",
                               borderwidth=0,
@@ -134,11 +134,11 @@ class LogiPanApp:
         self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥  입고")
         self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤  출고")
         self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦  맘스")
-        self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🏷️  마스터 등록")
-        self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊  마감재고")
+        self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🏷️  마스터")
         self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍  재고파악")
-        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋  작업보고")
         self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢  공지/소통")
+        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋  작업보고")
+        self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊  마감재고")
 
         self.setup_inbound()
         self.setup_outbound()
@@ -1532,9 +1532,10 @@ class LogiPanApp:
         self._last_master_table_df = None  # 마스터 등록용
         self._last_option_table_df = None  # 옵션 등록용
 
-        # 브랜드 캐시 (Firestore에서 받아옴)
+        # 브랜드 캐시 (Firestore에서 받아옴) - 실시간 리스너로 자동 동기화
         self._brand_cache = {}
         self.refresh_brand_cache()
+        self.start_brand_listener()  # [추가] 다른 PC에서 변경 시 즉시 반영
 
     def _clear_master_input(self):
         """마스터 등록 입력창 + 리포트 비우기"""
@@ -1548,7 +1549,7 @@ class LogiPanApp:
 
     # ========== [브랜드 캐시 + 매니저] ==========
     def refresh_brand_cache(self):
-        """Firestore의 brand_master 컬렉션을 메모리에 로드"""
+        """Firestore의 brand_master 컬렉션을 메모리에 로드 (수동 갱신용)"""
         try:
             docs = self.db.collection('brand_master').get()
             self._brand_cache = {}
@@ -1559,6 +1560,27 @@ class LogiPanApp:
         except Exception as e:
             print(f"⚠️ 브랜드 캐시 로드 실패: {e}")
             self._brand_cache = {}
+
+    def start_brand_listener(self):
+        """[추가] brand_master 실시간 리스너 - 다른 PC에서 변경하면 즉시 반영"""
+        def on_brand_snapshot(col_snapshot, changes, read_time):
+            try:
+                for change in changes:
+                    doc_id = change.document.id
+                    data = change.document.to_dict()
+                    if change.type.name == 'ADDED' or change.type.name == 'MODIFIED':
+                        self._brand_cache[doc_id] = data.get('brand_name', doc_id)
+                    elif change.type.name == 'REMOVED':
+                        self._brand_cache.pop(doc_id, None)
+            except Exception as e:
+                print(f"⚠️ 브랜드 리스너 처리 오류: {e}")
+
+        try:
+            query = self.db.collection('brand_master')
+            self._brand_listener = query.on_snapshot(on_brand_snapshot)
+            print("📡 브랜드 마스터 실시간 리스너 가동")
+        except Exception as e:
+            print(f"❌ 브랜드 리스너 설정 오류: {e}")
 
     def open_brand_manager(self):
         """브랜드 관리 팝업 - 등록/수정/삭제"""
