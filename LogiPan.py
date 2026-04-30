@@ -12,7 +12,7 @@ from firebase_admin import credentials, firestore, messaging
 class LogiPanApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("로지판 (Logi-Pan) - 통합 물류 파트너")
+        self.root.title("로지판 (Logi-Pan) v11.0 - 통합 물류 파트너")
 
         # --- 구글 비밀기지 연결 시작 ---
         try:
@@ -34,7 +34,7 @@ class LogiPanApp:
         # 화면 크기에 비례. 노트북에서도 데스크탑에서도 적당하게.
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        # 화면의 60% 정도 (최대는 900x800)
+        # 화면의 60% 정도 (최대는 980x800)
         width = min(980, int(sw * 0.62))
         height = min(800, int(sh * 0.78))
         self.root.geometry(f"{width}x{height}+{(sw-width)//2}+{(sh-height)//2}")
@@ -1428,22 +1428,77 @@ class LogiPanApp:
     }
 
     def setup_master_registration(self):
-        """바코드표 붙여넣기 → 마스터 등록 + 옵션 등록 양식 변환"""
+        """마스터 등록 + 색상코드 + 상품관리 수정 + 상품옵션 수정 (서브탭 구조)"""
         container = tk.Frame(self.t_master, bg="#F5F6F8")
         container.pack(fill="both", expand=True)
 
+        # ========== [서브탭 노트북] ==========
+        sub_nb = ttk.Notebook(container, style="SubTab.TNotebook")
+        sub_nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
+
+        # 서브탭 스타일 (메인 탭과 구분되게 더 컴팩트)
+        self.style.configure("SubTab.TNotebook",
+                              background="#F5F6F8",
+                              borderwidth=0,
+                              tabmargins=[0, 4, 0, 0])
+        self.style.configure("SubTab.TNotebook.Tab",
+                              padding=[14, 6],
+                              font=("맑은 고딕", 9),
+                              background="#F5F6F8",
+                              foreground="#6B7280",
+                              borderwidth=0,
+                              focuscolor="#F5F6F8")
+        self.style.map("SubTab.TNotebook.Tab",
+                        background=[("selected", "white"),
+                                    ("active", "#E5E7EB")],
+                        foreground=[("selected", "#1877F2"),
+                                    ("active", "#374151")])
+
+        # 2개 서브 탭
+        self.t_master_main = ttk.Frame(sub_nb)
+        self.t_master_kit = ttk.Frame(sub_nb)
+
+        sub_nb.add(self.t_master_main, text="🆕 마스터 등록")
+        sub_nb.add(self.t_master_kit, text="🔧 마스터 수정 키트")
+
+        # 서브탭 1: 마스터 등록
+        self._setup_master_main_tab(self.t_master_main)
+        # 서브탭 2: 수정 키트 (색상/상품관리/상품옵션 3종)
+        self._setup_master_kit_tab(self.t_master_kit)
+
+    def _setup_master_placeholder(self, parent, icon, title, desc):
+        """미구현 서브탭 - 안내 화면"""
+        wrap = tk.Frame(parent, bg="#F5F6F8")
+        wrap.pack(fill="both", expand=True)
+
+        tk.Label(wrap, text=icon, font=("맑은 고딕", 48),
+                 bg="#F5F6F8").pack(pady=(80, 12))
+        tk.Label(wrap, text=title,
+                 bg="#F5F6F8", fg="#1A1A1A",
+                 font=("맑은 고딕", 16, "bold")).pack()
+        tk.Label(wrap, text="🚧 준비 중",
+                 bg="#FEF3C7", fg="#92400E",
+                 font=("맑은 고딕", 9, "bold"),
+                 padx=12, pady=4).pack(pady=(8, 14))
+        tk.Label(wrap, text=desc,
+                 bg="#F5F6F8", fg="#6B7280",
+                 font=("맑은 고딕", 10),
+                 justify="center").pack()
+
+    def _setup_master_main_tab(self, container):
+        """마스터 등록 메인 화면 - 바코드표 붙여넣기 → 변환"""
         # ========== [상단 헤더] ==========
         header_frame = tk.Frame(container, bg="#F5F6F8")
-        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+        header_frame.pack(side="top", fill="x", padx=18, pady=(12, 6))
 
         title_left = tk.Frame(header_frame, bg="#F5F6F8")
         title_left.pack(side="left")
-        tk.Label(title_left, text="🏷️", font=("맑은 고딕", 22),
+        tk.Label(title_left, text="🆕", font=("맑은 고딕", 18),
                  bg="#F5F6F8").pack(side="left", padx=(0, 6))
         title_text_box = tk.Frame(title_left, bg="#F5F6F8")
         title_text_box.pack(side="left")
         tk.Label(title_text_box, text="마스터 등록",
-                 font=("맑은 고딕", 15, "bold"),
+                 font=("맑은 고딕", 13, "bold"),
                  bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
         tk.Label(title_text_box, text="바코드표 붙여넣기 → 마스터/옵션 양식 자동 변환",
                  font=("맑은 고딕", 8),
@@ -1572,6 +1627,330 @@ class LogiPanApp:
         self._brand_cache = {}
         self.refresh_brand_cache()
         self.start_brand_listener()  # [추가] 다른 PC에서 변경 시 즉시 반영
+
+    # ========== [마스터 수정 키트] ==========
+    def _setup_master_kit_tab(self, container):
+        """3종 수정 양식: 색상코드 / 상품관리 / 상품옵션 - 라디오 버튼으로 전환"""
+        wrap = tk.Frame(container, bg="#F5F6F8")
+        wrap.pack(fill="both", expand=True)
+
+        # ===== 상단 헤더 + 모드 선택 =====
+        header = tk.Frame(wrap, bg="#F5F6F8")
+        header.pack(side="top", fill="x", padx=18, pady=(12, 6))
+
+        title_left = tk.Frame(header, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="🔧", font=("맑은 고딕", 18),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_box.pack(side="left")
+        tk.Label(title_box, text="마스터 수정 키트",
+                 font=("맑은 고딕", 13, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_box, text="색상코드 / 상품관리 / 상품옵션 양식 변환",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # ===== 모드 선택 카드 =====
+        mode_card_outer = tk.Frame(wrap, bg="#F5F6F8")
+        mode_card_outer.pack(fill="x", padx=18, pady=(0, 8))
+
+        mode_card = tk.Frame(mode_card_outer, bg="white",
+                               highlightthickness=1, highlightbackground="#E5E7EB")
+        mode_card.pack(fill="x")
+        tk.Frame(mode_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+
+        mode_inner = tk.Frame(mode_card, bg="white", padx=14, pady=10)
+        mode_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(mode_inner, text="📋 작업 선택",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 9, "bold")).pack(anchor="w", pady=(0, 6))
+
+        self._kit_mode = tk.StringVar(value="color")
+        self._kit_mode_btns = {}
+
+        btn_row = tk.Frame(mode_inner, bg="white")
+        btn_row.pack(fill="x")
+
+        modes = [
+            ("color", "🎨 색상코드 등록"),
+            ("product", "✏️ 상품 관리 수정"),
+            ("option", "🔧 상품 옵션 수정"),
+        ]
+
+        def select_mode(mode):
+            self._kit_mode.set(mode)
+            for k, btn in self._kit_mode_btns.items():
+                if k == mode:
+                    btn.config(bg="#1877F2", fg="white")
+                else:
+                    btn.config(bg="#F0F2F5", fg="#666")
+            self._update_kit_view()
+
+        for mode, label in modes:
+            btn = tk.Button(btn_row, text=label,
+                             command=lambda m=mode: select_mode(m),
+                             bg="#F0F2F5", fg="#666",
+                             font=("맑은 고딕", 9, "bold"),
+                             relief="flat", padx=14, pady=6,
+                             cursor="hand2")
+            btn.pack(side="left", padx=2)
+            self._kit_mode_btns[mode] = btn
+
+        # 기본 색상 강조
+        self._kit_mode_btns["color"].config(bg="#1877F2", fg="white")
+
+        # ===== 액션 버튼 - 하단 고정 =====
+        action_outer = tk.Frame(wrap, bg="#F5F6F8")
+        action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
+
+        def make_btn(parent, text, bg, hover_bg, command):
+            shadow = tk.Frame(parent, bg=hover_bg)
+            shadow.pack(side="left", expand=True, fill="x", padx=2)
+            btn = tk.Button(shadow, text=text, bg=bg, fg="white",
+                              activebackground=hover_bg, activeforeground="white",
+                              font=("맑은 고딕", 10, "bold"),
+                              relief="flat", bd=0, cursor="hand2", command=command)
+            btn.pack(fill="x", ipady=8)
+            def on_e(e): btn.config(bg=hover_bg)
+            def on_l(e): btn.config(bg=bg)
+            btn.bind("<Enter>", on_e); btn.bind("<Leave>", on_l)
+            return btn
+
+        make_btn(action_outer, "🔄  변환 실행",
+                  bg="#F59E0B", hover_bg="#D97706",
+                  command=self.run_kit_conversion)
+        make_btn(action_outer, "📎  결과 복사",
+                  bg="#10B981", hover_bg="#059669",
+                  command=self.copy_kit_to_clipboard)
+
+        # ===== 결과 리포트 - 하단 (버튼 위) =====
+        report_outer = tk.Frame(wrap, bg="#F5F6F8")
+        report_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 8))
+
+        report_card = tk.Frame(report_outer, bg="white",
+                                 highlightthickness=1, highlightbackground="#E5E7EB")
+        report_card.pack(fill="x")
+        tk.Frame(report_card, bg="#8B5CF6", width=4).pack(side="left", fill="y")
+
+        report_inner = tk.Frame(report_card, bg="white", padx=14, pady=10)
+        report_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(report_inner, text="📝  변환 결과 / 매칭 리포트",
+                 bg="white", fg="#111827",
+                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 4))
+
+        self.txt_kit_report = tk.Text(report_inner, height=4,
+                                        font=("Consolas", 10),
+                                        bg="#FAFAFA", bd=1, relief="solid",
+                                        highlightthickness=1, highlightbackground="#E5E7EB",
+                                        padx=8, pady=6)
+        self.txt_kit_report.pack(fill="x")
+        self.txt_kit_report.tag_config("ok", foreground="#16A34A", font=("Consolas", 10, "bold"))
+        self.txt_kit_report.tag_config("warn", foreground="#DC2626", font=("Consolas", 10, "bold"))
+        self.txt_kit_report.tag_config("info", foreground="#555", font=("Consolas", 10))
+
+        # ===== 입력 카드 (메인) =====
+        input_outer = tk.Frame(wrap, bg="#F5F6F8")
+        input_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+
+        input_card = tk.Frame(input_outer, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        input_card.pack(fill="both", expand=True)
+        tk.Frame(input_card, bg="#10B981", width=4).pack(side="left", fill="y")
+
+        input_inner = tk.Frame(input_card, bg="white", padx=14, pady=12)
+        input_inner.pack(side="left", fill="both", expand=True)
+
+        head = tk.Frame(input_inner, bg="white")
+        head.pack(fill="x", pady=(0, 4))
+        tk.Label(head, text="📥",
+                 bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
+        self.lbl_kit_title = tk.Label(head, text="입력",
+                                         font=("맑은 고딕", 10, "bold"),
+                                         bg="white", fg="#111827")
+        self.lbl_kit_title.pack(side="left")
+
+        clr_btn = tk.Button(head, text="🗑️ 지우기",
+                             command=self._clear_kit_input,
+                             bg="#F3F4F6", fg="#6B7280",
+                             font=("맑은 고딕", 8, "bold"),
+                             relief="flat", padx=8, pady=2,
+                             cursor="hand2")
+        clr_btn.pack(side="right")
+
+        self.lbl_kit_hint = tk.Label(input_inner,
+                                       text="💡 안내",
+                                       bg="white", fg="#9CA3AF",
+                                       font=("맑은 고딕", 8), anchor="w")
+        self.lbl_kit_hint.pack(fill="x", pady=(0, 4))
+
+        # 입력창 + 스크롤
+        kit_box = tk.Frame(input_inner, bg="white")
+        kit_box.pack(fill="both", expand=True)
+
+        self.txt_kit_in = tk.Text(kit_box, font=("Consolas", 10),
+                                    bd=1, relief="solid",
+                                    highlightthickness=1, highlightbackground="#E5E7EB",
+                                    bg="#FAFAFA", padx=8, pady=6, wrap="char",
+                                    height=14)
+        kit_sb = ttk.Scrollbar(kit_box, orient="vertical",
+                                 command=self.txt_kit_in.yview)
+        self.txt_kit_in.configure(yscrollcommand=kit_sb.set)
+        kit_sb.pack(side="right", fill="y")
+        self.txt_kit_in.pack(side="left", fill="both", expand=True)
+
+        # 마지막 결과
+        self._last_kit_df = None
+
+        # 초기 모드 설정
+        self._update_kit_view()
+
+    def _update_kit_view(self):
+        """선택된 모드에 따라 입력창 안내 + 타이틀 업데이트"""
+        mode = self._kit_mode.get()
+        if mode == "color":
+            self.lbl_kit_title.config(text="브랜드코드 입력 (한 줄에 하나씩)")
+            self.lbl_kit_hint.config(
+                text="💡 예: R1004 ← 한 줄에 하나씩. 각 브랜드코드별로 색상코드 5개(999) 자동 채움")
+        elif mode == "product":
+            self.lbl_kit_title.config(text="상품코드 + 수정내용")
+            self.lbl_kit_hint.config(
+                text="💡 예: EUNW251MBTT010BK<TAB>158000 ← 상품코드와 수정값을 탭/공백으로 구분")
+        else:  # option
+            self.lbl_kit_title.config(text="상품코드 + 사이즈 + 새 코드")
+            self.lbl_kit_hint.config(
+                text="💡 예: EUNW251MBTT010BK<TAB>F<TAB>EUNW251MBTT010BK000 ← 현재 코드, 사이즈, 새 코드")
+
+    def _clear_kit_input(self):
+        existing = self.txt_kit_in.get("1.0", "end-1c").strip()
+        if existing and not messagebox.askyesno("입력 비우기", "내용을 모두 지우시겠습니까?"):
+            return
+        self.txt_kit_in.delete("1.0", tk.END)
+        self.txt_kit_report.delete("1.0", tk.END)
+        self._last_kit_df = None
+
+    def run_kit_conversion(self):
+        """선택된 모드에 따라 변환 실행"""
+        raw = self.txt_kit_in.get("1.0", "end-1c").strip()
+        if not raw:
+            messagebox.showwarning("주의", "입력값을 먼저 작성해주세요.")
+            return
+
+        mode = self._kit_mode.get()
+        self.txt_kit_report.delete("1.0", tk.END)
+
+        try:
+            if mode == "color":
+                self._run_kit_color(raw)
+            elif mode == "product":
+                self._run_kit_product(raw)
+            else:  # option
+                self._run_kit_option(raw)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("오류", f"변환 실패: {e}")
+
+    def _run_kit_color(self, raw):
+        """색상코드 등록: 브랜드코드 → 999×5"""
+        rows = []
+        for line in raw.split('\n'):
+            code = line.strip()
+            if not code: continue
+            # 탭이나 공백 있으면 첫 토큰만
+            code = re.split(r'[\t ]+', code)[0]
+            rows.append({
+                '브랜드코드': code,
+                '색상코드': '999',
+                '색상명': '999',
+                '색상명1': '999',
+                '색상명2': '999',
+                '색상명3': '999',
+            })
+
+        if not rows:
+            messagebox.showwarning("결과 없음", "유효한 브랜드코드가 없습니다.")
+            return
+
+        df = pd.DataFrame(rows)
+        self._last_kit_df = df
+        self.txt_kit_report.insert(tk.END, f"✅ 색상코드 등록 양식 생성: {len(df)}건\n", "ok")
+        self.txt_kit_report.insert(tk.END,
+            f"   각 브랜드코드별로 색상코드/색상명/명1/명2/명3 = 999 5개씩 자동 채움\n", "info")
+
+    def _run_kit_product(self, raw):
+        """상품 관리 수정: 상품코드 + 수정내용 → 그대로 출력"""
+        rows = []
+        for line in raw.split('\n'):
+            line = line.strip()
+            if not line: continue
+            tokens = re.split(r'[\t]+', line) if '\t' in line else re.split(r'\s{2,}', line)
+            if len(tokens) < 2:
+                tokens = re.split(r'\s+', line, maxsplit=1)
+            tokens = [t.strip() for t in tokens if t.strip()]
+            if len(tokens) < 2: continue
+            rows.append({
+                '상품코드': tokens[0],
+                '수정내용': tokens[1],
+            })
+
+        if not rows:
+            messagebox.showwarning("결과 없음", "상품코드+수정내용 형식의 데이터를 인식하지 못했습니다.")
+            return
+
+        df = pd.DataFrame(rows)
+        self._last_kit_df = df
+        self.txt_kit_report.insert(tk.END, f"✅ 상품 관리 수정 양식 생성: {len(df)}건\n", "ok")
+        self.txt_kit_report.insert(tk.END,
+            f"   복사 후 시트의 적절한 컬럼(예: 판매가, 상품명 등) 위치에 붙여넣기\n", "info")
+
+    def _run_kit_option(self, raw):
+        """상품 옵션 수정: 상품코드 + 사이즈 + 새코드 → 색상코드 999 추가"""
+        rows = []
+        for line in raw.split('\n'):
+            line = line.strip()
+            if not line: continue
+            tokens = re.split(r'[\t]+', line) if '\t' in line else re.split(r'\s+', line)
+            tokens = [t.strip() for t in tokens if t.strip()]
+            if len(tokens) < 3:
+                # 3개 미만이면 스킵
+                continue
+            rows.append({
+                '상품코드': tokens[0],
+                '색상코드': '999',
+                '사이즈코드': tokens[1],
+                '수정내용': tokens[2],
+            })
+
+        if not rows:
+            messagebox.showwarning("결과 없음",
+                "상품코드 + 사이즈 + 새코드 (3개) 형식이 필요합니다.")
+            return
+
+        df = pd.DataFrame(rows)
+        self._last_kit_df = df
+        self.txt_kit_report.insert(tk.END, f"✅ 상품 옵션 수정 양식 생성: {len(df)}건\n", "ok")
+        self.txt_kit_report.insert(tk.END,
+            f"   색상코드는 999로 자동 채워짐\n", "info")
+
+    def copy_kit_to_clipboard(self):
+        """수정 키트 결과를 클립보드에 복사 (TSV 헤더 제외)"""
+        df = getattr(self, '_last_kit_df', None)
+        if df is None or df.empty:
+            messagebox.showwarning("복사 불가",
+                "복사할 데이터가 없습니다.\n먼저 [🔄 변환 실행]을 눌러주세요.")
+            return
+        try:
+            tsv = df.to_csv(sep='\t', index=False, header=False)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(tsv)
+            self.root.update()
+            messagebox.showinfo("복사 완료",
+                f"✅ 클립보드에 복사 완료!\n\n📊 {len(df)}건\n📋 시트에 Ctrl+V")
+        except Exception as e:
+            messagebox.showerror("복사 실패", f"{e}")
 
     def _clear_master_input(self):
         """마스터 등록 입력창 + 리포트 비우기"""
