@@ -203,6 +203,54 @@ class LogiPanApp:
         # 하이픈으로 구분된 토큰이고 영숫자 그룹이 3개 이상이면 로케이션
         return bool(re.match(r'^[A-Za-z0-9]+(-[A-Za-z0-9]+){2,}$', tok))
 
+    def _looks_like_barcode(self, tok):
+        """바코드처럼 생긴 문자열인가? - 길이 5+ 영숫자 또는 숫자만 6+자리.
+        목적: 엑셀 행 복붙 시 첫 토큰이 바코드인지 판단."""
+        tok = tok.strip()
+        if not tok:
+            return False
+        # 한글 들어가있으면 바코드 아님
+        if any(ord(c) > 127 for c in tok):
+            return False
+        # 너무 짧으면 바코드 아님
+        if len(tok) < 5:
+            return False
+        # 영숫자만 (하이픈 허용)
+        if not re.match(r'^[A-Za-z0-9\-]+$', tok):
+            return False
+        # 순수 숫자면 6자리 이상
+        if tok.isdigit() and len(tok) < 6:
+            return False
+        return True
+
+    def _find_qty_in_tokens(self, tokens):
+        """토큰 리스트에서 '수량'에 해당하는 숫자를 찾기.
+        엑셀 행 복붙: 바코드 상품명 사이즈 ... 수량 형태일 때
+        - 우선순위 1: 마지막 토큰이 숫자면 그게 수량 (가장 흔한 패턴)
+        - 우선순위 2: 1~9999 사이 숫자 중 마지막 거 (수량이라 작은 숫자)
+        - 우선순위 3: 못 찾으면 1
+        """
+        if not tokens:
+            return 1
+
+        # 우선순위 1: 마지막 토큰 (가장 흔한 패턴)
+        last = tokens[-1].strip()
+        if last.isdigit():
+            n = int(last)
+            if 0 < n < 100000:  # 너무 큰 숫자(바코드 같은)는 제외
+                return n
+
+        # 우선순위 2: 끝쪽부터 거꾸로 첫 작은 숫자
+        for tok in reversed(tokens):
+            tok = tok.strip()
+            if tok.isdigit():
+                n = int(tok)
+                if 0 < n < 10000:
+                    return n
+
+        # 못 찾음
+        return 1
+
     def parse_logi_data(self, text_widget):
         """입력을 자동 감지해서 DataFrame으로 반환.
 
@@ -212,6 +260,8 @@ class LogiPanApp:
         - 5열 (스캔칸 전용): BARCODE 정상수 불량수 정상로케 불량로케
             → 같은 바코드는 (정상+불량) 합쳐서 표시 (대조용)
             → 정상/불량 분리 데이터는 self.last_scan_detail에 보존 (입고파일 생성용)
+        - [추가] 엑셀 행 복붙: BARCODE<TAB>상품명<TAB>...<TAB>수량
+            → 첫 토큰을 바코드로, 마지막 숫자 토큰을 수량으로 자동 추출
 
         반환: DataFrame[바코드, 수량] (정규화된 바코드, 수량 합계)
         """
@@ -249,6 +299,13 @@ class LogiPanApp:
                     '정상로케': tokens[3],
                     '불량로케': tokens[4],
                 })
+            elif len(tokens) >= 3 and self._looks_like_barcode(tokens[0]):
+                # [추가] 엑셀 행 복붙 처리: 3개 이상 토큰 + 첫 토큰이 바코드 같음
+                # → 첫 토큰을 바코드로, 토큰들 중 "수량스러운 숫자"를 찾아 수량으로 사용
+                bc = self.normalize_barcode(tokens[0])
+                qty = self._find_qty_in_tokens(tokens[1:])
+                rows.append({'바코드': bc, '정상수': qty,
+                             '불량수': 0, '정상로케': '', '불량로케': ''})
             else:
                 # 줄 안의 토큰을 일반 형식으로 누적 (한 줄에 여러 바코드도 가능)
                 token_buffer.extend(tokens)
@@ -589,7 +646,7 @@ class LogiPanApp:
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8)).pack(side="right")
 
-        self.txt_in_report = tk.Text(report_inner, height=5,
+        self.txt_in_report = tk.Text(report_inner, height=3,
                                        font=("Consolas", 10),
                                        bg="#FAFAFA", bd=1, relief="solid",
                                        highlightthickness=1, highlightbackground="#E5E7EB",
@@ -644,13 +701,18 @@ class LogiPanApp:
         l_inner.pack(side="left", fill="both", expand=True)
 
         l_head = tk.Frame(l_inner, bg="white")
-        l_head.pack(fill="x", pady=(0, 6))
+        l_head.pack(fill="x", pady=(0, 4))
         tk.Label(l_head, text="📦",
                  bg="white", font=("맑은 고딕", 11)).pack(side="left", padx=(0, 4))
         self.lbl_in_m = tk.Label(l_head, text="브랜드 수량 (0개)",
                                    bg="white", fg="#0C4A6E",
                                    font=("맑은 고딕", 10, "bold"))
         self.lbl_in_m.pack(side="left")
+
+        # [추가] 안내
+        tk.Label(l_inner, text="💡 엑셀 행 복붙 OK (바코드+상품명+수량 자동 인식)",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
         self.txt_in_master = tk.Text(l_inner, font=("Consolas", 11),
                                        bd=1, relief="solid",
@@ -678,13 +740,18 @@ class LogiPanApp:
         r_inner.pack(side="left", fill="both", expand=True)
 
         r_head = tk.Frame(r_inner, bg="white")
-        r_head.pack(fill="x", pady=(0, 6))
+        r_head.pack(fill="x", pady=(0, 4))
         tk.Label(r_head, text="📡",
                  bg="white", font=("맑은 고딕", 11)).pack(side="left", padx=(0, 4))
         self.lbl_in_s = tk.Label(r_head, text="스캔 수량 (0개)",
                                    bg="white", fg="#065F46",
                                    font=("맑은 고딕", 10, "bold"))
         self.lbl_in_s.pack(side="left")
+
+        # [추가] 안내
+        tk.Label(r_inner, text="💡 5열 입력시 정상/불량 구분 가능 (바코드 정상 불량 정상로케 불량로케)",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
         self.txt_in_scan = tk.Text(r_inner, font=("Consolas", 11),
                                      bd=1, relief="solid",
