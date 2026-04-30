@@ -134,6 +134,7 @@ class LogiPanApp:
         self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥  입고")
         self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤  출고")
         self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦  맘스")
+        self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🏷️  마스터 등록")
         self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊  마감재고")
         self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍  재고파악")
         self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋  작업보고")
@@ -142,6 +143,7 @@ class LogiPanApp:
         self.setup_inbound()
         self.setup_outbound()
         self.setup_moms_v86()
+        self.setup_master_registration()
         self.setup_closing_stock()
         self.setup_inventory_check_v95()
         self.setup_field_comm(self.t_field)
@@ -1387,6 +1389,466 @@ class LogiPanApp:
         make_file_row(c4, "📁 출고 리스트", "#F5F3FF",
                       "lbl_mom_out", self.sel_mom_out, default_text="파일 미선택")
         make_action_btn(c4, "📋 출고 리스트 생성", "#8B5CF6", self.run_mom_out_logic)
+
+    # --- [탭: 마스터 등록] ---
+    def setup_master_registration(self):
+        """바코드표 붙여넣기 → 자동 브랜드 매칭 → EMP 양식으로 변환 후 클립보드 복사"""
+        container = tk.Frame(self.t_master, bg="#F5F6F8")
+        container.pack(fill="both", expand=True)
+
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="🏷️", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="마스터 등록",
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_text_box, text="바코드표 붙여넣기 → EMP 양식 자동 변환",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # 우측: 브랜드 관리 버튼
+        tk.Button(header_frame, text="🗂️ 브랜드 관리",
+                   command=self.open_brand_manager,
+                   bg="white", fg="#444",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=8,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="right")
+
+        # ========== [입력 카드] ==========
+        input_card_outer = tk.Frame(container, bg="#F5F6F8")
+        input_card_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+
+        input_card = tk.Frame(input_card_outer, bg="white",
+                               highlightthickness=1, highlightbackground="#E5E7EB")
+        input_card.pack(fill="both", expand=True)
+
+        tk.Frame(input_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+
+        input_inner = tk.Frame(input_card, bg="white", padx=16, pady=12)
+        input_inner.pack(side="left", fill="both", expand=True)
+
+        # 헤더
+        head = tk.Frame(input_inner, bg="white")
+        head.pack(fill="x", pady=(0, 4))
+        tk.Label(head, text="📥",
+                 bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
+        tk.Label(head, text="바코드표 붙여넣기",
+                 font=("맑은 고딕", 10, "bold"),
+                 bg="white", fg="#111827").pack(side="left")
+
+        # 지우기 버튼
+        clr_btn = tk.Button(head, text="🗑️ 지우기",
+                             command=lambda: self._clear_master_input(),
+                             bg="#F3F4F6", fg="#6B7280",
+                             font=("맑은 고딕", 8, "bold"),
+                             relief="flat", padx=8, pady=2,
+                             cursor="hand2")
+        clr_btn.pack(side="right")
+
+        # 안내
+        tk.Label(input_inner,
+                 text="💡 브랜드 시트의 바코드표를 그대로 붙여넣으세요 (앞 3자리로 브랜드 자동 매칭)",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
+
+        self.txt_master_in = tk.Text(input_inner, font=("Consolas", 10),
+                                       bd=1, relief="solid",
+                                       highlightthickness=1, highlightbackground="#E5E7EB",
+                                       bg="#FAFAFA", padx=8, pady=6)
+        self.txt_master_in.pack(fill="both", expand=True)
+
+        # ========== [결과 미리보기 카드 - 작게] ==========
+        preview_card_outer = tk.Frame(container, bg="#F5F6F8")
+        preview_card_outer.pack(fill="x", padx=18, pady=(0, 8))
+
+        preview_card = tk.Frame(preview_card_outer, bg="white",
+                                  highlightthickness=1, highlightbackground="#E5E7EB")
+        preview_card.pack(fill="x")
+
+        tk.Frame(preview_card, bg="#8B5CF6", width=4).pack(side="left", fill="y")
+
+        preview_inner = tk.Frame(preview_card, bg="white", padx=14, pady=10)
+        preview_inner.pack(side="left", fill="both", expand=True)
+
+        ph = tk.Frame(preview_inner, bg="white")
+        ph.pack(fill="x", pady=(0, 4))
+        tk.Label(ph, text="📝  변환 결과 / 매칭 리포트",
+                 bg="white", fg="#111827",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left")
+
+        self.txt_master_report = tk.Text(preview_inner, height=4,
+                                           font=("Consolas", 10),
+                                           bg="#FAFAFA", bd=1, relief="solid",
+                                           highlightthickness=1, highlightbackground="#E5E7EB",
+                                           padx=8, pady=6)
+        self.txt_master_report.pack(fill="x")
+        self.txt_master_report.tag_config("ok", foreground="#16A34A", font=("Consolas", 10, "bold"))
+        self.txt_master_report.tag_config("warn", foreground="#DC2626", font=("Consolas", 10, "bold"))
+        self.txt_master_report.tag_config("info", foreground="#555", font=("Consolas", 10))
+
+        # ========== [액션 버튼 - 하단] ==========
+        action_outer = tk.Frame(container, bg="#F5F6F8")
+        action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
+
+        def make_modern_btn(parent, text, bg, hover_bg, command):
+            shadow = tk.Frame(parent, bg=hover_bg)
+            shadow.pack(side="left", expand=True, fill="x", padx=2)
+            btn = tk.Button(shadow, text=text,
+                              bg=bg, fg="white",
+                              activebackground=hover_bg, activeforeground="white",
+                              font=("맑은 고딕", 10, "bold"),
+                              relief="flat", bd=0,
+                              cursor="hand2", command=command)
+            btn.pack(fill="x", ipady=8)
+            def on_enter(e): btn.config(bg=hover_bg)
+            def on_leave(e): btn.config(bg=bg)
+            btn.bind("<Enter>", on_enter)
+            btn.bind("<Leave>", on_leave)
+            return btn
+
+        make_modern_btn(action_outer, "🔄  변환 실행",
+                         bg="#F59E0B", hover_bg="#D97706",
+                         command=self.run_master_conversion)
+        make_modern_btn(action_outer, "📎  EMP 양식 복사",
+                         bg="#10B981", hover_bg="#059669",
+                         command=self.copy_master_to_clipboard)
+
+        # 마지막 결과 보관용
+        self._last_master_df = None
+
+        # 브랜드 캐시 (Firestore에서 받아옴)
+        self._brand_cache = {}
+        self.refresh_brand_cache()
+
+    def _clear_master_input(self):
+        """마스터 등록 입력창 + 리포트 비우기"""
+        existing = self.txt_master_in.get("1.0", "end-1c").strip()
+        if existing and not messagebox.askyesno("입력 비우기", "내용을 모두 지우시겠습니까?"):
+            return
+        self.txt_master_in.delete("1.0", tk.END)
+        self.txt_master_report.delete("1.0", tk.END)
+        self._last_master_df = None
+
+    # ========== [브랜드 매니저] ==========
+    def refresh_brand_cache(self):
+        """Firestore의 brand_master 컬렉션을 메모리에 로드"""
+        try:
+            docs = self.db.collection('brand_master').get()
+            self._brand_cache = {}
+            for d in docs:
+                data = d.to_dict()
+                self._brand_cache[d.id] = data.get('brand_name', d.id)
+            print(f"✅ 브랜드 캐시: {len(self._brand_cache)}건")
+        except Exception as e:
+            print(f"⚠️ 브랜드 캐시 로드 실패: {e}")
+            self._brand_cache = {}
+
+    def open_brand_manager(self):
+        """브랜드 관리 팝업 - 등록/수정/삭제"""
+        win = tk.Toplevel(self.root)
+        win.title("🗂️ 브랜드 관리")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 480, 600)
+        except Exception:
+            win.geometry("480x600")
+
+        # 헤더
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 8))
+        tk.Label(head, text="🗂️", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="브랜드 관리",
+                 font=("맑은 고딕", 14, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+
+        # ===== 신규 등록 카드 =====
+        add_card = tk.Frame(win, bg="white",
+                              highlightthickness=1, highlightbackground="#E5E7EB")
+        add_card.pack(fill="x", padx=18, pady=(0, 8))
+        tk.Frame(add_card, bg="#10B981", width=4).pack(side="left", fill="y")
+
+        add_inner = tk.Frame(add_card, bg="white", padx=14, pady=10)
+        add_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(add_inner, text="➕ 신규 브랜드 등록",
+                 bg="white", fg="#065F46",
+                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 6))
+
+        row1 = tk.Frame(add_inner, bg="white")
+        row1.pack(fill="x", pady=2)
+        tk.Label(row1, text="코드 (3자리):", bg="white",
+                 font=("맑은 고딕", 9), width=12, anchor="w").pack(side="left")
+        ent_code = tk.Entry(row1, font=("Consolas", 10),
+                             bd=1, relief="solid", width=10)
+        ent_code.pack(side="left", padx=4, ipady=2)
+
+        row2 = tk.Frame(add_inner, bg="white")
+        row2.pack(fill="x", pady=2)
+        tk.Label(row2, text="브랜드명:", bg="white",
+                 font=("맑은 고딕", 9), width=12, anchor="w").pack(side="left")
+        ent_name = tk.Entry(row2, font=("맑은 고딕", 10),
+                             bd=1, relief="solid")
+        ent_name.pack(side="left", fill="x", expand=True, padx=4, ipady=2)
+
+        def add_brand():
+            code = ent_code.get().strip().upper()
+            name = ent_name.get().strip()
+            if not code or not name:
+                messagebox.showwarning("입력 누락", "코드와 브랜드명을 모두 입력하세요.", parent=win)
+                return
+            if len(code) != 3:
+                messagebox.showwarning("형식 오류", "코드는 정확히 3자리여야 합니다.", parent=win)
+                return
+            try:
+                # 이미 있으면 확인
+                if code in self._brand_cache:
+                    if not messagebox.askyesno("덮어쓰기",
+                            f"코드 '{code}'는 이미 '{self._brand_cache[code]}'로 등록되어 있습니다.\n"
+                            f"'{name}'으로 덮어쓰시겠습니까?", parent=win):
+                        return
+                self.db.collection('brand_master').document(code).set({
+                    'brand_name': name,
+                    'created_at': firestore.SERVER_TIMESTAMP,
+                    'updated_at': firestore.SERVER_TIMESTAMP
+                })
+                self._brand_cache[code] = name
+                ent_code.delete(0, tk.END)
+                ent_name.delete(0, tk.END)
+                refresh_list()
+                messagebox.showinfo("등록 완료", f"✅ {code} → {name}", parent=win)
+            except Exception as e:
+                messagebox.showerror("오류", f"등록 실패: {e}", parent=win)
+
+        tk.Button(add_inner, text="➕ 등록",
+                   command=add_brand,
+                   bg="#10B981", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(anchor="e", pady=(6, 0))
+
+        # ===== 등록 리스트 카드 =====
+        list_card = tk.Frame(win, bg="white",
+                               highlightthickness=1, highlightbackground="#E5E7EB")
+        list_card.pack(fill="both", expand=True, padx=18, pady=(0, 14))
+        tk.Frame(list_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+
+        list_inner = tk.Frame(list_card, bg="white", padx=14, pady=10)
+        list_inner.pack(side="left", fill="both", expand=True)
+
+        list_head = tk.Frame(list_inner, bg="white")
+        list_head.pack(fill="x", pady=(0, 6))
+        list_title = tk.Label(list_head, text="📋 등록된 브랜드",
+                                bg="white", fg="#1E40AF",
+                                font=("맑은 고딕", 10, "bold"))
+        list_title.pack(side="left")
+
+        # 검색
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(list_head, textvariable=search_var,
+                                  font=("맑은 고딕", 9),
+                                  bd=1, relief="solid", width=12)
+        search_entry.pack(side="right", ipady=2)
+        tk.Label(list_head, text="🔍", bg="white",
+                 font=("맑은 고딕", 9)).pack(side="right", padx=(0, 4))
+
+        # 리스트 (Treeview)
+        tree_frame = tk.Frame(list_inner, bg="white")
+        tree_frame.pack(fill="both", expand=True)
+
+        cols = ("code", "name")
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=15)
+        tree.heading("code", text="코드")
+        tree.heading("name", text="브랜드명")
+        tree.column("code", width=80, anchor="center")
+        tree.column("name", width=300, anchor="w")
+        tree.pack(side="left", fill="both", expand=True)
+
+        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+
+        def refresh_list():
+            self.refresh_brand_cache()
+            for it in tree.get_children():
+                tree.delete(it)
+            keyword = search_var.get().strip().lower()
+            sorted_codes = sorted(self._brand_cache.keys())
+            for code in sorted_codes:
+                name = self._brand_cache[code]
+                if keyword and keyword not in code.lower() and keyword not in name.lower():
+                    continue
+                tree.insert("", "end", iid=code, values=(code, name))
+            list_title.config(text=f"📋 등록된 브랜드 ({len(tree.get_children())}건)")
+
+        search_var.trace_add("write", lambda *a: refresh_list())
+
+        # 우클릭 메뉴: 수정/삭제
+        ctx_menu = tk.Menu(win, tearoff=0, font=("맑은 고딕", 10))
+
+        def edit_brand():
+            sel = tree.selection()
+            if not sel: return
+            code = sel[0]
+            old_name = self._brand_cache.get(code, '')
+            new_name = simpledialog.askstring("브랜드명 수정",
+                                                 f"코드: {code}\n새 브랜드명:",
+                                                 initialvalue=old_name, parent=win)
+            if new_name is None or not new_name.strip():
+                return
+            try:
+                self.db.collection('brand_master').document(code).update({
+                    'brand_name': new_name.strip(),
+                    'updated_at': firestore.SERVER_TIMESTAMP
+                })
+                self._brand_cache[code] = new_name.strip()
+                refresh_list()
+            except Exception as e:
+                messagebox.showerror("오류", f"수정 실패: {e}", parent=win)
+
+        def delete_brand():
+            sel = tree.selection()
+            if not sel: return
+            code = sel[0]
+            name = self._brand_cache.get(code, '')
+            if not messagebox.askyesno("삭제 확인",
+                                          f"'{code} - {name}' 브랜드를 삭제하시겠습니까?",
+                                          parent=win):
+                return
+            try:
+                self.db.collection('brand_master').document(code).delete()
+                self._brand_cache.pop(code, None)
+                refresh_list()
+            except Exception as e:
+                messagebox.showerror("오류", f"삭제 실패: {e}", parent=win)
+
+        ctx_menu.add_command(label="✏️ 수정", command=edit_brand)
+        ctx_menu.add_separator()
+        ctx_menu.add_command(label="🗑️ 삭제", command=delete_brand)
+
+        def show_ctx(e):
+            row = tree.identify_row(e.y)
+            if row:
+                tree.selection_set(row)
+                ctx_menu.post(e.x_root, e.y_root)
+        tree.bind("<Button-3>", show_ctx)
+        tree.bind("<Double-Button-1>", lambda e: edit_brand())
+
+        refresh_list()
+
+    # ========== [바코드표 → EMP 양식 변환] ==========
+    def run_master_conversion(self):
+        """입력창의 바코드표를 EMP 양식으로 변환.
+        ※ 정확한 컬럼 매핑은 EMP 양식 샘플 받은 후 보강 필요."""
+        raw = self.txt_master_in.get("1.0", "end-1c").strip()
+        if not raw:
+            messagebox.showwarning("주의", "바코드표를 먼저 붙여넣어주세요.")
+            return
+
+        # 리포트 비우기
+        self.txt_master_report.delete("1.0", tk.END)
+
+        # 줄별로 파싱 (탭/공백 구분)
+        rows = []
+        unknown_codes = set()  # 등록 안 된 브랜드 코드들
+
+        for line in raw.split('\n'):
+            line = line.strip()
+            if not line: continue
+            tokens = re.split(r'[\t]+', line) if '\t' in line else re.split(r'\s{2,}', line)
+            tokens = [t.strip() for t in tokens if t.strip()]
+            if not tokens: continue
+
+            # 첫 토큰이 바코드일 가능성 (헤더 행 자동 스킵)
+            first = tokens[0]
+            if not self._looks_like_barcode(first):
+                # 헤더 행으로 보고 스킵
+                continue
+
+            # 브랜드 코드 = 앞 3자리
+            brand_code = first[:3].upper()
+            brand_name = self._brand_cache.get(brand_code, '')
+            if not brand_name:
+                unknown_codes.add(brand_code)
+
+            rows.append({
+                '바코드': first,
+                '브랜드코드': brand_code,
+                '브랜드명': brand_name,
+                '원본행': tokens
+            })
+
+        if not rows:
+            self.txt_master_report.insert(tk.END, "⚠️ 인식된 바코드가 없습니다.\n", "warn")
+            messagebox.showwarning("결과 없음", "바코드를 인식하지 못했습니다.")
+            return
+
+        # 등록 안 된 브랜드가 있으면 경고
+        if unknown_codes:
+            self.txt_master_report.insert(tk.END,
+                f"⚠️ 등록되지 않은 브랜드 코드: {', '.join(sorted(unknown_codes))}\n", "warn")
+            self.txt_master_report.insert(tk.END,
+                "    → 우측 [🗂️ 브랜드 관리]에서 먼저 등록해주세요.\n\n", "info")
+
+        # 등록된 브랜드별 카운트
+        from collections import Counter
+        cnt = Counter(r['브랜드코드'] for r in rows if r['브랜드명'])
+        total = len(rows)
+        ok_count = sum(1 for r in rows if r['브랜드명'])
+        unknown_count = total - ok_count
+
+        self.txt_master_report.insert(tk.END,
+            f"✅ 인식: {total}건 (매칭 OK: {ok_count} / 등록 필요: {unknown_count})\n", "ok")
+        for code, c in sorted(cnt.items()):
+            name = self._brand_cache.get(code, '?')
+            self.txt_master_report.insert(tk.END,
+                f"  • {code} ({name}): {c}건\n", "info")
+
+        # ※ 실제 EMP 양식 변환은 양식 샘플 받은 후 보강
+        # 일단 임시로 기본 컬럼만 채워두기
+        df_out = pd.DataFrame([{
+            '브랜드명': r['브랜드명'] or f"[미등록:{r['브랜드코드']}]",
+            '바코드': r['바코드'],
+            '상품코드': r['바코드'],  # 임시 - EMP 양식 받으면 보강
+        } for r in rows])
+
+        self._last_master_df = df_out
+
+    def copy_master_to_clipboard(self):
+        """마스터 변환 결과를 클립보드에 복사 (TSV 헤더 제외)"""
+        df = getattr(self, '_last_master_df', None)
+        if df is None or df.empty:
+            messagebox.showwarning("복사 불가",
+                "복사할 데이터가 없습니다.\n먼저 [🔄 변환 실행]을 눌러주세요.")
+            return
+
+        # 미등록 브랜드 있으면 경고
+        unknown = df[df['브랜드명'].str.startswith('[미등록:', na=False)]
+        if len(unknown) > 0:
+            if not messagebox.askyesno("미등록 브랜드 포함",
+                f"⚠️ 미등록 브랜드 {len(unknown)}건이 포함되어 있습니다.\n"
+                "그래도 복사하시겠습니까?\n"
+                "(브랜드 관리에서 먼저 등록하는 걸 권장합니다)"):
+                return
+
+        try:
+            tsv = df.to_csv(sep='\t', index=False, header=False)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(tsv)
+            self.root.update()
+            messagebox.showinfo("복사 완료",
+                f"✅ 클립보드에 복사되었습니다!\n\n"
+                f"📊 {len(df)}건\n"
+                f"📋 EMP에 Ctrl+V로 붙여넣기")
+        except Exception as e:
+            messagebox.showerror("복사 실패", f"{e}")
 
     # --- [탭 4: 마감재고 (수량 너비 확보)] ---
     def setup_closing_stock(self):
