@@ -36,6 +36,17 @@ class LogiPanApp:
         except Exception as e:
             print(f"⚠️ 아이콘 설정 실패: {e}")
 
+        # [추가] 백그라운드 자가 업데이트
+        # 한 번 실행되면 다음부터는 스킵 (마커 파일로 체크)
+        # - updater.py 새 버전 다운로드 (옛날 버전 사용자도 자동 업그레이드)
+        # - 로지판.ico 다운로드 (없을 때만)
+        # - 바탕화면에 박스 아이콘 바로가기 생성 (없을 때만)
+        try:
+            import threading
+            threading.Thread(target=self._self_update_check, daemon=True).start()
+        except Exception as e:
+            print(f"⚠️ 자가 업데이트 시작 실패: {e}")
+
         # --- 구글 비밀기지 연결 시작 ---
         try:
             # 실행 위치와 상관없이 key.json을 찾도록 절대경로로 접근
@@ -417,6 +428,131 @@ class LogiPanApp:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 설정 파일 저장 실패: {e}")
+
+    def _self_update_check(self):
+        """[추가] 백그라운드 자가 업데이트 (조용히 실행)
+        - updater.py 새 버전 다운로드 (있을 때마다)
+        - 로지판.ico 다운로드 (없을 때만)
+        - 바탕화면 바로가기 생성 (없을 때만)
+        모든 작업은 실패해도 무시 (메인 기능에 영향 X)
+        """
+        if os.name != 'nt':
+            return  # 윈도우만
+
+        try:
+            import urllib.request
+
+            base_url = "https://raw.githubusercontent.com/ghwkdwjd-debug/logipan-report/main"
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+
+            # 1. 로지판.ico 다운로드 (없을 때만)
+            ico_path = os.path.join(script_dir, "로지판.ico")
+            if not os.path.exists(ico_path):
+                try:
+                    ico_url = f"{base_url}/%EB%A1%9C%EC%A7%80%ED%8C%90.ico"
+                    urllib.request.urlretrieve(ico_url, ico_path)
+                    print("✅ 로지판.ico 다운로드 완료")
+                except Exception as e:
+                    print(f"⚠️ ico 다운로드 실패 (무시): {e}")
+
+            # 2. updater.py 새 버전 체크 (한 번만)
+            # 마커 파일로 한 번 했는지 표시 - 다음 실행부터 스킵
+            updater_marker = os.path.join(script_dir, ".updater_v2_done")
+            updater_path = os.path.join(script_dir, "updater.py")
+            if not os.path.exists(updater_marker) and os.path.exists(updater_path):
+                try:
+                    updater_url = f"{base_url}/updater.py"
+                    tmp_path = updater_path + ".new"
+                    urllib.request.urlretrieve(updater_url, tmp_path)
+
+                    # 다운받은 파일이 새 버전인지 확인 (ICON_URL 키워드 있으면 신버전)
+                    with open(tmp_path, 'r', encoding='utf-8') as f:
+                        new_content = f.read()
+                    if 'ICON_URL' in new_content and 'ensure_desktop_shortcut' in new_content:
+                        # 안전하게 .bak으로 백업 후 교체
+                        bak_path = updater_path + ".bak"
+                        try:
+                            if os.path.exists(bak_path):
+                                os.remove(bak_path)
+                            os.rename(updater_path, bak_path)
+                            os.rename(tmp_path, updater_path)
+                            # 마커 파일 생성
+                            with open(updater_marker, 'w', encoding='utf-8') as f:
+                                f.write("done")
+                            print("✅ updater.py 새 버전으로 교체됨")
+                        except Exception as e:
+                            print(f"⚠️ updater.py 교체 실패 (무시): {e}")
+                            # 교체 실패시 .new 파일 삭제
+                            if os.path.exists(tmp_path):
+                                try: os.remove(tmp_path)
+                                except: pass
+                    else:
+                        # 새 버전 아니면 그냥 삭제
+                        try: os.remove(tmp_path)
+                        except: pass
+                except Exception as e:
+                    print(f"⚠️ updater.py 다운로드 실패 (무시): {e}")
+
+            # 3. 바탕화면 바로가기 생성 (없을 때만)
+            try:
+                self._ensure_desktop_shortcut(script_dir, ico_path)
+            except Exception as e:
+                print(f"⚠️ 바로가기 생성 실패 (무시): {e}")
+
+        except Exception as e:
+            print(f"⚠️ 자가 업데이트 전체 실패 (무시): {e}")
+
+    def _ensure_desktop_shortcut(self, script_dir, ico_path):
+        """바탕화면에 로지판 바로가기가 없으면 자동 생성"""
+        if os.name != 'nt':
+            return
+
+        # 바탕화면 경로
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        if not os.path.isdir(desktop):
+            try:
+                import ctypes.wintypes
+                CSIDL_DESKTOP = 0
+                buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+                ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_DESKTOP, None, 0, buf)
+                desktop = buf.value
+            except Exception:
+                return
+        if not os.path.isdir(desktop):
+            return
+
+        shortcut_path = os.path.join(desktop, "로지판.lnk")
+        bat_path = os.path.join(script_dir, "로지판.bat")
+
+        # 이미 있고 아이콘이 박스로 설정되어 있으면 스킵
+        # (간단하게 .lnk 존재 + .ico 존재 모두 만족하면 OK로 간주)
+        if os.path.exists(shortcut_path) and os.path.exists(ico_path):
+            # 이미 있음 - 스킵
+            return
+
+        if not os.path.exists(bat_path):
+            return  # .bat 없으면 만들 필요 없음
+
+        # PowerShell로 .lnk 생성
+        ps_script = (
+            f'$WshShell = New-Object -ComObject WScript.Shell;'
+            f'$Shortcut = $WshShell.CreateShortcut("{shortcut_path}");'
+            f'$Shortcut.TargetPath = "{bat_path}";'
+            f'$Shortcut.WorkingDirectory = "{script_dir}";'
+            f'$Shortcut.IconLocation = "{ico_path},0";'
+            f'$Shortcut.WindowStyle = 7;'
+            f'$Shortcut.Description = "로지판 (Logi-Pan)";'
+            f'$Shortcut.Save()'
+        )
+        import subprocess
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            capture_output=True, text=True,
+            startupinfo=startupinfo, timeout=10
+        )
+        print("✅ 바탕화면에 박스 아이콘 바로가기 생성")
 
     def load_user_name(self):
         """설정 파일에서 사용자 이름 불러오기. 없으면 기본값 '장정호'."""
