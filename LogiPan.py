@@ -194,6 +194,22 @@ class LogiPanApp:
             s = s[:-2]
         return s
 
+    def _clear_input_box(self, text_widget, label_widget, base_text):
+        """입력창 비우기 (확인 후). 내용 없으면 그냥 패스."""
+        existing = text_widget.get("1.0", "end-1c").strip()
+        if not existing:
+            return
+        if not messagebox.askyesno("입력 비우기",
+                                     f"입력창의 모든 내용을 지우시겠습니까?",
+                                     parent=self.root):
+            return
+        text_widget.delete("1.0", tk.END)
+        # 카운트 라벨 리셋
+        try:
+            label_widget.config(text=f"{base_text} (0개)")
+        except Exception:
+            pass
+
     def _is_qty_token(self, tok):
         """수량 토큰인가? 0 이상의 정수 문자열."""
         return tok.isdigit()
@@ -646,7 +662,7 @@ class LogiPanApp:
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8)).pack(side="right")
 
-        self.txt_in_report = tk.Text(report_inner, height=3,
+        self.txt_in_report = tk.Text(report_inner, height=6,
                                        font=("Consolas", 10),
                                        bg="#FAFAFA", bd=1, relief="solid",
                                        highlightthickness=1, highlightbackground="#E5E7EB",
@@ -708,6 +724,15 @@ class LogiPanApp:
                                    bg="white", fg="#0C4A6E",
                                    font=("맑은 고딕", 10, "bold"))
         self.lbl_in_m.pack(side="left")
+        # [추가] 우측 지우기 버튼
+        clr_m = tk.Button(l_head, text="🗑️ 지우기",
+                           command=lambda: self._clear_input_box(self.txt_in_master, self.lbl_in_m, "브랜드 수량"),
+                           bg="#F3F4F6", fg="#6B7280",
+                           activebackground="#E5E7EB",
+                           font=("맑은 고딕", 8, "bold"),
+                           relief="flat", padx=8, pady=2,
+                           cursor="hand2")
+        clr_m.pack(side="right")
 
         # [추가] 안내
         tk.Label(l_inner, text="💡 엑셀 행 복붙 OK (바코드+상품명+수량 자동 인식)",
@@ -747,6 +772,15 @@ class LogiPanApp:
                                    bg="white", fg="#065F46",
                                    font=("맑은 고딕", 10, "bold"))
         self.lbl_in_s.pack(side="left")
+        # [추가] 우측 지우기 버튼
+        clr_s = tk.Button(r_head, text="🗑️ 지우기",
+                           command=lambda: self._clear_input_box(self.txt_in_scan, self.lbl_in_s, "스캔 수량"),
+                           bg="#F3F4F6", fg="#6B7280",
+                           activebackground="#E5E7EB",
+                           font=("맑은 고딕", 8, "bold"),
+                           relief="flat", padx=8, pady=2,
+                           cursor="hand2")
+        clr_s.pack(side="right")
 
         # [추가] 안내
         tk.Label(r_inner, text="💡 5열 입력시 정상/불량 구분 가능 (바코드 정상 불량 정상로케 불량로케)",
@@ -906,6 +940,16 @@ class LogiPanApp:
         def on_excel_leave(e): excel_btn.config(bg="#0EA5E9")
         excel_btn.bind("<Enter>", on_excel_enter)
         excel_btn.bind("<Leave>", on_excel_leave)
+
+        # [추가] 지우기 버튼
+        clr_out = tk.Button(head, text="🗑️ 지우기",
+                             command=lambda: self._clear_input_box(self.txt_out, self.lbl_out_qty, "📡 출고 바코드 & 수량 붙여넣기"),
+                             bg="#F3F4F6", fg="#6B7280",
+                             activebackground="#E5E7EB",
+                             font=("맑은 고딕", 8, "bold"),
+                             relief="flat", padx=8, pady=2,
+                             cursor="hand2")
+        clr_out.pack(side="right", padx=(0, 6))
 
         # [추가] 안내 문구
         info_label = tk.Label(input_inner,
