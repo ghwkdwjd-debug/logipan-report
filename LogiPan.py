@@ -586,6 +586,28 @@ class LogiPanApp:
                  font=("맑은 고딕", 8),
                  bg="#F5F6F8", fg="#888").pack(anchor="w")
 
+        # ========== [💾 저장 버튼 - 하단 고정 (먼저 pack)] ==========
+        save_btn_outer = tk.Frame(container, bg="#F5F6F8")
+        save_btn_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
+
+        # 그림자 효과 흉내
+        shadow = tk.Frame(save_btn_outer, bg="#1864c8", height=44)
+        shadow.pack(fill="x")
+
+        save_btn = tk.Button(shadow, text="🚚  출고 CSV 저장 및 데이터 리셋",
+                              bg="#1877F2", fg="white", activebackground="#1864c8",
+                              activeforeground="white",
+                              font=("맑은 고딕", 11, "bold"),
+                              relief="flat", bd=0,
+                              cursor="hand2",
+                              command=self.run_out)
+        save_btn.pack(fill="x", padx=0, pady=0, ipady=10)
+        # 호버 효과
+        def on_save_enter(e): save_btn.config(bg="#1864c8")
+        def on_save_leave(e): save_btn.config(bg="#1877F2")
+        save_btn.bind("<Enter>", on_save_enter)
+        save_btn.bind("<Leave>", on_save_leave)
+
         # ========== [선택 카드 영역 - 매장 + 유형 한 카드에] ==========
         select_card_outer = tk.Frame(container, bg="#F5F6F8")
         select_card_outer.pack(fill="x", padx=18, pady=(0, 8))
@@ -646,7 +668,7 @@ class LogiPanApp:
         self.select_opt('s', '성수')
         self.select_opt('t', '매장출고')
 
-        # ========== [입력 카드] ==========
+        # ========== [입력 카드 - 남은 공간 채움] ==========
         input_card_outer = tk.Frame(container, bg="#F5F6F8")
         input_card_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
@@ -671,13 +693,19 @@ class LogiPanApp:
                                      bg="white", fg="#111827")
         self.lbl_out_qty.pack(side="left")
 
-        # [추가] 엑셀 불러오기 버튼 (헤더 우측)
-        tk.Button(head, text="📁 엑셀 불러오기",
-                   command=self.load_excel_to_outbound,
-                   bg="#E0F2FE", fg="#0C4A6E",
-                   font=("맑은 고딕", 9, "bold"),
-                   relief="flat", padx=10, pady=4,
-                   cursor="hand2").pack(side="right")
+        # [추가] 엑셀 불러오기 버튼 - 모던 스타일
+        excel_btn = tk.Button(head, text="📁  엑셀 불러오기",
+                               command=self.load_excel_to_outbound,
+                               bg="#0EA5E9", fg="white",
+                               activebackground="#0284C7", activeforeground="white",
+                               font=("맑은 고딕", 9, "bold"),
+                               relief="flat", padx=12, pady=5,
+                               cursor="hand2")
+        excel_btn.pack(side="right")
+        def on_excel_enter(e): excel_btn.config(bg="#0284C7")
+        def on_excel_leave(e): excel_btn.config(bg="#0EA5E9")
+        excel_btn.bind("<Enter>", on_excel_enter)
+        excel_btn.bind("<Leave>", on_excel_leave)
 
         # [추가] 안내 문구
         info_label = tk.Label(input_inner,
@@ -698,17 +726,6 @@ class LogiPanApp:
 
         # [추가] 드래그앤드롭 등록 (tkinterdnd2 있을 때만)
         self._setup_dnd_for_outbound()
-
-        # ========== [저장 버튼] ==========
-        save_btn_frame = tk.Frame(container, bg="#F5F6F8")
-        save_btn_frame.pack(fill="x", padx=18, pady=(0, 12))
-
-        tk.Button(save_btn_frame, text="🚚 출고 CSV 저장 및 데이터 리셋",
-                  bg="#1877F2", fg="white",
-                  font=("맑은 고딕", 11, "bold"),
-                  relief="flat", pady=12,
-                  cursor="hand2",
-                  command=self.run_out).pack(fill="x")
 
     def select_opt(self, mode, val):
         if mode == 's':
