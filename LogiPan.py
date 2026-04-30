@@ -2127,10 +2127,22 @@ class LogiPanApp:
             messagebox.showerror("복사 실패", f"{e}")
 
     # --- [탭 4: 마감재고 (수량 너비 확보)] ---
+    # 캐파 기본값 (코드 폴백용 - 실제로는 Firestore에서 받아옴)
+    DEFAULT_ZONE_CAPACITY = {
+        'AA~AB구역': 30000,
+        'BB구역': 3200,
+        'CC~DD구역': 4400,
+        'EA/EE/FF구역': 13696,
+    }
+
     def setup_closing_stock(self):
-        """마감재고 - 전체 재고 → 구역별 수량"""
+        """마감재고 - 진행바 차트 + 캐파 대비 % + 드래그앤드롭"""
         container = tk.Frame(self.t_end, bg="#F5F6F8")
         container.pack(fill="both", expand=True)
+
+        # 캐파 캐시 + 로드
+        self._zone_capacity = dict(self.DEFAULT_ZONE_CAPACITY)
+        self.refresh_zone_capacity()
 
         # ========== [상단 헤더] ==========
         header_frame = tk.Frame(container, bg="#F5F6F8")
@@ -2145,11 +2157,31 @@ class LogiPanApp:
         tk.Label(title_text_box, text="실시간 마감재고",
                  font=("맑은 고딕", 15, "bold"),
                  bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
-        tk.Label(title_text_box, text="EMP 재고 파일 → 구역별 가용재고 집계",
+        tk.Label(title_text_box, text="구역별 캐파 대비 가용재고 비율",
                  font=("맑은 고딕", 8),
                  bg="#F5F6F8", fg="#888").pack(anchor="w")
 
-        # ========== [총합 - 하단 고정] ==========
+        # 우측: 캐파 설정 + 파일 선택 버튼들
+        right_btns = tk.Frame(header_frame, bg="#F5F6F8")
+        right_btns.pack(side="right")
+
+        tk.Button(right_btns, text="⚙️ 캐파 설정",
+                   command=self.open_capacity_settings,
+                   bg="white", fg="#444",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=10, pady=6,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(8, 0))
+
+        tk.Button(right_btns, text="📁 파일 선택",
+                   command=self.run_closing_stock_logic,
+                   bg="#1877F2", fg="white",
+                   activebackground="#1864c8",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=12, pady=6,
+                   cursor="hand2").pack(side="right")
+
+        # ========== [총합 + 점유율 - 하단 고정] ==========
         total_outer = tk.Frame(container, bg="#F5F6F8")
         total_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
 
@@ -2157,62 +2189,365 @@ class LogiPanApp:
                                 highlightthickness=0)
         total_card.pack(fill="x")
 
-        self.lbl_end_total = tk.Label(total_card, text="📊  총 구역 합계: 0개",
-                                        font=("맑은 고딕", 14, "bold"),
-                                        bg="#1877F2", fg="white", pady=14)
-        self.lbl_end_total.pack(fill="x")
+        total_inner = tk.Frame(total_card, bg="#1877F2")
+        total_inner.pack(pady=12)
 
-        # ========== [실행 버튼 - 하단 (총합 위)] ==========
-        action_outer = tk.Frame(container, bg="#F5F6F8")
-        action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 8))
+        tk.Label(total_inner, text="📦", bg="#1877F2",
+                 font=("맑은 고딕", 16)).pack(side="left", padx=(0, 8))
+        self.lbl_end_total = tk.Label(total_inner, text="총 가용재고: 0개  /  전체 캐파: 0개  (0.0%)",
+                                         font=("맑은 고딕", 12, "bold"),
+                                         bg="#1877F2", fg="white")
+        self.lbl_end_total.pack(side="left")
 
-        shadow = tk.Frame(action_outer, bg="#1864c8")
-        shadow.pack(fill="x")
+        # ========== [구역별 진행바 카드 - 메인 영역] ==========
+        chart_outer = tk.Frame(container, bg="#F5F6F8")
+        chart_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
-        run_btn = tk.Button(shadow, text="📁  EMP 재고 파일 선택 및 분석",
-                              bg="#1877F2", fg="white",
-                              activebackground="#1864c8", activeforeground="white",
-                              font=("맑은 고딕", 11, "bold"),
-                              relief="flat", bd=0,
-                              cursor="hand2",
-                              command=self.run_closing_stock_logic)
-        run_btn.pack(fill="x", ipady=10)
-        def on_e1(e): run_btn.config(bg="#1864c8")
-        def on_l1(e): run_btn.config(bg="#1877F2")
-        run_btn.bind("<Enter>", on_e1)
-        run_btn.bind("<Leave>", on_l1)
+        chart_card = tk.Frame(chart_outer, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        chart_card.pack(fill="both", expand=True)
 
-        # ========== [결과 카드 - 메인 영역] ==========
-        result_outer = tk.Frame(container, bg="#F5F6F8")
-        result_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        tk.Frame(chart_card, bg="#8B5CF6", width=4).pack(side="left", fill="y")
 
-        result_card = tk.Frame(result_outer, bg="white",
-                                 highlightthickness=1, highlightbackground="#E5E7EB")
-        result_card.pack(fill="both", expand=True)
+        chart_inner = tk.Frame(chart_card, bg="white", padx=18, pady=14)
+        chart_inner.pack(side="left", fill="both", expand=True)
 
-        tk.Frame(result_card, bg="#10B981", width=4).pack(side="left", fill="y")
-
-        result_inner = tk.Frame(result_card, bg="white", padx=14, pady=12)
-        result_inner.pack(side="left", fill="both", expand=True)
-
-        tk.Label(result_inner, text="📍  구역별 가용재고 집계",
+        ch_head = tk.Frame(chart_inner, bg="white")
+        ch_head.pack(fill="x", pady=(0, 12))
+        tk.Label(ch_head, text="📍  구역별 점유율",
                  bg="white", fg="#111827",
-                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 8))
+                 font=("맑은 고딕", 11, "bold")).pack(side="left")
+        tk.Label(ch_head, text="🟢 정상 < 80%   🟡 주의 80%+   🔴 경고 90%+",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8)).pack(side="right")
 
-        tree_frame = tk.Frame(result_inner, bg="white")
-        tree_frame.pack(fill="both", expand=True)
+        # 진행바 영역
+        self.zone_chart_frame = tk.Frame(chart_inner, bg="white")
+        self.zone_chart_frame.pack(fill="both", expand=True)
 
-        self.tree_end = ttk.Treeview(tree_frame, columns=("zone", "qty"),
-                                       show="headings", height=10)
-        self.tree_end.heading("zone", text="최종 구역")
-        self.tree_end.column("zone", anchor="center", width=200)
-        self.tree_end.heading("qty", text="가용재고 합계")
-        self.tree_end.column("qty", anchor="e", width=180)
-        self.tree_end.pack(side="left", fill="both", expand=True)
+        # 초기 안내
+        self._render_empty_chart()
 
-        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_end.yview)
-        self.tree_end.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
+        # 호환용 (run_closing_stock_logic이 self.tree_end 참조 - 호환 유지)
+        self.tree_end = ttk.Treeview(container, columns=("zone", "qty"),
+                                       show="headings", height=1)
+
+        # 드래그앤드롭 등록
+        self._setup_dnd_for_closing_stock(chart_card, chart_inner, self.zone_chart_frame)
+
+    def _render_empty_chart(self):
+        """차트 영역 빈 상태 안내"""
+        for w in self.zone_chart_frame.winfo_children():
+            w.destroy()
+        empty = tk.Label(self.zone_chart_frame,
+                          text="💡 EMP 재고 파일을 [📁 파일 선택] 버튼으로 불러오거나\n"
+                               "    이 영역에 직접 끌어다 놓으세요",
+                          bg="white", fg="#9CA3AF",
+                          font=("맑은 고딕", 10),
+                          justify="center")
+        empty.pack(expand=True, pady=40)
+
+    def _setup_dnd_for_closing_stock(self, *widgets):
+        """마감재고 영역에 드래그앤드롭 등록"""
+        try:
+            from tkinterdnd2 import DND_FILES
+            for w in widgets:
+                try:
+                    w.drop_target_register(DND_FILES)
+                    w.dnd_bind('<<Drop>>', self._on_closing_file_dropped)
+                except: pass
+        except ImportError:
+            pass
+
+    def _on_closing_file_dropped(self, event):
+        """마감재고 파일 드롭 처리"""
+        path = event.data.strip()
+        if path.startswith('{') and path.endswith('}'):
+            path = path[1:-1]
+        if ' ' in path and not os.path.exists(path):
+            for p in path.split():
+                p = p.strip('{}')
+                if os.path.exists(p):
+                    path = p
+                    break
+        if not os.path.exists(path):
+            messagebox.showerror("오류", f"파일을 찾을 수 없습니다:\n{path}")
+            return
+        # 직접 호출 (다이얼로그 안 띄우고 바로)
+        self._process_closing_stock_file(path)
+
+    def _process_closing_stock_file(self, file_path):
+        """파일 경로 받아서 마감재고 분석 (드래그/버튼 공용)"""
+        try:
+            raw_df = pd.read_excel(file_path, header=None)
+            header_row = -1
+            for i, row in raw_df.iterrows():
+                if '창고' in row.values:
+                    header_row = i; break
+            if header_row == -1:
+                raise ValueError("'창고' 행 없음")
+            df = raw_df.iloc[header_row+1:].copy()
+            df.columns = raw_df.iloc[header_row]
+            df.columns = [str(c).strip() for c in df.columns]
+            df = df[df['창고'].astype(str).str.contains('정상창고', na=False)]
+            df['가용재고'] = pd.to_numeric(df['가용재고'], errors='coerce').fillna(0)
+            df['구역코드'] = df['다중로케이션'].astype(str).str[:2]
+
+            def classify_tmp(code):
+                c = str(code).upper()
+                if 'AA' <= c <= 'AB': return 'AA~AB구역'
+                if c == 'BB': return 'BB구역'
+                if 'CC' <= c <= 'DD': return 'CC~DD구역'
+                if c in ['EA', 'EE', 'FF']: return 'EA/EE/FF구역'
+                return '기타'
+
+            df['최종구역'] = df['구역코드'].apply(classify_tmp)
+            summary = df[df['최종구역'] != '기타'].groupby('최종구역')['가용재고'].sum().reset_index()
+
+            self._render_zone_chart(summary)
+        except Exception as e:
+            messagebox.showerror("오류", str(e))
+
+    def _render_zone_chart(self, summary_df):
+        """구역별 진행바 차트 그리기 (캐파 대비 %)"""
+        # 기존 위젯 제거
+        for w in self.zone_chart_frame.winfo_children():
+            w.destroy()
+
+        # 캐파 정보로 정렬 순서 정의 (고정 순서)
+        zone_order = ['AA~AB구역', 'BB구역', 'CC~DD구역', 'EA/EE/FF구역']
+
+        # 데이터 dict 변환
+        data = {row['최종구역']: int(row['가용재고']) for _, row in summary_df.iterrows()}
+
+        # 구역별 색상 (정상)
+        zone_colors = {
+            'AA~AB구역': '#3B82F6',
+            'BB구역': '#10B981',
+            'CC~DD구역': '#F59E0B',
+            'EA/EE/FF구역': '#8B5CF6',
+        }
+
+        total_qty = 0
+        total_capa = 0
+
+        for zone in zone_order:
+            qty = data.get(zone, 0)
+            capa = self._zone_capacity.get(zone, 0)
+            total_qty += qty
+            total_capa += capa
+
+            pct = (qty / capa * 100) if capa > 0 else 0
+
+            # 색상 결정 (경고 단계)
+            if pct >= 90:
+                bar_color = '#DC2626'  # 빨강
+                badge = "🔴"
+                badge_text = f"  {pct:.1f}%  ⚠️ 경고"
+                badge_fg = "#DC2626"
+            elif pct >= 80:
+                bar_color = '#F59E0B'  # 주황
+                badge = "🟡"
+                badge_text = f"  {pct:.1f}%  주의"
+                badge_fg = "#D97706"
+            else:
+                bar_color = zone_colors.get(zone, '#3B82F6')
+                badge = "🟢"
+                badge_text = f"  {pct:.1f}%"
+                badge_fg = "#16A34A"
+
+            # 행 컨테이너
+            row_frame = tk.Frame(self.zone_chart_frame, bg="white")
+            row_frame.pack(fill="x", pady=(0, 14))
+
+            # 1행: 구역명 + 수량/캐파 + %
+            top_row = tk.Frame(row_frame, bg="white")
+            top_row.pack(fill="x", pady=(0, 4))
+
+            # 좌측: 아이콘 + 구역명
+            left_box = tk.Frame(top_row, bg="white")
+            left_box.pack(side="left")
+            tk.Label(left_box, text=badge, bg="white",
+                     font=("맑은 고딕", 11)).pack(side="left", padx=(0, 4))
+            tk.Label(left_box, text=zone,
+                     bg="white", fg="#111827",
+                     font=("맑은 고딕", 10, "bold")).pack(side="left")
+
+            # 우측: 수량 / 캐파 + %
+            right_box = tk.Frame(top_row, bg="white")
+            right_box.pack(side="right")
+            tk.Label(right_box,
+                     text=f"{qty:,} / {capa:,}",
+                     bg="white", fg="#374151",
+                     font=("Consolas", 10, "bold")).pack(side="left")
+            tk.Label(right_box, text=badge_text,
+                     bg="white", fg=badge_fg,
+                     font=("맑은 고딕", 9, "bold")).pack(side="left")
+
+            # 2행: 진행바 (Canvas)
+            bar_height = 20
+            bar_canvas = tk.Canvas(row_frame, height=bar_height,
+                                     bg="#F3F4F6", highlightthickness=0,
+                                     bd=0)
+            bar_canvas.pack(fill="x")
+
+            # 캔버스 너비 알기 위해 update
+            self.zone_chart_frame.update_idletasks()
+
+            def draw_bar(canvas, percent, color):
+                """캔버스가 그려진 후 진행바 그리기"""
+                w = canvas.winfo_width()
+                if w <= 1:
+                    # 아직 너비 안 잡힘 → 다시 시도
+                    canvas.after(50, lambda: draw_bar(canvas, percent, color))
+                    return
+                fill_w = int(w * min(percent, 100) / 100)
+                canvas.delete("all")
+                # 배경
+                canvas.create_rectangle(0, 0, w, bar_height,
+                                          fill="#F3F4F6", outline="")
+                # 채워진 부분
+                if fill_w > 0:
+                    canvas.create_rectangle(0, 0, fill_w, bar_height,
+                                              fill=color, outline="")
+                # 100% 초과면 빗금 표시
+                if percent > 100:
+                    canvas.create_text(w/2, bar_height/2,
+                                         text=f"!! {percent:.0f}% 초과 !!",
+                                         fill="white",
+                                         font=("맑은 고딕", 8, "bold"))
+
+            # 한 번 즉시 그리고, resize 이벤트에 다시 그림
+            bar_canvas.bind("<Configure>",
+                              lambda e, c=bar_canvas, p=pct, col=bar_color:
+                                  draw_bar(c, p, col))
+
+        # 총합 라벨 업데이트
+        if total_capa > 0:
+            total_pct = total_qty / total_capa * 100
+            self.lbl_end_total.config(
+                text=f"총 가용재고: {total_qty:,}개  /  전체 캐파: {total_capa:,}개  ({total_pct:.1f}%)")
+        else:
+            self.lbl_end_total.config(text=f"총 가용재고: {total_qty:,}개")
+
+    # ========== [캐파 설정 - Firestore 저장/로드] ==========
+    def refresh_zone_capacity(self):
+        """로컬 config 파일에서 구역별 캐파 로드 (개인 PC 전용)"""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                saved = cfg.get("zone_capacity", {})
+                for k, v in saved.items():
+                    try:
+                        self._zone_capacity[k] = int(v)
+                    except: pass
+        except Exception as e:
+            print(f"⚠️ 캐파 로드 실패: {e}")
+
+    def save_zone_capacity(self, new_capacity):
+        """로컬 config 파일에 구역별 캐파 저장 (개인 PC 전용)"""
+        try:
+            cfg = {}
+            if os.path.exists(self.config_path):
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except Exception:
+                    cfg = {}
+            cfg["zone_capacity"] = {k: int(v) for k, v in new_capacity.items()}
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            self._zone_capacity = dict(new_capacity)
+            return True
+        except Exception as e:
+            messagebox.showerror("저장 실패", str(e))
+            return False
+
+    def open_capacity_settings(self):
+        """캐파 설정 팝업"""
+        win = tk.Toplevel(self.root)
+        win.title("⚙️ 구역별 캐파 설정")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 380, 360)
+        except Exception:
+            win.geometry("380x360")
+
+        # 헤더
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 8))
+        tk.Label(head, text="⚙️", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="구역별 캐파 설정",
+                 font=("맑은 고딕", 13, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+
+        tk.Label(win, text="저장하면 모든 PC에 동기화됩니다.",
+                 bg="#F5F6F8", fg="#6B7280",
+                 font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
+
+        # 입력 카드
+        card = tk.Frame(win, bg="white",
+                          highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=12)
+
+        inner = tk.Frame(card, bg="white", padx=18, pady=14)
+        inner.pack(fill="both", expand=True)
+
+        zone_order = ['AA~AB구역', 'BB구역', 'CC~DD구역', 'EA/EE/FF구역']
+        entries = {}
+
+        for zone in zone_order:
+            row = tk.Frame(inner, bg="white")
+            row.pack(fill="x", pady=6)
+            tk.Label(row, text=zone,
+                     bg="white", fg="#374151",
+                     font=("맑은 고딕", 10, "bold"),
+                     width=14, anchor="w").pack(side="left")
+            ent = tk.Entry(row, font=("Consolas", 11),
+                            bd=1, relief="solid", justify="right")
+            current = self._zone_capacity.get(zone, 0)
+            ent.insert(0, str(current))
+            ent.pack(side="left", fill="x", expand=True, ipady=3)
+            tk.Label(row, text="개", bg="white", fg="#9CA3AF",
+                     font=("맑은 고딕", 9)).pack(side="left", padx=(4, 0))
+            entries[zone] = ent
+
+        # 저장 버튼
+        btn_row = tk.Frame(win, bg="#F5F6F8")
+        btn_row.pack(fill="x", padx=18, pady=(0, 14))
+
+        def save_and_close():
+            new_cap = {}
+            for zone, ent in entries.items():
+                try:
+                    val = int(ent.get().strip().replace(',', ''))
+                    if val < 0:
+                        raise ValueError("음수 불가")
+                    new_cap[zone] = val
+                except ValueError:
+                    messagebox.showwarning("입력 오류",
+                        f"'{zone}'의 값이 올바르지 않습니다. 정수만 입력 가능합니다.",
+                        parent=win)
+                    return
+            if self.save_zone_capacity(new_cap):
+                messagebox.showinfo("저장 완료",
+                    "✅ 캐파 설정이 저장되었습니다.\n다른 PC에도 동기화됩니다.",
+                    parent=win)
+                win.destroy()
+
+        tk.Button(btn_row, text="💾 저장",
+                   command=save_and_close,
+                   bg="#1877F2", fg="white",
+                   font=("맑은 고딕", 10, "bold"),
+                   relief="flat", padx=20, pady=8,
+                   cursor="hand2").pack(side="right")
+        tk.Button(btn_row, text="취소",
+                   command=win.destroy,
+                   bg="#F3F4F6", fg="#6B7280",
+                   font=("맑은 고딕", 10),
+                   relief="flat", padx=14, pady=8,
+                   cursor="hand2").pack(side="right", padx=(0, 6))
 
     # --- [탭: 재고파악] ---
     def setup_inventory_check_v95(self):
@@ -4323,26 +4658,7 @@ class LogiPanApp:
     def run_closing_stock_logic(self):
         file_path = filedialog.askopenfilename(title="EMP 파일 선택", filetypes=[("Excel", "*.xlsx *.xls")])
         if not file_path: return
-        try:
-            raw_df = pd.read_excel(file_path, header=None); header_row = -1
-            for i, row in raw_df.iterrows():
-                if '창고' in row.values: header_row = i; break
-            if header_row == -1: raise ValueError("'창고' 행 없음")
-            df = raw_df.iloc[header_row+1:].copy(); df.columns = raw_df.iloc[header_row]; df.columns = [str(c).strip() for c in df.columns]
-            df = df[df['창고'].astype(str).str.contains('정상창고', na=False)]; df['가용재고'] = pd.to_numeric(df['가용재고'], errors='coerce').fillna(0); df['구역코드'] = df['다중로케이션'].astype(str).str[:2]
-            def classify_tmp(code):
-                c = str(code).upper()
-                if 'AA' <= c <= 'AB': return 'AA~AB구역'
-                if c == 'BB': return 'BB구역'
-                if 'CC' <= c <= 'DD': return 'CC~DD구역'
-                if c in ['EA', 'EE', 'FF']: return 'EA/EE/FF구역'
-                return '기타'
-            df['최종구역'] = df['구역코드'].apply(classify_tmp); summary = df[df['최종구역'] != '기타'].groupby('최종구역')['가용재고'].sum().reset_index()
-            for item in self.tree_end.get_children(): self.tree_end.delete(item)
-            total = 0
-            for _, row in summary.iterrows(): self.tree_end.insert("", "end", values=(row['최종구역'], f"{int(row['가용재고']):,}개")); total += row['가용재고']
-            self.lbl_end_total.config(text=f"📊 합계: {int(total):,}개"); messagebox.showinfo("완료", "분석 완료")
-        except Exception as e: messagebox.showerror("오류", str(e))
+        self._process_closing_stock_file(file_path)
 
     def send_notice(self):
         """현장으로 관리자 공지 보내기"""
