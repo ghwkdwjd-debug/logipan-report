@@ -4086,7 +4086,8 @@ class LogiPanApp:
             try:
                 self.db.collection('board_posts').document(item_id).update({
                     'status': '✅ 확인완료',
-                    'closed_time': firestore.SERVER_TIMESTAMP
+                    'closed_time': firestore.SERVER_TIMESTAMP,
+                    'closed_by': getattr(self, 'current_user', '관리자')
                 })
                 win.destroy()
                 self.update_board_view()
@@ -4622,7 +4623,8 @@ class LogiPanApp:
                     })
                 doc_ref.update({
                     'status': '✅ 확인완료',
-                    'closed_time': firestore.SERVER_TIMESTAMP
+                    'closed_time': firestore.SERVER_TIMESTAMP,
+                    'closed_by': getattr(self, 'current_user', '관리자')
                 })
                 detail_win.destroy()
                 self.update_board_view()
@@ -4779,7 +4781,12 @@ class LogiPanApp:
             badge_bg = "#E5E7EB"
             badge_fg = "#6B7280"
             card_bg = "#FAFAFA"
-            cat_label = f"✅ {category}"
+            # [수정] 처리한 사람 이름 표시
+            closed_by = data.get('closed_by', '')
+            if closed_by:
+                cat_label = f"✅ {closed_by} 확인완료"
+            else:
+                cat_label = f"✅ {category}"
         elif "공지" in category:
             accent_color = "#F59E0B"
             badge_bg = "#FEF3C7"
@@ -4905,7 +4912,8 @@ class LogiPanApp:
                 return
             self.db.collection('board_posts').document(doc_id).update({
                 'status': '✅ 완료',
-                'completed_at': firestore.SERVER_TIMESTAMP
+                'completed_at': firestore.SERVER_TIMESTAMP,
+                'closed_by': getattr(self, 'current_user', '관리자')
             })
             self._selected_board_id = None
             self.update_board_view()
@@ -6535,7 +6543,12 @@ class LogiPanApp:
     # [수정] 이 함수가 start_realtime_listener와 같은 세로 라인이어야 합니다.
     def update_status(self, doc_id, status, window):
         try:
-            self.db.collection('field_reports').document(doc_id).update({'status': status})
+            update_data = {'status': status}
+            # [수정] 완료 처리 시 누가 처리했는지 기록
+            if "완료" in str(status):
+                update_data['closed_by'] = getattr(self, 'current_user', '관리자')
+                update_data['closed_time'] = firestore.SERVER_TIMESTAMP
+            self.db.collection('field_reports').document(doc_id).update(update_data)
             messagebox.showinfo("성공", f"상태가 {status}로 변경되었습니다.")
             window.destroy() # 상세 팝업창 닫기
         except Exception as e:
@@ -6629,7 +6642,14 @@ class LogiPanApp:
                 # 진행 상태 결정 (캐싱된 정보 기반)
                 step_text = "🆕 신규"
                 is_worker_reply = False
-                if comment_total > 0:
+                # [수정] 완료된 항목은 처리한 사람 이름으로 표시
+                if status == "✅ 완료" or "확인완료" in str(status):
+                    closed_by = data.get('closed_by', '')
+                    if closed_by:
+                        step_text = f"✅ {closed_by} 확인완료"
+                    else:
+                        step_text = "✅ 확인완료"
+                elif comment_total > 0:
                     if last_comment_role == 'worker' or (last_comment_text.startswith('[답장]')):
                         step_text = "💬 NEW"
                         is_worker_reply = True
