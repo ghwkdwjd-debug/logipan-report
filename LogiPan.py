@@ -583,89 +583,93 @@ class LogiPanApp:
     # --- [탭 3: 맘스] ---
     def setup_moms_v86(self):
         container = tk.Frame(self.t_mom, bg="#f5f5f5"); container.pack(fill="both", expand=True)
-        tk.Label(container, text="📦 맘스 입/출고 등록", font=("맑은 고딕", 18, "bold"), bg="#f5f5f5", pady=15).pack()
+        # [수정] 제목 컴팩트하게 (pady 줄임)
+        tk.Label(container, text="📦 맘스 입/출고 등록", font=("맑은 고딕", 14, "bold"),
+                 bg="#f5f5f5", pady=6).pack()
 
-        btn_font = ("맑은 고딕", 10, "bold")
+        btn_font = ("맑은 고딕", 9, "bold")
+        sec_font = ("맑은 고딕", 10, "bold")
 
         # ========== [1. 마스터 생성] ==========
-        # 출고리스트 + 맘스 마스터재고 → 중복제거된 신규 마스터 등록 파일
         sec1 = tk.LabelFrame(container,
                               text=" 1️⃣ 신규 마스터 생성 (성수↔여주 중복제거) ",
-                              font=("맑은 고딕", 11, "bold"),
-                              bg="white", padx=20, pady=15)
-        sec1.pack(fill="x", padx=15, pady=5)
+                              font=sec_font, bg="white", padx=12, pady=6)
+        sec1.pack(fill="x", padx=12, pady=3)
 
-        s1r1 = tk.Frame(sec1, bg="white"); s1r1.pack(fill="x", pady=3)
+        s1r1 = tk.Frame(sec1, bg="white"); s1r1.pack(fill="x", pady=2)
         tk.Button(s1r1, text="📁 출고리스트 (성수)", command=self.sel_master_send,
                   width=22, bg="#E3F2FD", font=("맑은 고딕", 9, "bold")).pack(side="left")
         self.lbl_master_send = tk.Label(s1r1, text="미선택", fg="#777", bg="white",
-                                          font=("맑은 고딕", 10)); self.lbl_master_send.pack(side="left", padx=10)
+                                          font=("맑은 고딕", 9)); self.lbl_master_send.pack(side="left", padx=8)
 
-        s1r2 = tk.Frame(sec1, bg="white"); s1r2.pack(fill="x", pady=3)
+        s1r2 = tk.Frame(sec1, bg="white"); s1r2.pack(fill="x", pady=2)
         tk.Button(s1r2, text="📁 맘스 마스터재고 (여주)", command=self.sel_master_master,
                   width=22, bg="#E3F2FD", font=("맑은 고딕", 9, "bold")).pack(side="left")
         self.lbl_master_master = tk.Label(s1r2, text="미선택", fg="#777", bg="white",
-                                            font=("맑은 고딕", 10)); self.lbl_master_master.pack(side="left", padx=10)
+                                            font=("맑은 고딕", 9)); self.lbl_master_master.pack(side="left", padx=8)
 
         tk.Button(sec1, text="✨ 신규 마스터 리스트 생성",
-                  bg="#4CAF50", fg="white", font=btn_font, height=2,
-                  command=self.run_mom_master_logic).pack(fill="x", pady=(10, 0))
+                  bg="#4CAF50", fg="white", font=btn_font,
+                  command=self.run_mom_master_logic, pady=8).pack(fill="x", pady=(6, 0))
 
         # ========== [2. 입고리스트] ==========
         sec2 = tk.LabelFrame(container,
                               text=" 2️⃣ 입고 리스트 생성 (성수→여주 전체 이동) ",
-                              font=("맑은 고딕", 11, "bold"),
-                              bg="white", padx=20, pady=15)
-        sec2.pack(fill="x", padx=15, pady=5)
+                              font=sec_font, bg="white", padx=12, pady=6)
+        sec2.pack(fill="x", padx=12, pady=3)
 
-        s2r1 = tk.Frame(sec2, bg="white"); s2r1.pack(fill="x", pady=3)
+        s2r1 = tk.Frame(sec2, bg="white"); s2r1.pack(fill="x", pady=2)
         tk.Button(s2r1, text="📁 출고리스트 (성수)", command=self.sel_inbound_send,
                   width=22, bg="#E8F5E9", font=("맑은 고딕", 9, "bold")).pack(side="left")
         self.lbl_inbound_send = tk.Label(s2r1, text="미선택", fg="#777", bg="white",
-                                           font=("맑은 고딕", 10)); self.lbl_inbound_send.pack(side="left", padx=10)
+                                           font=("맑은 고딕", 9)); self.lbl_inbound_send.pack(side="left", padx=8)
 
         tk.Button(sec2, text="📋 입고 리스트 생성",
-                  bg="#2E7D32", fg="white", font=btn_font, height=2,
-                  command=self.run_mom_inbound_logic).pack(fill="x", pady=(10, 0))
+                  bg="#2E7D32", fg="white", font=btn_font,
+                  command=self.run_mom_inbound_logic, pady=8).pack(fill="x", pady=(6, 0))
 
         # ========== [3. 특정상품 제외 입고리스트] ==========
         sec3 = tk.LabelFrame(container,
                               text=" 3️⃣ 특정상품 제외 입고 리스트 생성 ",
-                              font=("맑은 고딕", 11, "bold"),
-                              bg="white", padx=20, pady=15)
-        sec3.pack(fill="x", padx=15, pady=5)
+                              font=sec_font, bg="white", padx=12, pady=6)
+        sec3.pack(fill="x", padx=12, pady=3)
 
-        s3r1 = tk.Frame(sec3, bg="white"); s3r1.pack(fill="x", pady=3)
+        s3r1 = tk.Frame(sec3, bg="white"); s3r1.pack(fill="x", pady=2)
         tk.Button(s3r1, text="📁 출고리스트 (성수)", command=self.sel_excl_send,
                   width=22, bg="#FFF3E0", font=("맑은 고딕", 9, "bold")).pack(side="left")
         self.lbl_excl_send = tk.Label(s3r1, text="미선택", fg="#777", bg="white",
-                                        font=("맑은 고딕", 10)); self.lbl_excl_send.pack(side="left", padx=10)
+                                        font=("맑은 고딕", 9)); self.lbl_excl_send.pack(side="left", padx=8)
 
-        s3r2 = tk.Frame(sec3, bg="white"); s3r2.pack(fill="x", pady=3)
+        s3r2 = tk.Frame(sec3, bg="white"); s3r2.pack(fill="x", pady=2)
         tk.Button(s3r2, text="📁 제외 리스트", command=self.sel_excl_list,
                   width=22, bg="#FFF3E0", font=("맑은 고딕", 9, "bold")).pack(side="left")
         self.lbl_excl_list = tk.Label(s3r2, text="미선택 (아이템코드/바코드 포함)", fg="#777", bg="white",
-                                        font=("맑은 고딕", 10)); self.lbl_excl_list.pack(side="left", padx=10)
+                                        font=("맑은 고딕", 9)); self.lbl_excl_list.pack(side="left", padx=8)
 
         tk.Button(sec3, text="🚫 제외 적용 입고 리스트 생성",
-                  bg="#1B5E20", fg="white", font=btn_font, height=2,
-                  command=self.run_mom_inbound_new_only).pack(fill="x", pady=(10, 0))
+                  bg="#1B5E20", fg="white", font=btn_font,
+                  command=self.run_mom_inbound_new_only, pady=8).pack(fill="x", pady=(6, 0))
 
-        # ========== [4. 맘스 출고등록] (기존 유지) ==========
+        # ========== [4. 맘스 출고등록] ==========
         m_out_f = tk.LabelFrame(container,
                                  text=" 4️⃣ 맘스 출고등록 ",
-                                 font=("맑은 고딕", 11, "bold"),
-                                 bg="white", padx=20, pady=15)
-        m_out_f.pack(fill="x", padx=15, pady=5)
-        inf = tk.Frame(m_out_f, bg="white"); inf.pack(fill="x", pady=5)
-        tk.Label(inf, text="👤 주문자/수령자명:", bg="white", font=("bold", 10)).pack(side="left")
-        self.ent_mom_user = tk.Entry(inf, width=20, bd=1, relief="solid", font=("맑은 고딕", 11))
-        self.ent_mom_user.pack(side="left", padx=10)
-        tk.Button(m_out_f, text="📁 출고 리스트 파일 선택", command=self.sel_mom_out, width=25).pack(pady=10)
-        self.lbl_mom_out = tk.Label(m_out_f, text="파일 미선택", fg="#777", bg="white"); self.lbl_mom_out.pack()
+                                 font=sec_font, bg="white", padx=12, pady=6)
+        m_out_f.pack(fill="x", padx=12, pady=3)
+
+        # [수정] 한 줄에 다 배치 - 주문자명 + 파일선택 + 라벨
+        m_row = tk.Frame(m_out_f, bg="white"); m_row.pack(fill="x", pady=2)
+        tk.Label(m_row, text="👤 주문자:", bg="white", font=("맑은 고딕", 9, "bold")).pack(side="left")
+        self.ent_mom_user = tk.Entry(m_row, width=12, bd=1, relief="solid", font=("맑은 고딕", 10))
+        self.ent_mom_user.pack(side="left", padx=6)
+        tk.Button(m_row, text="📁 출고 리스트", command=self.sel_mom_out,
+                  width=14, font=("맑은 고딕", 9, "bold"), bg="#F3E5F5").pack(side="left", padx=4)
+        self.lbl_mom_out = tk.Label(m_row, text="파일 미선택", fg="#777", bg="white",
+                                      font=("맑은 고딕", 9))
+        self.lbl_mom_out.pack(side="left", padx=4)
+
         tk.Button(m_out_f, text="📋 출고 리스트 생성",
-                  bg="#9C27B0", fg="white", font=("맑은 고딕", 13, "bold"), height=2,
-                  command=self.run_mom_out_logic).pack(fill="x", pady=10)
+                  bg="#9C27B0", fg="white", font=btn_font,
+                  command=self.run_mom_out_logic, pady=8).pack(fill="x", pady=(6, 0))
 
     # --- [탭 4: 마감재고 (수량 너비 확보)] ---
     def setup_closing_stock(self):
