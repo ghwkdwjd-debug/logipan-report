@@ -12,7 +12,29 @@ from firebase_admin import credentials, firestore, messaging
 class LogiPanApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("로지판 (Logi-Pan) v11.0 - 통합 물류 파트너")
+        self.root.title("로지판 (Logi-Pan) - 통합 물류 파트너")
+
+        # [추가] 창 아이콘 - 박스 이모지로 동적 생성 (PIL 사용)
+        try:
+            from PIL import Image, ImageDraw, ImageFont, ImageTk
+            # 256x256 박스 아이콘
+            img = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            # 시스템 이모지 폰트 시도 (윈도우)
+            try:
+                font = ImageFont.truetype("seguiemj.ttf", 200)  # Windows Segoe UI Emoji
+            except:
+                try:
+                    font = ImageFont.truetype("AppleColorEmoji.ttc", 180)  # Mac
+                except:
+                    font = None
+            if font:
+                # 박스 이모지 📦
+                draw.text((28, 0), "📦", font=font, embedded_color=True)
+            self._icon_photo = ImageTk.PhotoImage(img)
+            self.root.iconphoto(True, self._icon_photo)
+        except Exception as e:
+            print(f"⚠️ 아이콘 설정 실패: {e}")
 
         # --- 구글 비밀기지 연결 시작 ---
         try:
@@ -136,6 +158,7 @@ class LogiPanApp:
         self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤 출고")
         self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦 맘스")
         self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🆕 마스터")
+        self.t_rt = ttk.Frame(self.nb); self.nb.add(self.t_rt, text="🔄 RT입고")
         self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍 재고파악")
         self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
         self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
@@ -145,6 +168,7 @@ class LogiPanApp:
         self.setup_outbound()
         self.setup_moms_v86()
         self.setup_master_registration()
+        self.setup_rt_inbound()
         self.setup_closing_stock()
         self.setup_inventory_check_v95()
         self.setup_field_comm(self.t_field)
@@ -2549,6 +2573,285 @@ class LogiPanApp:
         'CC~DD구역': 4400,
         'EA/EE/FF구역': 13696,
     }
+
+    # ========================================================================
+    # [탭: RT 바코드 스캔] - RT 바코드 스캔 → 입고 양식 변환
+    # ========================================================================
+    def setup_rt_inbound(self):
+        """RT 바코드 스캔 → 입고 양식 자동 변환"""
+        container = tk.Frame(self.t_rt, bg="#F5F6F8")
+        container.pack(fill="both", expand=True)
+
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="🔄", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="RT 입고",
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_text_box, text="바코드 스캔 → 입고 양식 자동 변환",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # 우측: 리셋 버튼
+        tk.Button(header_frame, text="🔄 리셋",
+                   command=self.reset_rt_all,
+                   bg="#F3F4F6", fg="#9CA3AF",
+                   activebackground="#E5E7EB",
+                   font=("맑은 고딕", 8),
+                   relief="flat", padx=8, pady=4,
+                   cursor="hand2").pack(side="right", anchor="se")
+
+        # ========== [액션 버튼 - 하단] ==========
+        action_outer = tk.Frame(container, bg="#F5F6F8")
+        action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
+
+        def make_btn(parent, text, bg, hover_bg, command):
+            shadow = tk.Frame(parent, bg=hover_bg)
+            shadow.pack(side="left", expand=True, fill="x", padx=2)
+            btn = tk.Button(shadow, text=text, bg=bg, fg="white",
+                              activebackground=hover_bg, activeforeground="white",
+                              font=("맑은 고딕", 10, "bold"),
+                              relief="flat", bd=0, cursor="hand2", command=command)
+            btn.pack(fill="x", ipady=8)
+            def on_e(e): btn.config(bg=hover_bg)
+            def on_l(e): btn.config(bg=bg)
+            btn.bind("<Enter>", on_e); btn.bind("<Leave>", on_l)
+            return btn
+
+        make_btn(action_outer, "🔄  변환 실행",
+                  bg="#F59E0B", hover_bg="#D97706",
+                  command=self.run_rt_conversion)
+        make_btn(action_outer, "📎  입고 양식 복사",
+                  bg="#10B981", hover_bg="#059669",
+                  command=self.copy_rt_to_clipboard)
+
+        # ========== [총 스캔 수량 - 큰 표시] ==========
+        total_outer = tk.Frame(container, bg="#F5F6F8")
+        total_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 8))
+
+        total_card = tk.Frame(total_outer, bg="#1877F2",
+                                highlightthickness=0)
+        total_card.pack(fill="x")
+
+        total_inner = tk.Frame(total_card, bg="#1877F2")
+        total_inner.pack(pady=12)
+
+        tk.Label(total_inner, text="📡", bg="#1877F2",
+                 font=("맑은 고딕", 16)).pack(side="left", padx=(0, 8))
+        tk.Label(total_inner, text="총 스캔 수량:",
+                 bg="#1877F2", fg="#BFDBFE",
+                 font=("맑은 고딕", 11)).pack(side="left", padx=(0, 8))
+        self.lbl_rt_total = tk.Label(total_inner, text="0개",
+                                        font=("맑은 고딕", 18, "bold"),
+                                        bg="#1877F2", fg="white")
+        self.lbl_rt_total.pack(side="left")
+        tk.Label(total_inner, text="  /  고유 바코드:",
+                 bg="#1877F2", fg="#BFDBFE",
+                 font=("맑은 고딕", 11)).pack(side="left", padx=(8, 6))
+        self.lbl_rt_unique = tk.Label(total_inner, text="0종",
+                                        font=("맑은 고딕", 14, "bold"),
+                                        bg="#1877F2", fg="white")
+        self.lbl_rt_unique.pack(side="left")
+
+        # ========== [로케이션 카드] ==========
+        loc_outer = tk.Frame(container, bg="#F5F6F8")
+        loc_outer.pack(fill="x", padx=18, pady=(0, 8))
+
+        loc_card = tk.Frame(loc_outer, bg="white",
+                              highlightthickness=1, highlightbackground="#E5E7EB")
+        loc_card.pack(fill="x")
+        tk.Frame(loc_card, bg="#F59E0B", width=4).pack(side="left", fill="y")
+
+        loc_inner = tk.Frame(loc_card, bg="white", padx=14, pady=10)
+        loc_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(loc_inner, text="📍",
+                 bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
+        tk.Label(loc_inner, text="로케이션",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(0, 8))
+
+        self.ent_rt_location = tk.Entry(loc_inner, font=("Consolas", 11),
+                                          bd=1, relief="solid",
+                                          highlightthickness=0,
+                                          width=20)
+        self.ent_rt_location.pack(side="left", padx=(0, 8), ipady=4)
+        self.ent_rt_location.insert(0, "RT-00-00-00")
+
+        tk.Label(loc_inner, text="(기본값 RT-00-00-00, 수정 가능)",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8)).pack(side="left")
+
+        # ========== [입력 카드] ==========
+        input_outer = tk.Frame(container, bg="#F5F6F8")
+        input_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+
+        input_card = tk.Frame(input_outer, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        input_card.pack(fill="both", expand=True)
+        tk.Frame(input_card, bg="#10B981", width=4).pack(side="left", fill="y")
+
+        input_inner = tk.Frame(input_card, bg="white", padx=14, pady=10)
+        input_inner.pack(side="left", fill="both", expand=True)
+
+        head = tk.Frame(input_inner, bg="white")
+        head.pack(fill="x", pady=(0, 4))
+        tk.Label(head, text="📡",
+                 bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
+        tk.Label(head, text="바코드 스캔",
+                 font=("맑은 고딕", 10, "bold"),
+                 bg="white", fg="#111827").pack(side="left")
+
+        # 지우기 버튼
+        tk.Button(head, text="🗑️ 지우기",
+                   command=self._clear_rt_input,
+                   bg="#F3F4F6", fg="#6B7280",
+                   font=("맑은 고딕", 8, "bold"),
+                   relief="flat", padx=8, pady=2,
+                   cursor="hand2").pack(side="right")
+
+        tk.Label(input_inner,
+                 text="💡 바코드 한 줄에 하나씩 스캔. 같은 바코드 여러 번 스캔하면 자동 합쳐짐",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
+
+        # 입력창 + 스크롤
+        rt_box = tk.Frame(input_inner, bg="white")
+        rt_box.pack(fill="both", expand=True)
+
+        self.txt_rt_in = tk.Text(rt_box, font=("Consolas", 11),
+                                   bd=1, relief="solid",
+                                   bg="#F0FDF4",
+                                   highlightthickness=1, highlightbackground="#E5E7EB",
+                                   padx=8, pady=6, wrap="char",
+                                   height=12)
+        rt_sb = ttk.Scrollbar(rt_box, orient="vertical",
+                                command=self.txt_rt_in.yview)
+        self.txt_rt_in.configure(yscrollcommand=rt_sb.set)
+        rt_sb.pack(side="right", fill="y")
+        self.txt_rt_in.pack(side="left", fill="both", expand=True)
+
+        # 입력 시 실시간 카운트
+        self.txt_rt_in.bind("<KeyRelease>", lambda e: self._update_rt_count())
+
+        # 마지막 결과
+        self._last_rt_df = None
+
+    def _update_rt_count(self):
+        """실시간 총 스캔 수량 업데이트"""
+        raw = self.txt_rt_in.get("1.0", "end-1c").strip()
+        if not raw:
+            self.lbl_rt_total.config(text="0개")
+            self.lbl_rt_unique.config(text="0종")
+            return
+
+        # 한 줄에 하나씩, 빈 줄 무시
+        codes = []
+        for line in raw.split('\n'):
+            code = line.strip()
+            if code:
+                # 첫 토큰만 (공백/탭으로 구분된 경우)
+                code = re.split(r'[\t ]+', code)[0]
+                if code:
+                    codes.append(code)
+
+        total = len(codes)
+        unique = len(set(codes))
+        self.lbl_rt_total.config(text=f"{total:,}개")
+        self.lbl_rt_unique.config(text=f"{unique:,}종")
+
+    def _clear_rt_input(self):
+        existing = self.txt_rt_in.get("1.0", "end-1c").strip()
+        if existing and not messagebox.askyesno("입력 비우기", "바코드 입력을 모두 지우시겠습니까?"):
+            return
+        self.txt_rt_in.delete("1.0", tk.END)
+        self.lbl_rt_total.config(text="0개")
+        self.lbl_rt_unique.config(text="0종")
+        self._last_rt_df = None
+
+    def reset_rt_all(self):
+        """RT 탭 전체 리셋 - 바코드 + 로케이션"""
+        if not messagebox.askyesno("RT 탭 리셋",
+                                     "바코드와 로케이션을 모두 초기화하시겠습니까?"):
+            return
+        self.txt_rt_in.delete("1.0", tk.END)
+        self.ent_rt_location.delete(0, tk.END)
+        self.ent_rt_location.insert(0, "RT-00-00-00")
+        self.lbl_rt_total.config(text="0개")
+        self.lbl_rt_unique.config(text="0종")
+        self._last_rt_df = None
+
+    def run_rt_conversion(self):
+        """바코드 스캔 → 입고 양식 변환"""
+        raw = self.txt_rt_in.get("1.0", "end-1c").strip()
+        if not raw:
+            messagebox.showwarning("주의", "바코드를 먼저 스캔해주세요.")
+            return
+
+        location = self.ent_rt_location.get().strip()
+        if not location:
+            location = "RT-00-00-00"
+
+        # 바코드별 카운트
+        from collections import Counter
+        codes = []
+        for line in raw.split('\n'):
+            code = line.strip()
+            if not code: continue
+            code = re.split(r'[\t ]+', code)[0]
+            if code:
+                codes.append(code)
+
+        if not codes:
+            messagebox.showwarning("결과 없음", "유효한 바코드가 없습니다.")
+            return
+
+        cnt = Counter(codes)
+
+        # 입고 등록 양식 (입고탭과 동일):
+        # 박스번호 | 바코드 | 정상수량 | 불량수량 | 정상로케이션 | 불량로케이션
+        rows = []
+        for bc, qty in cnt.items():
+            rows.append({
+                '박스번호': '',
+                '바코드': bc,
+                '정상수량': qty,
+                '불량수량': 0,
+                '정상로케이션': location,
+                '불량로케이션': '',
+            })
+
+        df = pd.DataFrame(rows)
+        self._last_rt_df = df
+
+        messagebox.showinfo("변환 완료",
+            f"✅ {len(df)}종 / 총 {sum(cnt.values())}개\n\n"
+            f"📍 로케이션: {location}\n\n"
+            f"[📎 입고 양식 복사] 버튼을 눌러 클립보드에 복사하세요.")
+
+    def copy_rt_to_clipboard(self):
+        """RT 바코드 입고 양식을 클립보드에 복사 (TSV 헤더 제외)"""
+        df = getattr(self, '_last_rt_df', None)
+        if df is None or df.empty:
+            messagebox.showwarning("복사 불가",
+                "복사할 데이터가 없습니다.\n먼저 [🔄 변환 실행]을 눌러주세요.")
+            return
+        try:
+            tsv = df.to_csv(sep='\t', index=False, header=False)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(tsv)
+            self.root.update()
+            messagebox.showinfo("복사 완료",
+                f"✅ 클립보드에 복사 완료!\n\n📊 {len(df)}종 / 총 {int(df['정상수량'].sum())}개\n📋 EMP에 Ctrl+V")
+        except Exception as e:
+            messagebox.showerror("복사 실패", f"{e}")
 
     def setup_closing_stock(self):
         """마감재고 - 진행바 차트 + 캐파 대비 % + 드래그앤드롭"""
