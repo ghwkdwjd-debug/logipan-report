@@ -12,7 +12,7 @@ from firebase_admin import credentials, firestore, messaging
 class LogiPanApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("로지판 (Logi-Pan) - 통합 물류 파트너")
+        self.root.title("로지판 (Logi-Pan) v11.0 - 통합 물류 파트너")
 
         # --- 구글 비밀기지 연결 시작 ---
         try:
@@ -58,7 +58,15 @@ class LogiPanApp:
         self.selected_type = tk.StringVar(value="매장출고")
         self.s_btns = {}
         self.t_btns = {}
-        self.moms_files = {"send": "", "master": "", "out_list": ""}
+        # [수정] 각 섹션별 파일 따로 관리 (master/inbound/exclude/out 4개 영역)
+        self.moms_files = {
+            "master_send": "",   # 1. 마스터 생성용 출고리스트
+            "master_master": "", # 1. 마스터 생성용 맘스 마스터재고
+            "inbound_send": "",  # 2. 입고리스트용 출고리스트
+            "excl_send": "",     # 3. 제외 입고리스트용 출고리스트
+            "excl_list": "",     # 3. 제외 명단 파일
+            "out_list": ""       # 4. 출고등록용
+        }
         self.chk_files = {"target": "", "master": ""}
         self.filter_var = tk.StringVar(value="전체")
         self.search_var = tk.StringVar()
@@ -576,29 +584,88 @@ class LogiPanApp:
     def setup_moms_v86(self):
         container = tk.Frame(self.t_mom, bg="#f5f5f5"); container.pack(fill="both", expand=True)
         tk.Label(container, text="📦 맘스 입/출고 등록", font=("맑은 고딕", 18, "bold"), bg="#f5f5f5", pady=15).pack()
-        m_in_f = tk.LabelFrame(container, text=" 1. 맘스 마스터 및 입고등록 ", font=("맑은 고딕", 11, "bold"), bg="white", padx=20, pady=20); m_in_f.pack(fill="both", expand=True, padx=15, pady=5)
-        r1 = tk.Frame(m_in_f, bg="white"); r1.pack(fill="x", pady=5)
-        tk.Button(r1, text="조회 리스트 선택", command=self.sel_mom_s, width=20).pack(side="left")
-        self.lbl_mom_s = tk.Label(r1, text="(이동재고) 선택되지 않음", fg="#777", bg="white", font=("맑은 고딕", 10)); self.lbl_mom_s.pack(side="left", padx=10)
-        r2 = tk.Frame(m_in_f, bg="white"); r2.pack(fill="x", pady=5)
-        tk.Button(r2, text="마스터 재고 선택", command=self.sel_mom_m, width=20).pack(side="left")
-        self.lbl_mom_m = tk.Label(r2, text="(맘스 마스터재고) 선택되지 않음", fg="#777", bg="white", font=("맑은 고딕", 10)); self.lbl_mom_m.pack(side="left", padx=10)
-        
-        btn_r = tk.Frame(m_in_f, bg="white"); btn_r.pack(fill="x", pady=15)
-        # [수정] 3개 버튼 크기/폰트 통일 (font, height 동일하게)
+
         btn_font = ("맑은 고딕", 10, "bold")
-        tk.Button(btn_r, text="중복제거 마스터 리스트 생성", bg="#4CAF50", fg="white", font=btn_font, height=2, command=self.run_mom_master_logic).pack(side="left", expand=True, fill="x", padx=5)
-        tk.Button(btn_r, text="입고 리스트 생성", bg="#2E7D32", fg="white", font=btn_font, height=2, command=self.run_mom_inbound_logic).pack(side="left", expand=True, fill="x", padx=5)
-        # [추가] 마스터재고에 있는 바코드는 제외하고 신규 바코드만 입고 리스트로 생성
-        tk.Button(btn_r, text="신규만 입고 리스트 생성", bg="#1B5E20", fg="white", font=btn_font, height=2, command=self.run_mom_inbound_new_only).pack(side="left", expand=True, fill="x", padx=5)
-        
-        m_out_f = tk.LabelFrame(container, text=" 2. 맘스 출고등록 ", font=("맑은 고딕", 11, "bold"), bg="white", padx=20, pady=20); m_out_f.pack(fill="both", expand=True, padx=15, pady=5)
+
+        # ========== [1. 마스터 생성] ==========
+        # 출고리스트 + 맘스 마스터재고 → 중복제거된 신규 마스터 등록 파일
+        sec1 = tk.LabelFrame(container,
+                              text=" 1️⃣ 신규 마스터 생성 (성수↔여주 중복제거) ",
+                              font=("맑은 고딕", 11, "bold"),
+                              bg="white", padx=20, pady=15)
+        sec1.pack(fill="x", padx=15, pady=5)
+
+        s1r1 = tk.Frame(sec1, bg="white"); s1r1.pack(fill="x", pady=3)
+        tk.Button(s1r1, text="📁 출고리스트 (성수)", command=self.sel_master_send,
+                  width=22, bg="#E3F2FD", font=("맑은 고딕", 9, "bold")).pack(side="left")
+        self.lbl_master_send = tk.Label(s1r1, text="미선택", fg="#777", bg="white",
+                                          font=("맑은 고딕", 10)); self.lbl_master_send.pack(side="left", padx=10)
+
+        s1r2 = tk.Frame(sec1, bg="white"); s1r2.pack(fill="x", pady=3)
+        tk.Button(s1r2, text="📁 맘스 마스터재고 (여주)", command=self.sel_master_master,
+                  width=22, bg="#E3F2FD", font=("맑은 고딕", 9, "bold")).pack(side="left")
+        self.lbl_master_master = tk.Label(s1r2, text="미선택", fg="#777", bg="white",
+                                            font=("맑은 고딕", 10)); self.lbl_master_master.pack(side="left", padx=10)
+
+        tk.Button(sec1, text="✨ 신규 마스터 리스트 생성",
+                  bg="#4CAF50", fg="white", font=btn_font, height=2,
+                  command=self.run_mom_master_logic).pack(fill="x", pady=(10, 0))
+
+        # ========== [2. 입고리스트] ==========
+        sec2 = tk.LabelFrame(container,
+                              text=" 2️⃣ 입고 리스트 생성 (성수→여주 전체 이동) ",
+                              font=("맑은 고딕", 11, "bold"),
+                              bg="white", padx=20, pady=15)
+        sec2.pack(fill="x", padx=15, pady=5)
+
+        s2r1 = tk.Frame(sec2, bg="white"); s2r1.pack(fill="x", pady=3)
+        tk.Button(s2r1, text="📁 출고리스트 (성수)", command=self.sel_inbound_send,
+                  width=22, bg="#E8F5E9", font=("맑은 고딕", 9, "bold")).pack(side="left")
+        self.lbl_inbound_send = tk.Label(s2r1, text="미선택", fg="#777", bg="white",
+                                           font=("맑은 고딕", 10)); self.lbl_inbound_send.pack(side="left", padx=10)
+
+        tk.Button(sec2, text="📋 입고 리스트 생성",
+                  bg="#2E7D32", fg="white", font=btn_font, height=2,
+                  command=self.run_mom_inbound_logic).pack(fill="x", pady=(10, 0))
+
+        # ========== [3. 특정상품 제외 입고리스트] ==========
+        sec3 = tk.LabelFrame(container,
+                              text=" 3️⃣ 특정상품 제외 입고 리스트 생성 ",
+                              font=("맑은 고딕", 11, "bold"),
+                              bg="white", padx=20, pady=15)
+        sec3.pack(fill="x", padx=15, pady=5)
+
+        s3r1 = tk.Frame(sec3, bg="white"); s3r1.pack(fill="x", pady=3)
+        tk.Button(s3r1, text="📁 출고리스트 (성수)", command=self.sel_excl_send,
+                  width=22, bg="#FFF3E0", font=("맑은 고딕", 9, "bold")).pack(side="left")
+        self.lbl_excl_send = tk.Label(s3r1, text="미선택", fg="#777", bg="white",
+                                        font=("맑은 고딕", 10)); self.lbl_excl_send.pack(side="left", padx=10)
+
+        s3r2 = tk.Frame(sec3, bg="white"); s3r2.pack(fill="x", pady=3)
+        tk.Button(s3r2, text="📁 제외 리스트", command=self.sel_excl_list,
+                  width=22, bg="#FFF3E0", font=("맑은 고딕", 9, "bold")).pack(side="left")
+        self.lbl_excl_list = tk.Label(s3r2, text="미선택 (아이템코드/바코드 포함)", fg="#777", bg="white",
+                                        font=("맑은 고딕", 10)); self.lbl_excl_list.pack(side="left", padx=10)
+
+        tk.Button(sec3, text="🚫 제외 적용 입고 리스트 생성",
+                  bg="#1B5E20", fg="white", font=btn_font, height=2,
+                  command=self.run_mom_inbound_new_only).pack(fill="x", pady=(10, 0))
+
+        # ========== [4. 맘스 출고등록] (기존 유지) ==========
+        m_out_f = tk.LabelFrame(container,
+                                 text=" 4️⃣ 맘스 출고등록 ",
+                                 font=("맑은 고딕", 11, "bold"),
+                                 bg="white", padx=20, pady=15)
+        m_out_f.pack(fill="x", padx=15, pady=5)
         inf = tk.Frame(m_out_f, bg="white"); inf.pack(fill="x", pady=5)
         tk.Label(inf, text="👤 주문자/수령자명:", bg="white", font=("bold", 10)).pack(side="left")
-        self.ent_mom_user = tk.Entry(inf, width=20, bd=1, relief="solid", font=("맑은 고딕", 11)); self.ent_mom_user.pack(side="left", padx=10)
+        self.ent_mom_user = tk.Entry(inf, width=20, bd=1, relief="solid", font=("맑은 고딕", 11))
+        self.ent_mom_user.pack(side="left", padx=10)
         tk.Button(m_out_f, text="📁 출고 리스트 파일 선택", command=self.sel_mom_out, width=25).pack(pady=10)
         self.lbl_mom_out = tk.Label(m_out_f, text="파일 미선택", fg="#777", bg="white"); self.lbl_mom_out.pack()
-        tk.Button(m_out_f, text="📋 출고 리스트 생성", bg="#9C27B0", fg="white", font=("맑은 고딕", 13, "bold"), height=2, command=self.run_mom_out_logic).pack(side="bottom", fill="x", pady=10)
+        tk.Button(m_out_f, text="📋 출고 리스트 생성",
+                  bg="#9C27B0", fg="white", font=("맑은 고딕", 13, "bold"), height=2,
+                  command=self.run_mom_out_logic).pack(fill="x", pady=10)
 
     # --- [탭 4: 마감재고 (수량 너비 확보)] ---
     def setup_closing_stock(self):
@@ -2265,66 +2332,182 @@ class LogiPanApp:
         df.to_csv(os.path.join(self.save_dir, fn), index=False, encoding="utf-8-sig"); messagebox.showinfo("완료", f"저장됨: {fn}")
         self.txt_out.delete("1.0", tk.END); self.lbl_out_qty.config(text="📡 출고 바코드 & 수량 붙여넣기 (0개)")
 
+    # ========== [섹션별 파일 선택 함수] ==========
+    def _set_file(self, key, label_widget, prefix=""):
+        """파일 선택 다이얼로그 띄우고 라벨 업데이트하는 공통 함수"""
+        p = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls")])
+        if not p:
+            return
+        self.moms_files[key] = p
+        label_widget.config(text=f"{prefix}{os.path.basename(p)}", fg="blue")
+
+    # 1. 마스터 생성
+    def sel_master_send(self): self._set_file("master_send", self.lbl_master_send)
+    def sel_master_master(self): self._set_file("master_master", self.lbl_master_master)
+    # 2. 입고리스트
+    def sel_inbound_send(self): self._set_file("inbound_send", self.lbl_inbound_send)
+    # 3. 제외 입고리스트
+    def sel_excl_send(self): self._set_file("excl_send", self.lbl_excl_send)
+    def sel_excl_list(self): self._set_file("excl_list", self.lbl_excl_list, prefix="📌 ")
+    # 4. 맘스 출고등록
+    def sel_mom_out(self):
+        p = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls")])
+        if not p: return
+        self.moms_files["out_list"] = p
+        self.lbl_mom_out.config(text=os.path.basename(p), fg="blue")
+
+    # ========== [1. 신규 마스터 리스트 생성] ==========
     def run_mom_master_logic(self):
-        if not self.moms_files["send"] or not self.moms_files["master"]: return
-        try:
-            today = datetime.now().strftime('%y%m%d')
-            df_s, bc_c = self.smart_load_moms(self.moms_files["send"], '바코드')
-            df_m, mc_c = self.smart_load_moms(self.moms_files["master"], '상품코드')
-            df_new = df_s[~df_s[bc_c].isin(df_m[mc_c])].copy()
-            def f_c_tmp(df_in, k_in):
-                return next((c for c in df_in.columns if k_in in str(c)), None)
-            m_reg = pd.DataFrame()
-            m_reg['브랜드명'] = df_new.get(f_c_tmp(df_new, '브랜드'), '')
-            m_reg['상품군'] = df_new.get(f_c_tmp(df_new, '아이템'), '')
-            m_reg['스타일번호'] = df_new.get(f_c_tmp(df_new, '상품코드'), '')
-            m_reg['바코드명'] = df_new[bc_c]; m_reg['상품코드'] = df_new[bc_c]
-            m_reg['상품명'] = df_new.get(f_c_tmp(df_new, '상품명'), ''); m_reg['상품옵션'] = df_new.get(f_c_tmp(df_new, '사이즈'), ''); m_reg['색상'] = '999'
-            # [수정] 맘스 마스터 리스트 파일명
-            fn = self.get_unique_filename(f"{today} 맘스 마스터 리스트", "xlsx")
-            m_reg.to_excel(os.path.join(self.save_dir, fn), index=False)
-            messagebox.showinfo("완료", "저장 완료")
-            # [수정] 맘스 마스터 생성 시에는 리셋하지 않음 (파일 선택 유지)
-        except Exception as e: messagebox.showerror("오류", str(e))
-
-    def run_mom_inbound_logic(self):
-        if not self.moms_files["send"]: return
-        try:
-            today = datetime.now().strftime('%y%m%d'); df_s, bc_col = self.smart_load_moms(self.moms_files["send"], '바코드')
-            qty_col = next((c for c in df_s.columns if '가용재고' in str(c)), next((c for c in df_s.columns if '수량' in str(c)), None))
-            i_reg = pd.DataFrame(); i_reg['화주코드'] = ['INOOINTEMPTY'] * len(df_s); i_reg['센터명'] = '신여주2'; i_reg['층정보'] = 'A2'; i_reg['마스터코드'] = ""; i_reg['상품바코드(sku)'] = df_s[bc_col]; i_reg['입고'] = df_s[qty_col] if qty_col else '1'
-            # [수정] 맘스 입고 리스트 파일명
-            fn = self.get_unique_filename(f"{today} 맘스 입고 리스트", "xlsx")
-            i_reg.to_excel(os.path.join(self.save_dir, fn), index=False); messagebox.showinfo("완료", "저장 완료")
-            # [추가] 입고 리스트 생성 후에는 최종 리셋
-            self.moms_files={"send":"","master":"","out_list":""}; self.lbl_mom_s.config(text="미선택", fg="#777"); self.lbl_mom_m.config(text="미선택", fg="#777")
-        except Exception as e: messagebox.showerror("오류", str(e))
-
-    def run_mom_inbound_new_only(self):
-        """[추가] 조회 리스트에서 마스터 재고에 이미 있는 바코드는 제외하고
-        신규 바코드만 입고 리스트로 생성한다."""
-        if not self.moms_files["send"]:
-            messagebox.showwarning("주의", "조회 리스트를 먼저 선택해주세요.")
+        send_file = self.moms_files.get("master_send", "")
+        master_file = self.moms_files.get("master_master", "")
+        if not send_file:
+            messagebox.showwarning("주의", "출고리스트(성수)를 먼저 선택해주세요.")
             return
-        if not self.moms_files["master"]:
-            messagebox.showwarning("주의", "마스터 재고 파일을 먼저 선택해주세요.\n(마스터에 있는 바코드를 제외해야 하므로 필수입니다)")
+        if not master_file:
+            messagebox.showwarning("주의", "맘스 마스터재고(여주) 파일을 먼저 선택해주세요.")
             return
         try:
             today = datetime.now().strftime('%y%m%d')
-            df_s, bc_col = self.smart_load_moms(self.moms_files["send"], '바코드')
-            df_m, mc_col = self.smart_load_moms(self.moms_files["master"], '상품코드')
+            df_s, bc_c = self.smart_load_moms(send_file, '바코드')
+            df_m, mc_c = self.smart_load_moms(master_file, '상품코드')
 
-            # 비교를 위해 양쪽 코드 정규화 (공백/대소문자/.0 끝 정리)
-            send_codes = self.clean_code_strictly(df_s[bc_col])
-            master_codes = set(self.clean_code_strictly(df_m[mc_col]).tolist())
+            # [개선] 정확한 코드 매칭을 위해 정규화
+            send_codes = self.clean_code_strictly(df_s[bc_c])
+            master_codes = set(self.clean_code_strictly(df_m[mc_c]).tolist())
 
-            # 마스터에 없는(=신규) 행만 골라낸다
             mask_new = ~send_codes.isin(master_codes)
             df_new = df_s[mask_new].copy()
 
             if df_new.empty:
                 messagebox.showinfo("결과 없음",
-                    "조회 리스트의 모든 바코드가 이미 마스터 재고에 존재합니다.\n신규로 추가할 항목이 없습니다.")
+                    "출고리스트의 모든 바코드가 이미 마스터 재고에 존재합니다.\n신규로 추가할 항목이 없습니다.")
+                return
+
+            def f_c_tmp(df_in, k_in):
+                return next((c for c in df_in.columns if k_in in str(c)), None)
+
+            m_reg = pd.DataFrame()
+            m_reg['브랜드명'] = df_new.get(f_c_tmp(df_new, '브랜드'), '')
+            m_reg['상품군'] = df_new.get(f_c_tmp(df_new, '아이템'), '')
+            m_reg['스타일번호'] = df_new.get(f_c_tmp(df_new, '상품코드'), '')
+            m_reg['바코드명'] = df_new[bc_c]
+            m_reg['상품코드'] = df_new[bc_c]
+            m_reg['상품명'] = df_new.get(f_c_tmp(df_new, '상품명'), '')
+            m_reg['상품옵션'] = df_new.get(f_c_tmp(df_new, '사이즈'), '')
+            m_reg['색상'] = '999'
+
+            fn = self.get_unique_filename(f"{today} 맘스 마스터 리스트", "xlsx")
+            m_reg.to_excel(os.path.join(self.save_dir, fn), index=False)
+
+            total_cnt = len(df_s)
+            new_cnt = len(df_new)
+            excluded_cnt = total_cnt - new_cnt
+            messagebox.showinfo("완료",
+                f"저장 완료!\n\n📊 결과 요약\n"
+                f"• 출고리스트 전체: {total_cnt}건\n"
+                f"• 마스터에 이미 존재: {excluded_cnt}건\n"
+                f"• 신규 마스터 등록 대상: {new_cnt}건\n\n"
+                f"📄 파일: {fn}")
+
+            # 1번 섹션 리셋
+            self.moms_files["master_send"] = ""
+            self.moms_files["master_master"] = ""
+            self.lbl_master_send.config(text="미선택", fg="#777")
+            self.lbl_master_master.config(text="미선택", fg="#777")
+        except Exception as e:
+            messagebox.showerror("오류", str(e))
+
+    # ========== [2. 입고 리스트 생성] ==========
+    def run_mom_inbound_logic(self):
+        send_file = self.moms_files.get("inbound_send", "")
+        if not send_file:
+            messagebox.showwarning("주의", "출고리스트(성수)를 먼저 선택해주세요.")
+            return
+        try:
+            today = datetime.now().strftime('%y%m%d')
+            df_s, bc_col = self.smart_load_moms(send_file, '바코드')
+
+            qty_col = next((c for c in df_s.columns if '가용재고' in str(c)),
+                           next((c for c in df_s.columns if '수량' in str(c)), None))
+
+            i_reg = pd.DataFrame()
+            i_reg['화주코드'] = ['INOOINTEMPTY'] * len(df_s)
+            i_reg['센터명'] = '신여주2'
+            i_reg['층정보'] = 'A2'
+            i_reg['마스터코드'] = ""
+            i_reg['상품바코드(sku)'] = df_s[bc_col].values
+            i_reg['입고'] = df_s[qty_col].values if qty_col else '1'
+
+            fn = self.get_unique_filename(f"{today} 맘스 입고 리스트", "xlsx")
+            i_reg.to_excel(os.path.join(self.save_dir, fn), index=False)
+            messagebox.showinfo("완료",
+                f"저장 완료!\n\n📊 입고 대상: {len(df_s)}건\n📄 파일: {fn}")
+
+            # 2번 섹션 리셋
+            self.moms_files["inbound_send"] = ""
+            self.lbl_inbound_send.config(text="미선택", fg="#777")
+        except Exception as e:
+            messagebox.showerror("오류", str(e))
+
+    # ========== [3. 특정상품 제외 입고 리스트 생성] ==========
+    def run_mom_inbound_new_only(self):
+        """출고리스트 + 제외 명단 → 제외 명단에 있는 상품 빼고 입고 리스트 생성.
+        제외 명단은 아이템코드 또는 바코드 둘 중 하나라도 매치되면 제외."""
+        send_file = self.moms_files.get("excl_send", "")
+        excl_file = self.moms_files.get("excl_list", "")
+        if not send_file:
+            messagebox.showwarning("주의", "출고리스트(성수)를 먼저 선택해주세요.")
+            return
+        if not excl_file:
+            messagebox.showwarning("주의", "제외 리스트 파일을 선택해주세요.")
+            return
+        try:
+            today = datetime.now().strftime('%y%m%d')
+            df_s, bc_col = self.smart_load_moms(send_file, '바코드')
+
+            # 제외 명단 로드 - 아이템코드/바코드 둘 다 시도
+            excl_item_codes = set()
+            excl_barcodes = set()
+
+            # 아이템코드 시도 (헤더 자동 감지)
+            try:
+                df_e1, item_col = self.smart_load_moms(excl_file, '아이템')
+                excl_item_codes = set(self.clean_code_strictly(df_e1[item_col]).tolist())
+            except Exception:
+                # 아이템코드 헤더 없을 수 있음
+                pass
+
+            # 바코드 시도
+            try:
+                df_e2, bc_e_col = self.smart_load_moms(excl_file, '바코드')
+                excl_barcodes = set(self.clean_code_strictly(df_e2[bc_e_col]).tolist())
+            except Exception:
+                pass
+
+            if not excl_item_codes and not excl_barcodes:
+                messagebox.showerror("오류",
+                    "제외 리스트에서 '아이템코드' 또는 '바코드' 컬럼을 찾을 수 없습니다.\n"
+                    "헤더에 '아이템' 또는 '바코드'가 포함된 컬럼이 있는지 확인해주세요.")
+                return
+
+            # 출고리스트의 바코드 + 아이템코드(있으면) 정규화
+            send_barcodes = self.clean_code_strictly(df_s[bc_col])
+            # 출고리스트에 아이템코드 있는지 찾기
+            item_col_in_send = next((c for c in df_s.columns if '아이템' in str(c) or '상품코드' in str(c)), None)
+            send_items = self.clean_code_strictly(df_s[item_col_in_send]) if item_col_in_send else None
+
+            # 제외 마스크: 바코드가 제외명단 바코드에 있거나, 아이템코드가 제외명단 아이템코드에 있으면 제외
+            mask_excl = pd.Series([False] * len(df_s), index=df_s.index)
+            if excl_barcodes:
+                mask_excl = mask_excl | send_barcodes.isin(excl_barcodes)
+            if excl_item_codes and send_items is not None:
+                mask_excl = mask_excl | send_items.isin(excl_item_codes)
+
+            df_new = df_s[~mask_excl].copy()
+
+            if df_new.empty:
+                messagebox.showinfo("결과 없음",
+                    "출고리스트의 모든 상품이 제외 명단에 포함되어 있습니다.\n생성할 입고 리스트가 없습니다.")
                 return
 
             qty_col = next((c for c in df_new.columns if '가용재고' in str(c)),
@@ -2338,24 +2521,33 @@ class LogiPanApp:
             i_reg['상품바코드(sku)'] = df_new[bc_col].values
             i_reg['입고'] = df_new[qty_col].values if qty_col else '1'
 
-            fn = self.get_unique_filename(f"{today} 맘스 입고 리스트(신규만)", "xlsx")
+            fn = self.get_unique_filename(f"{today} 맘스 입고 리스트(제외적용)", "xlsx")
             i_reg.to_excel(os.path.join(self.save_dir, fn), index=False)
 
             total_cnt = len(df_s)
             new_cnt = len(df_new)
             excluded_cnt = total_cnt - new_cnt
+
+            excl_info = []
+            if excl_barcodes: excl_info.append(f"바코드 {len(excl_barcodes)}건")
+            if excl_item_codes: excl_info.append(f"아이템코드 {len(excl_item_codes)}건")
+            excl_info_str = ", ".join(excl_info) if excl_info else "없음"
+
             messagebox.showinfo("완료",
                 f"저장 완료!\n\n📊 결과 요약\n"
-                f"• 조회 리스트 전체: {total_cnt}건\n"
-                f"• 마스터에 이미 존재 (제외): {excluded_cnt}건\n"
-                f"• 신규 입고 대상: {new_cnt}건\n\n"
+                f"• 출고리스트 전체: {total_cnt}건\n"
+                f"• 제외 명단 ({excl_info_str}): {excluded_cnt}건 제외됨\n"
+                f"• 최종 입고 대상: {new_cnt}건\n\n"
                 f"📄 파일: {fn}")
 
-            # 리셋
-            self.moms_files = {"send": "", "master": "", "out_list": ""}
-            self.lbl_mom_s.config(text="(이동재고) 선택되지 않음", fg="#777")
-            self.lbl_mom_m.config(text="(맘스 마스터재고) 선택되지 않음", fg="#777")
+            # 3번 섹션 리셋
+            self.moms_files["excl_send"] = ""
+            self.moms_files["excl_list"] = ""
+            self.lbl_excl_send.config(text="미선택", fg="#777")
+            self.lbl_excl_list.config(text="미선택 (아이템코드/바코드 포함)", fg="#777")
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             messagebox.showerror("오류", str(e))
 
     def run_mom_out_logic(self):
@@ -2394,9 +2586,6 @@ class LogiPanApp:
         except Exception as e: messagebox.showerror("오류", str(e))
 
     # --- [유틸리티 헬퍼] ---
-    def sel_mom_s(self): p=filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls")]); self.moms_files["send"]=p; self.lbl_mom_s.config(text=os.path.basename(p), fg="blue")
-    def sel_mom_m(self): p=filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls")]); self.moms_files["master"]=p; self.lbl_mom_m.config(text=os.path.basename(p), fg="blue")
-    def sel_mom_out(self): p=filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls")]); self.moms_files["out_list"]=p; self.lbl_mom_out.config(text=os.path.basename(p), fg="blue")
     def sel_chk_target(self): p=filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls")]); self.chk_files["target"]=p; self.lbl_chk_target.config(text=os.path.basename(p), fg="blue")
     def sel_chk_master(self): p=filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx *.xls")]); self.chk_files["master"]=p; self.lbl_chk_master.config(text=os.path.basename(p), fg="blue")
     def reset_inbound(self): 
