@@ -755,7 +755,7 @@ class LogiPanApp:
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
-        # 입력창 + 스크롤바 컨테이너
+        # 입력창 + 스크롤바 컨테이너 (고정 높이)
         master_box = tk.Frame(l_inner, bg="white")
         master_box.pack(fill="both", expand=True)
 
@@ -763,7 +763,8 @@ class LogiPanApp:
                                        bd=1, relief="solid",
                                        bg="#F0F9FF",
                                        highlightthickness=1, highlightbackground="#E5E7EB",
-                                       padx=6, pady=6, wrap="none")
+                                       padx=6, pady=6, wrap="char",
+                                       height=15)  # 고정 높이 - 넘으면 스크롤로
         master_sb = ttk.Scrollbar(master_box, orient="vertical",
                                     command=self.txt_in_master.yview)
         self.txt_in_master.configure(yscrollcommand=master_sb.set)
@@ -819,7 +820,8 @@ class LogiPanApp:
                                      bd=1, relief="solid",
                                      bg="#F0FDF4",
                                      highlightthickness=1, highlightbackground="#E5E7EB",
-                                     padx=6, pady=6, wrap="none")
+                                     padx=6, pady=6, wrap="char",
+                                     height=15)  # 고정 높이 - 넘으면 스크롤로
         scan_sb = ttk.Scrollbar(scan_box, orient="vertical",
                                   command=self.txt_in_scan.yview)
         self.txt_in_scan.configure(yscrollcommand=scan_sb.set)
@@ -997,7 +999,8 @@ class LogiPanApp:
         self.txt_out = tk.Text(out_box, font=("Consolas", 10),
                                 bd=1, relief="solid",
                                 highlightthickness=1, highlightbackground="#E5E7EB",
-                                bg="#FAFAFA", padx=8, pady=6, wrap="none")
+                                bg="#FAFAFA", padx=8, pady=6, wrap="char",
+                                height=18)  # 고정 높이
         out_sb = ttk.Scrollbar(out_box, orient="vertical",
                                  command=self.txt_out.yview)
         self.txt_out.configure(yscrollcommand=out_sb.set)
@@ -1496,7 +1499,8 @@ class LogiPanApp:
         self.txt_master_in = tk.Text(master_in_box, font=("Consolas", 10),
                                        bd=1, relief="solid",
                                        highlightthickness=1, highlightbackground="#E5E7EB",
-                                       bg="#FAFAFA", padx=8, pady=6, wrap="none")
+                                       bg="#FAFAFA", padx=8, pady=6, wrap="char",
+                                       height=18)  # 고정 높이
         master_in_sb = ttk.Scrollbar(master_in_box, orient="vertical",
                                        command=self.txt_master_in.yview)
         self.txt_master_in.configure(yscrollcommand=master_in_sb.set)
