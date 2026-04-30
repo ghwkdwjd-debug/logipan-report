@@ -134,7 +134,7 @@ class LogiPanApp:
         self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥 입고")
         self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤 출고")
         self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦 맘스")
-        self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🏷️ 마스터")
+        self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🆕 마스터")
         self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍 재고파악")
         self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
         self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
@@ -2309,18 +2309,14 @@ class LogiPanApp:
             messagebox.showerror("오류", str(e))
 
     def _render_zone_chart(self, summary_df):
-        """구역별 진행바 차트 그리기 (캐파 대비 %)"""
+        """구역별 진행바 차트 그리기 (가독성 강화 버전)"""
         # 기존 위젯 제거
         for w in self.zone_chart_frame.winfo_children():
             w.destroy()
 
-        # 캐파 정보로 정렬 순서 정의 (고정 순서)
         zone_order = ['AA~AB구역', 'BB구역', 'CC~DD구역', 'EA/EE/FF구역']
-
-        # 데이터 dict 변환
         data = {row['최종구역']: int(row['가용재고']) for _, row in summary_df.iterrows()}
 
-        # 구역별 색상 (정상)
         zone_colors = {
             'AA~AB구역': '#3B82F6',
             'BB구역': '#10B981',
@@ -2336,91 +2332,93 @@ class LogiPanApp:
             capa = self._zone_capacity.get(zone, 0)
             total_qty += qty
             total_capa += capa
-
             pct = (qty / capa * 100) if capa > 0 else 0
 
-            # 색상 결정 (경고 단계)
+            # 색상 결정
             if pct >= 90:
-                bar_color = '#DC2626'  # 빨강
-                badge = "🔴"
-                badge_text = f"  {pct:.1f}%  ⚠️ 경고"
-                badge_fg = "#DC2626"
+                bar_color = '#DC2626'
+                badge_bg = "#FEE2E2"
+                badge_fg = "#991B1B"
+                badge_text = "⚠️ 경고"
+                qty_color = "#DC2626"
             elif pct >= 80:
-                bar_color = '#F59E0B'  # 주황
-                badge = "🟡"
-                badge_text = f"  {pct:.1f}%  주의"
-                badge_fg = "#D97706"
+                bar_color = '#F59E0B'
+                badge_bg = "#FEF3C7"
+                badge_fg = "#92400E"
+                badge_text = "주의"
+                qty_color = "#D97706"
             else:
                 bar_color = zone_colors.get(zone, '#3B82F6')
-                badge = "🟢"
-                badge_text = f"  {pct:.1f}%"
-                badge_fg = "#16A34A"
+                badge_bg = "#DCFCE7"
+                badge_fg = "#166534"
+                badge_text = "정상"
+                qty_color = "#111827"
 
-            # 행 컨테이너
-            row_frame = tk.Frame(self.zone_chart_frame, bg="white")
-            row_frame.pack(fill="x", pady=(0, 14))
+            # ===== 한 행 카드 형태 =====
+            row_card = tk.Frame(self.zone_chart_frame, bg="#FAFBFC",
+                                  highlightthickness=1, highlightbackground="#E5E7EB")
+            row_card.pack(fill="x", pady=(0, 8))
 
-            # 1행: 구역명 + 수량/캐파 + %
-            top_row = tk.Frame(row_frame, bg="white")
-            top_row.pack(fill="x", pady=(0, 4))
+            row_inner = tk.Frame(row_card, bg="#FAFBFC", padx=14, pady=10)
+            row_inner.pack(fill="x")
 
-            # 좌측: 아이콘 + 구역명
-            left_box = tk.Frame(top_row, bg="white")
-            left_box.pack(side="left")
-            tk.Label(left_box, text=badge, bg="white",
-                     font=("맑은 고딕", 11)).pack(side="left", padx=(0, 4))
-            tk.Label(left_box, text=zone,
-                     bg="white", fg="#111827",
-                     font=("맑은 고딕", 10, "bold")).pack(side="left")
+            # 1행: [구역명] [수량 크게] [%뱃지]
+            top_row = tk.Frame(row_inner, bg="#FAFBFC")
+            top_row.pack(fill="x", pady=(0, 6))
 
-            # 우측: 수량 / 캐파 + %
-            right_box = tk.Frame(top_row, bg="white")
-            right_box.pack(side="right")
-            tk.Label(right_box,
-                     text=f"{qty:,} / {capa:,}",
-                     bg="white", fg="#374151",
-                     font=("Consolas", 10, "bold")).pack(side="left")
-            tk.Label(right_box, text=badge_text,
-                     bg="white", fg=badge_fg,
-                     font=("맑은 고딕", 9, "bold")).pack(side="left")
+            # 좌측: 구역명
+            tk.Label(top_row, text=zone,
+                     bg="#FAFBFC", fg="#374151",
+                     font=("맑은 고딕", 11, "bold")).pack(side="left")
 
-            # 2행: 진행바 (Canvas)
-            bar_height = 20
-            bar_canvas = tk.Canvas(row_frame, height=bar_height,
-                                     bg="#F3F4F6", highlightthickness=0,
-                                     bd=0)
-            bar_canvas.pack(fill="x")
+            # 우측: 뱃지
+            tk.Label(top_row, text=f"{badge_text}  {pct:.1f}%",
+                     bg=badge_bg, fg=badge_fg,
+                     font=("맑은 고딕", 9, "bold"),
+                     padx=10, pady=3).pack(side="right")
 
-            # 캔버스 너비 알기 위해 update
-            self.zone_chart_frame.update_idletasks()
+            # 2행: 큰 수량 표시 [재고수량 / 캐파]
+            qty_row = tk.Frame(row_inner, bg="#FAFBFC")
+            qty_row.pack(fill="x", pady=(0, 8))
 
-            def draw_bar(canvas, percent, color):
-                """캔버스가 그려진 후 진행바 그리기"""
-                w = canvas.winfo_width()
-                if w <= 1:
-                    # 아직 너비 안 잡힘 → 다시 시도
-                    canvas.after(50, lambda: draw_bar(canvas, percent, color))
-                    return
-                fill_w = int(w * min(percent, 100) / 100)
-                canvas.delete("all")
-                # 배경
-                canvas.create_rectangle(0, 0, w, bar_height,
-                                          fill="#F3F4F6", outline="")
-                # 채워진 부분
-                if fill_w > 0:
-                    canvas.create_rectangle(0, 0, fill_w, bar_height,
-                                              fill=color, outline="")
-                # 100% 초과면 빗금 표시
-                if percent > 100:
-                    canvas.create_text(w/2, bar_height/2,
-                                         text=f"!! {percent:.0f}% 초과 !!",
-                                         fill="white",
-                                         font=("맑은 고딕", 8, "bold"))
+            # 가용재고 - 진짜 크게
+            tk.Label(qty_row, text=f"{qty:,}",
+                     bg="#FAFBFC", fg=qty_color,
+                     font=("맑은 고딕", 22, "bold")).pack(side="left")
+            tk.Label(qty_row, text="개",
+                     bg="#FAFBFC", fg=qty_color,
+                     font=("맑은 고딕", 12, "bold")).pack(side="left", padx=(2, 8), pady=(8, 0))
+            # 구분선
+            tk.Label(qty_row, text="/",
+                     bg="#FAFBFC", fg="#9CA3AF",
+                     font=("맑은 고딕", 14)).pack(side="left", padx=4, pady=(4, 0))
+            # 캐파
+            tk.Label(qty_row, text=f"{capa:,}",
+                     bg="#FAFBFC", fg="#9CA3AF",
+                     font=("맑은 고딕", 14)).pack(side="left", padx=(4, 0), pady=(4, 0))
+            tk.Label(qty_row, text="개",
+                     bg="#FAFBFC", fg="#9CA3AF",
+                     font=("맑은 고딕", 10)).pack(side="left", padx=(1, 0), pady=(8, 0))
 
-            # 한 번 즉시 그리고, resize 이벤트에 다시 그림
-            bar_canvas.bind("<Configure>",
-                              lambda e, c=bar_canvas, p=pct, col=bar_color:
-                                  draw_bar(c, p, col))
+            # 3행: 진행바 (배경 회색 frame + 채움 frame, 픽셀 단위로 즉시 표시)
+            bar_bg = tk.Frame(row_inner, bg="#E5E7EB", height=10,
+                                highlightthickness=0)
+            bar_bg.pack(fill="x")
+            bar_bg.pack_propagate(False)
+
+            # 채움을 place로 % 비율 (resize 시 자동 조정)
+            fill_pct = min(pct, 100) / 100  # 0~1
+            if fill_pct > 0:
+                bar_fill = tk.Frame(bar_bg, bg=bar_color)
+                bar_fill.place(relx=0, rely=0, relwidth=fill_pct, relheight=1)
+
+            # 100% 초과 시 추가 표시
+            if pct > 100:
+                over_label = tk.Label(bar_bg,
+                                        text=f"⚠️ {pct:.0f}% 초과 ⚠️",
+                                        bg=bar_color, fg="white",
+                                        font=("맑은 고딕", 7, "bold"))
+                over_label.place(relx=0.5, rely=0.5, anchor="center")
 
         # 총합 라벨 업데이트
         if total_capa > 0:
@@ -4005,9 +4003,18 @@ class LogiPanApp:
         def speak_alert(text):
             def _speak():
                 try:
+                    # [추가] 윈도우 알림 사운드 (띵동~)
+                    try:
+                        import winsound
+                        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    except Exception: pass
+
+                    import time
+                    time.sleep(0.3)
+
                     engine = pyttsx3.init()
                     engine.setProperty('volume', 1.0)
-                    engine.setProperty('rate', 170)
+                    engine.setProperty('rate', 160)
                     engine.say(text)
                     engine.runAndWait()
                 except: pass
@@ -5462,15 +5469,20 @@ class LogiPanApp:
         def speak_alert(text):
             def _speak():
                 try:
+                    # [추가] 윈도우 알림 사운드 (띵동~)
+                    try:
+                        import winsound
+                        # MB_ICONASTERISK = 윈도우 기본 알림 사운드 (띵동~)
+                        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    except Exception: pass
+
+                    # 사운드 재생 후 살짝 텀 두고 음성
+                    import time
+                    time.sleep(0.3)
+
                     engine = pyttsx3.init()
-                    
-                    # 1. 볼륨 설정: 0.0 ~ 1.0 (1.0이 최대)
-                    # 혹시 모르니 1.0으로 확실히 박아줍니다.
-                    engine.setProperty('volume', 1.0) 
-                    
-                    # 2. 말하기 속도: 너무 빠르면 작게 들릴 수 있으니 170~180 정도로 조절
-                    engine.setProperty('rate', 170) 
-                    
+                    engine.setProperty('volume', 1.0)
+                    engine.setProperty('rate', 160)
                     engine.say(text)
                     engine.runAndWait()
                 except: pass
