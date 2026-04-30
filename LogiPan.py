@@ -1745,10 +1745,10 @@ class LogiPanApp:
         make_modern_btn(action_outer, "🔄  변환 실행",
                          bg="#F59E0B", hover_bg="#D97706",
                          command=self.run_master_conversion)
-        make_modern_btn(action_outer, "📎  마스터 등록 복사",
+        make_modern_btn(action_outer, "📎  상품관리 등록 복사",
                          bg="#3B82F6", hover_bg="#1D4ED8",
                          command=self.copy_master_table_to_clipboard)
-        make_modern_btn(action_outer, "📎  옵션 등록 복사",
+        make_modern_btn(action_outer, "📎  상품옵션 등록 복사",
                          bg="#10B981", hover_bg="#059669",
                          command=self.copy_option_table_to_clipboard)
 
