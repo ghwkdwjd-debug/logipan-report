@@ -516,53 +516,186 @@ class LogiPanApp:
 
     # --- [탭 1: 입고] ---
     def setup_inbound(self):
-        container = tk.Frame(self.t_in, bg="white", padx=10, pady=5); container.pack(fill="both", expand=True)
-        top = tk.Frame(container, bg="white"); top.pack(fill="x", pady=(5, 5))
-        tk.Label(top, text="🔖 브랜드명:", font=("맑은 고딕", 10, "bold"), bg="white").pack(side="left")
-        self.ent_brand_in = tk.Entry(top, font=("맑은 고딕", 11), width=45, bd=1, relief="solid")
-        self.ent_brand_in.pack(side="left", padx=5, ipady=3)
+        container = tk.Frame(self.t_in, bg="#F5F6F8")
+        container.pack(fill="both", expand=True)
 
-        # [수정] 버튼 영역을 먼저 BOTTOM에 배치 (창 크기와 무관하게 항상 보이도록)
-        btn_f = tk.Frame(container, bg="white")
-        btn_f.pack(side="bottom", fill="x", pady=2)
-        # [수정] 버튼 순서: 대조 → 입고파일 생성 → CSV 저장&리셋
-        tk.Button(btn_f, text="🔍 대조 분석 실행", bg="#FF9800", fg="white", font=("맑은 고딕", 11, "bold"), command=self.run_compare_in).pack(side="left", expand=True, fill="x", padx=1)
-        tk.Button(btn_f, text="📋 입고파일 생성", bg="#1565C0", fg="white", font=("맑은 고딕", 11, "bold"), command=self.create_inbound_file).pack(side="left", expand=True, fill="x", padx=1)
-        tk.Button(btn_f, text="💾 CSV 저장 & 리셋", bg="#4CAF50", fg="white", font=("맑은 고딕", 11, "bold"), command=self.save_csv_in).pack(side="left", expand=True, fill="x", padx=1)
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
 
-        # [수정] 리포트 영역도 BOTTOM에 (버튼 위)
-        self.txt_in_report = tk.Text(container, height=6, font=("Consolas", 10), bg="#FAFAFA", bd=1, relief="solid")
-        self.txt_in_report.pack(side="bottom", fill="x", pady=(2, 5))
-        self.txt_in_report.tag_config("match", foreground="#2E7D32", font=("Consolas", 10, "bold"))
-        self.txt_in_report.tag_config("error", foreground="#C62828", font=("Consolas", 10, "bold"))
-        self.txt_in_report.tag_config("title", foreground="#1565C0", font=("Consolas", 10, "bold"))
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="📥", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="입고 등록",
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_text_box, text="브랜드 수량 vs 스캔 수량 대조 후 입고",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # ========== [💾 액션 버튼들 - 하단 고정] ==========
+        action_outer = tk.Frame(container, bg="#F5F6F8")
+        action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
+
+        def make_modern_btn(parent, text, bg, hover_bg, command):
+            shadow = tk.Frame(parent, bg=hover_bg)
+            shadow.pack(side="left", expand=True, fill="x", padx=2)
+            btn = tk.Button(shadow, text=text,
+                              bg=bg, fg="white",
+                              activebackground=hover_bg, activeforeground="white",
+                              font=("맑은 고딕", 10, "bold"),
+                              relief="flat", bd=0,
+                              cursor="hand2", command=command)
+            btn.pack(fill="x", ipady=8)
+            def on_enter(e): btn.config(bg=hover_bg)
+            def on_leave(e): btn.config(bg=bg)
+            btn.bind("<Enter>", on_enter)
+            btn.bind("<Leave>", on_leave)
+            return btn
+
+        make_modern_btn(action_outer, "🔍  대조 분석 실행",
+                         bg="#F59E0B", hover_bg="#D97706",
+                         command=self.run_compare_in)
+        make_modern_btn(action_outer, "📋  입고파일 생성",
+                         bg="#1877F2", hover_bg="#1864c8",
+                         command=self.create_inbound_file)
+        make_modern_btn(action_outer, "💾  CSV 저장 & 리셋",
+                         bg="#10B981", hover_bg="#059669",
+                         command=self.save_csv_in)
+
+        # ========== [📝 리포트 카드 - 하단 (버튼 위)] ==========
+        report_card_outer = tk.Frame(container, bg="#F5F6F8")
+        report_card_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 8))
+
+        report_card = tk.Frame(report_card_outer, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        report_card.pack(fill="x")
+
+        tk.Frame(report_card, bg="#8B5CF6", width=4).pack(side="left", fill="y")
+
+        report_inner = tk.Frame(report_card, bg="white", padx=14, pady=10)
+        report_inner.pack(side="left", fill="both", expand=True)
+
+        # 리포트 헤더
+        rh = tk.Frame(report_inner, bg="white")
+        rh.pack(fill="x", pady=(0, 6))
+        tk.Label(rh, text="📝  대조 분석 상세 리포트",
+                 bg="white", fg="#111827",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left")
+        tk.Label(rh, text="※ 엔터 2번 시 스캔수량으로 이동",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8)).pack(side="right")
+
+        self.txt_in_report = tk.Text(report_inner, height=5,
+                                       font=("Consolas", 10),
+                                       bg="#FAFAFA", bd=1, relief="solid",
+                                       highlightthickness=1, highlightbackground="#E5E7EB",
+                                       padx=8, pady=6)
+        self.txt_in_report.pack(fill="x")
+        self.txt_in_report.tag_config("match", foreground="#16A34A", font=("Consolas", 10, "bold"))
+        self.txt_in_report.tag_config("error", foreground="#DC2626", font=("Consolas", 10, "bold"))
+        self.txt_in_report.tag_config("title", foreground="#1877F2", font=("Consolas", 10, "bold"))
         self.txt_in_report.tag_config("info", foreground="#555", font=("Consolas", 10))
-        self.txt_in_report.tag_config("warn", foreground="#E65100", font=("Consolas", 10, "bold"))
+        self.txt_in_report.tag_config("warn", foreground="#F59E0B", font=("Consolas", 10, "bold"))
 
-        report_title_f = tk.Frame(container, bg="white")
-        report_title_f.pack(side="bottom", fill="x", pady=(5, 0))
-        tk.Label(report_title_f, text="[ 📝 대조 분석 상세 리포트 ]", font=("맑은 고딕", 9, "bold"), bg="white").pack(side="left")
-        tk.Label(report_title_f, text="※ 엔터 2번 시 스캔수량 이동", fg="#888", font=("맑은 고딕", 8)).pack(side="right")
+        # ========== [브랜드명 입력 카드] ==========
+        brand_card_outer = tk.Frame(container, bg="#F5F6F8")
+        brand_card_outer.pack(fill="x", padx=18, pady=(0, 8))
 
-        # [수정] mid (텍스트박스 영역)는 마지막에 pack → 남은 공간 다 차지
-        mid = tk.Frame(container, bg="white"); mid.pack(fill="both", expand=True)
-        mid.columnconfigure(0, weight=1); mid.columnconfigure(1, weight=1)
-        l_f = tk.Frame(mid, bg="white"); l_f.grid(row=0, column=0, sticky="nsew", padx=(0, 2))
-        self.lbl_in_m = tk.Label(l_f, text="📦 브랜드 수량 (0개)", bg="#E3F2FD", font=("맑은 고딕", 8, "bold")); self.lbl_in_m.pack(fill="x")
-        # [수정] 폰트 9 → 11로 확대
-        self.txt_in_master = tk.Text(l_f, font=("Consolas", 11), bd=1, relief="solid"); self.txt_in_master.pack(fill="both", expand=True)
-        self.txt_in_master.bind("<KeyRelease>", lambda e: (self.count_total_qty(self.txt_in_master, self.lbl_in_m, "📦 브랜드 수량"), self.txt_in_master.tag_remove("mismatch", "1.0", tk.END)))
+        brand_card = tk.Frame(brand_card_outer, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        brand_card.pack(fill="x")
+
+        tk.Frame(brand_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+
+        brand_inner = tk.Frame(brand_card, bg="white", padx=14, pady=10)
+        brand_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(brand_inner, text="🔖",
+                 bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
+        tk.Label(brand_inner, text="브랜드명",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(0, 8))
+        self.ent_brand_in = tk.Entry(brand_inner, font=("맑은 고딕", 11),
+                                       bd=1, relief="solid",
+                                       highlightthickness=0)
+        self.ent_brand_in.pack(side="left", fill="x", expand=True, ipady=5)
+
+        # ========== [📦 브랜드 수량 + 📡 스캔 수량 - 2분할] ==========
+        cols_outer = tk.Frame(container, bg="#F5F6F8")
+        cols_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+        cols_outer.columnconfigure(0, weight=1, uniform="cols")
+        cols_outer.columnconfigure(1, weight=1, uniform="cols")
+
+        # === 좌: 브랜드 수량 카드 ===
+        l_card_outer = tk.Frame(cols_outer, bg="#F5F6F8")
+        l_card_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+
+        l_card = tk.Frame(l_card_outer, bg="white",
+                           highlightthickness=1, highlightbackground="#E5E7EB")
+        l_card.pack(fill="both", expand=True)
+
+        tk.Frame(l_card, bg="#0EA5E9", width=4).pack(side="left", fill="y")
+
+        l_inner = tk.Frame(l_card, bg="white", padx=12, pady=10)
+        l_inner.pack(side="left", fill="both", expand=True)
+
+        l_head = tk.Frame(l_inner, bg="white")
+        l_head.pack(fill="x", pady=(0, 6))
+        tk.Label(l_head, text="📦",
+                 bg="white", font=("맑은 고딕", 11)).pack(side="left", padx=(0, 4))
+        self.lbl_in_m = tk.Label(l_head, text="브랜드 수량 (0개)",
+                                   bg="white", fg="#0C4A6E",
+                                   font=("맑은 고딕", 10, "bold"))
+        self.lbl_in_m.pack(side="left")
+
+        self.txt_in_master = tk.Text(l_inner, font=("Consolas", 11),
+                                       bd=1, relief="solid",
+                                       bg="#F0F9FF",
+                                       highlightthickness=1, highlightbackground="#E5E7EB",
+                                       padx=6, pady=6)
+        self.txt_in_master.pack(fill="both", expand=True)
+        self.txt_in_master.bind("<KeyRelease>",
+                                  lambda e: (self.count_total_qty(self.txt_in_master, self.lbl_in_m, "브랜드 수량"),
+                                              self.txt_in_master.tag_remove("mismatch", "1.0", tk.END)))
         self.txt_in_master.bind("<Return>", self.check_double_enter)
-        # [추가] 불일치 라인 하이라이트용 태그
-        self.txt_in_master.tag_config("mismatch", background="#FFCDD2", foreground="#B71C1C")
-        
-        r_f = tk.Frame(mid, bg="white"); r_f.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
-        self.lbl_in_s = tk.Label(r_f, text="📡 스캔 수량 (0개)", bg="#F1F8E9", font=("맑은 고딕", 8, "bold")); self.lbl_in_s.pack(fill="x")
-        # [수정] 폰트 9 → 11로 확대
-        self.txt_in_scan = tk.Text(r_f, font=("Consolas", 11), bd=1, relief="solid"); self.txt_in_scan.pack(fill="both", expand=True)
-        self.txt_in_scan.bind("<KeyRelease>", lambda e: (self.count_total_qty(self.txt_in_scan, self.lbl_in_s, "📡 스캔 수량"), self.txt_in_scan.tag_remove("mismatch", "1.0", tk.END)))
-        # [추가] 불일치 라인 하이라이트용 태그
-        self.txt_in_scan.tag_config("mismatch", background="#FFCDD2", foreground="#B71C1C")
+        self.txt_in_master.tag_config("mismatch", background="#FECACA", foreground="#991B1B")
+
+        # === 우: 스캔 수량 카드 ===
+        r_card_outer = tk.Frame(cols_outer, bg="#F5F6F8")
+        r_card_outer.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+
+        r_card = tk.Frame(r_card_outer, bg="white",
+                           highlightthickness=1, highlightbackground="#E5E7EB")
+        r_card.pack(fill="both", expand=True)
+
+        tk.Frame(r_card, bg="#10B981", width=4).pack(side="left", fill="y")
+
+        r_inner = tk.Frame(r_card, bg="white", padx=12, pady=10)
+        r_inner.pack(side="left", fill="both", expand=True)
+
+        r_head = tk.Frame(r_inner, bg="white")
+        r_head.pack(fill="x", pady=(0, 6))
+        tk.Label(r_head, text="📡",
+                 bg="white", font=("맑은 고딕", 11)).pack(side="left", padx=(0, 4))
+        self.lbl_in_s = tk.Label(r_head, text="스캔 수량 (0개)",
+                                   bg="white", fg="#065F46",
+                                   font=("맑은 고딕", 10, "bold"))
+        self.lbl_in_s.pack(side="left")
+
+        self.txt_in_scan = tk.Text(r_inner, font=("Consolas", 11),
+                                     bd=1, relief="solid",
+                                     bg="#F0FDF4",
+                                     highlightthickness=1, highlightbackground="#E5E7EB",
+                                     padx=6, pady=6)
+        self.txt_in_scan.pack(fill="both", expand=True)
+        self.txt_in_scan.bind("<KeyRelease>",
+                                lambda e: (self.count_total_qty(self.txt_in_scan, self.lbl_in_s, "스캔 수량"),
+                                            self.txt_in_scan.tag_remove("mismatch", "1.0", tk.END)))
+        self.txt_in_scan.tag_config("mismatch", background="#FECACA", foreground="#991B1B")
 
     # --- [탭 2: 출고] ---
     def setup_outbound(self):
