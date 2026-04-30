@@ -31,14 +31,15 @@ class LogiPanApp:
         # --- 구글 비밀기지 연결 끝 ---
 
         # [창 크기 설정]
-        # 노트북에 적당한 컴팩트 사이즈
+        # 화면 크기에 비례. 노트북에서도 데스크탑에서도 적당하게.
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        width = min(920, int(sw * 0.92))
-        height = min(740, int(sh * 0.92))
+        # 화면의 60% 정도 (최대는 980x800)
+        width = min(980, int(sw * 0.62))
+        height = min(800, int(sh * 0.78))
         self.root.geometry(f"{width}x{height}+{(sw-width)//2}+{(sh-height)//2}")
-        # 버튼이 잘리지 않을 최소 크기
-        self.root.minsize(880, 700)
+        # 최소 크기
+        self.root.minsize(820, 680)
         self.root.configure(bg="#F5F6F8")        
         self.desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         # [추가] 사용자 설정 파일 경로 (저장 위치를 기억해두는 곳)
@@ -754,12 +755,20 @@ class LogiPanApp:
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
-        self.txt_in_master = tk.Text(l_inner, font=("Consolas", 11),
+        # 입력창 + 스크롤바 컨테이너
+        master_box = tk.Frame(l_inner, bg="white")
+        master_box.pack(fill="both", expand=True)
+
+        self.txt_in_master = tk.Text(master_box, font=("Consolas", 11),
                                        bd=1, relief="solid",
                                        bg="#F0F9FF",
                                        highlightthickness=1, highlightbackground="#E5E7EB",
-                                       padx=6, pady=6)
-        self.txt_in_master.pack(fill="both", expand=True)
+                                       padx=6, pady=6, wrap="none")
+        master_sb = ttk.Scrollbar(master_box, orient="vertical",
+                                    command=self.txt_in_master.yview)
+        self.txt_in_master.configure(yscrollcommand=master_sb.set)
+        master_sb.pack(side="right", fill="y")
+        self.txt_in_master.pack(side="left", fill="both", expand=True)
         self.txt_in_master.bind("<KeyRelease>",
                                   lambda e: (self.count_total_qty(self.txt_in_master, self.lbl_in_m, "브랜드 수량"),
                                               self.txt_in_master.tag_remove("mismatch", "1.0", tk.END)))
@@ -802,12 +811,20 @@ class LogiPanApp:
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
-        self.txt_in_scan = tk.Text(r_inner, font=("Consolas", 11),
+        # 입력창 + 스크롤바 컨테이너
+        scan_box = tk.Frame(r_inner, bg="white")
+        scan_box.pack(fill="both", expand=True)
+
+        self.txt_in_scan = tk.Text(scan_box, font=("Consolas", 11),
                                      bd=1, relief="solid",
                                      bg="#F0FDF4",
                                      highlightthickness=1, highlightbackground="#E5E7EB",
-                                     padx=6, pady=6)
-        self.txt_in_scan.pack(fill="both", expand=True)
+                                     padx=6, pady=6, wrap="none")
+        scan_sb = ttk.Scrollbar(scan_box, orient="vertical",
+                                  command=self.txt_in_scan.yview)
+        self.txt_in_scan.configure(yscrollcommand=scan_sb.set)
+        scan_sb.pack(side="right", fill="y")
+        self.txt_in_scan.pack(side="left", fill="both", expand=True)
         self.txt_in_scan.bind("<KeyRelease>",
                                 lambda e: (self.count_total_qty(self.txt_in_scan, self.lbl_in_s, "스캔 수량"),
                                             self.txt_in_scan.tag_remove("mismatch", "1.0", tk.END)))
@@ -973,12 +990,19 @@ class LogiPanApp:
                                font=("맑은 고딕", 8), anchor="w")
         info_label.pack(fill="x", pady=(0, 4))
 
-        # 입력창
-        self.txt_out = tk.Text(input_inner, font=("Consolas", 10),
+        # 입력창 + 스크롤바 컨테이너
+        out_box = tk.Frame(input_inner, bg="white")
+        out_box.pack(fill="both", expand=True)
+
+        self.txt_out = tk.Text(out_box, font=("Consolas", 10),
                                 bd=1, relief="solid",
                                 highlightthickness=1, highlightbackground="#E5E7EB",
-                                bg="#FAFAFA", padx=8, pady=6)
-        self.txt_out.pack(fill="both", expand=True)
+                                bg="#FAFAFA", padx=8, pady=6, wrap="none")
+        out_sb = ttk.Scrollbar(out_box, orient="vertical",
+                                 command=self.txt_out.yview)
+        self.txt_out.configure(yscrollcommand=out_sb.set)
+        out_sb.pack(side="right", fill="y")
+        self.txt_out.pack(side="left", fill="both", expand=True)
         self.txt_out.bind("<KeyRelease>",
                            lambda e: self.count_total_qty(self.txt_out, self.lbl_out_qty,
                                                             "📡 출고 바코드 & 수량 붙여넣기"))
@@ -1465,11 +1489,19 @@ class LogiPanApp:
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
-        self.txt_master_in = tk.Text(input_inner, font=("Consolas", 10),
+        # 입력창 + 스크롤바 컨테이너
+        master_in_box = tk.Frame(input_inner, bg="white")
+        master_in_box.pack(fill="both", expand=True)
+
+        self.txt_master_in = tk.Text(master_in_box, font=("Consolas", 10),
                                        bd=1, relief="solid",
                                        highlightthickness=1, highlightbackground="#E5E7EB",
-                                       bg="#FAFAFA", padx=8, pady=6)
-        self.txt_master_in.pack(fill="both", expand=True)
+                                       bg="#FAFAFA", padx=8, pady=6, wrap="none")
+        master_in_sb = ttk.Scrollbar(master_in_box, orient="vertical",
+                                       command=self.txt_master_in.yview)
+        self.txt_master_in.configure(yscrollcommand=master_in_sb.set)
+        master_in_sb.pack(side="right", fill="y")
+        self.txt_master_in.pack(side="left", fill="both", expand=True)
 
         # ========== [액션 버튼 - 하단 3개 (먼저 pack해서 항상 보이게)] ==========
         action_outer = tk.Frame(container, bg="#F5F6F8")
