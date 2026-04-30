@@ -1471,34 +1471,7 @@ class LogiPanApp:
                                        bg="#FAFAFA", padx=8, pady=6)
         self.txt_master_in.pack(fill="both", expand=True)
 
-        # ========== [결과 리포트 카드] ==========
-        preview_card_outer = tk.Frame(container, bg="#F5F6F8")
-        preview_card_outer.pack(fill="x", padx=18, pady=(0, 8))
-
-        preview_card = tk.Frame(preview_card_outer, bg="white",
-                                  highlightthickness=1, highlightbackground="#E5E7EB")
-        preview_card.pack(fill="x")
-
-        tk.Frame(preview_card, bg="#8B5CF6", width=4).pack(side="left", fill="y")
-
-        preview_inner = tk.Frame(preview_card, bg="white", padx=14, pady=10)
-        preview_inner.pack(side="left", fill="both", expand=True)
-
-        tk.Label(preview_inner, text="📝  변환 결과 / 매칭 리포트",
-                 bg="white", fg="#111827",
-                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 4))
-
-        self.txt_master_report = tk.Text(preview_inner, height=5,
-                                           font=("Consolas", 10),
-                                           bg="#FAFAFA", bd=1, relief="solid",
-                                           highlightthickness=1, highlightbackground="#E5E7EB",
-                                           padx=8, pady=6)
-        self.txt_master_report.pack(fill="x")
-        self.txt_master_report.tag_config("ok", foreground="#16A34A", font=("Consolas", 10, "bold"))
-        self.txt_master_report.tag_config("warn", foreground="#DC2626", font=("Consolas", 10, "bold"))
-        self.txt_master_report.tag_config("info", foreground="#555", font=("Consolas", 10))
-
-        # ========== [액션 버튼 - 하단 3개] ==========
+        # ========== [액션 버튼 - 하단 3개 (먼저 pack해서 항상 보이게)] ==========
         action_outer = tk.Frame(container, bg="#F5F6F8")
         action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
 
@@ -1527,6 +1500,33 @@ class LogiPanApp:
         make_modern_btn(action_outer, "📎  옵션 등록 복사",
                          bg="#10B981", hover_bg="#059669",
                          command=self.copy_option_table_to_clipboard)
+
+        # ========== [결과 리포트 카드 - 하단 (버튼 위)] ==========
+        preview_card_outer = tk.Frame(container, bg="#F5F6F8")
+        preview_card_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 8))
+
+        preview_card = tk.Frame(preview_card_outer, bg="white",
+                                  highlightthickness=1, highlightbackground="#E5E7EB")
+        preview_card.pack(fill="x")
+
+        tk.Frame(preview_card, bg="#8B5CF6", width=4).pack(side="left", fill="y")
+
+        preview_inner = tk.Frame(preview_card, bg="white", padx=14, pady=10)
+        preview_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(preview_inner, text="📝  변환 결과 / 매칭 리포트",
+                 bg="white", fg="#111827",
+                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 4))
+
+        self.txt_master_report = tk.Text(preview_inner, height=5,
+                                           font=("Consolas", 10),
+                                           bg="#FAFAFA", bd=1, relief="solid",
+                                           highlightthickness=1, highlightbackground="#E5E7EB",
+                                           padx=8, pady=6)
+        self.txt_master_report.pack(fill="x")
+        self.txt_master_report.tag_config("ok", foreground="#16A34A", font=("Consolas", 10, "bold"))
+        self.txt_master_report.tag_config("warn", foreground="#DC2626", font=("Consolas", 10, "bold"))
+        self.txt_master_report.tag_config("info", foreground="#555", font=("Consolas", 10))
 
         # 마지막 결과 보관용
         self._last_master_table_df = None  # 마스터 등록용
@@ -1635,12 +1635,107 @@ class LogiPanApp:
             except Exception as e:
                 messagebox.showerror("오류", f"등록 실패: {e}", parent=win)
 
-        tk.Button(add_inner, text="➕ 등록",
+        # 등록 + 일괄 가져오기 버튼들
+        btn_row = tk.Frame(add_inner, bg="white")
+        btn_row.pack(fill="x", pady=(6, 0))
+
+        tk.Button(btn_row, text="➕ 등록",
                    command=add_brand,
                    bg="#10B981", fg="white",
                    font=("맑은 고딕", 9, "bold"),
                    relief="flat", padx=14, pady=6,
-                   cursor="hand2").pack(anchor="e", pady=(6, 0))
+                   cursor="hand2").pack(side="right")
+
+        def bulk_import():
+            """탭으로 구분된 텍스트 파일에서 일괄 가져오기 (코드<TAB>브랜드명)"""
+            path = filedialog.askopenfilename(
+                title="브랜드 목록 파일 선택 (탭 구분 텍스트)",
+                filetypes=[("텍스트 파일", "*.txt"), ("CSV", "*.csv"), ("모든 파일", "*.*")],
+                parent=win
+            )
+            if not path:
+                return
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+            except UnicodeDecodeError:
+                with open(path, 'r', encoding='cp949') as f:
+                    lines = f.readlines()
+
+            # 파싱
+            new_brands = {}  # 첫 번째 값 우선
+            for line in lines:
+                line = line.strip()
+                if not line: continue
+                # 탭 또는 콤마 구분
+                parts = re.split(r'[\t,]', line)
+                if len(parts) < 2: continue
+                code = parts[0].strip().upper()
+                name = parts[1].strip()
+                if not code or not name: continue
+                if code == '코드' or code.lower() == 'code': continue
+                if len(code) != 3: continue
+                if code not in new_brands:
+                    new_brands[code] = name
+
+            if not new_brands:
+                messagebox.showwarning("결과 없음",
+                    "유효한 브랜드 데이터를 찾을 수 없습니다.\n"
+                    "형식: 코드<TAB>브랜드명 (한 줄당 하나)", parent=win)
+                return
+
+            # 기존 데이터와 비교
+            new_count = sum(1 for c in new_brands if c not in self._brand_cache)
+            update_count = sum(1 for c, n in new_brands.items()
+                                if c in self._brand_cache and self._brand_cache[c] != n)
+            same_count = sum(1 for c, n in new_brands.items()
+                              if c in self._brand_cache and self._brand_cache[c] == n)
+
+            if not messagebox.askyesno("일괄 가져오기 확인",
+                f"📊 발견된 브랜드: {len(new_brands)}건\n\n"
+                f"  ✨ 신규 등록: {new_count}건\n"
+                f"  🔄 변경 (덮어쓰기): {update_count}건\n"
+                f"  ✓ 동일 (스킵): {same_count}건\n\n"
+                f"진행하시겠습니까?", parent=win):
+                return
+
+            # Firestore에 일괄 등록 - batch 사용
+            try:
+                # Firestore batch는 500건 제한이라 분할
+                items = list(new_brands.items())
+                total_done = 0
+                CHUNK = 400
+
+                for i in range(0, len(items), CHUNK):
+                    chunk = items[i:i+CHUNK]
+                    batch = self.db.batch()
+                    for code, name in chunk:
+                        # 동일하면 스킵
+                        if self._brand_cache.get(code) == name:
+                            continue
+                        ref = self.db.collection('brand_master').document(code)
+                        batch.set(ref, {
+                            'brand_name': name,
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'created_at': firestore.SERVER_TIMESTAMP
+                        }, merge=True)
+                        self._brand_cache[code] = name
+                        total_done += 1
+                    batch.commit()
+
+                refresh_list()
+                messagebox.showinfo("일괄 등록 완료",
+                    f"✅ {total_done}건 등록되었습니다!\n\n"
+                    f"(동일한 {same_count}건은 스킵됨)", parent=win)
+            except Exception as e:
+                messagebox.showerror("오류", f"일괄 등록 실패: {e}", parent=win)
+
+        tk.Button(btn_row, text="📥 일괄 가져오기",
+                   command=bulk_import,
+                   bg="#3B82F6", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="right", padx=(0, 6))
 
         # ===== 등록 리스트 카드 =====
         list_card = tk.Frame(win, bg="white",
