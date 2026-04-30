@@ -39,7 +39,7 @@ class LogiPanApp:
         self.root.geometry(f"{width}x{height}+{(sw-width)//2}+{(sh-height)//2}")
         # 버튼이 잘리지 않을 최소 크기
         self.root.minsize(760, 640)
-        self.root.configure(bg="#f5f5f5")        
+        self.root.configure(bg="#F5F6F8")        
         self.desktop = os.path.join(os.path.expanduser("~"), "Desktop")
         # [추가] 사용자 설정 파일 경로 (저장 위치를 기억해두는 곳)
         self.config_path = os.path.join(os.path.expanduser("~"), ".logipan_config.json")
@@ -76,7 +76,44 @@ class LogiPanApp:
 
         self.style = ttk.Style()
         self.style.theme_use('clam')
-        self.style.configure("TNotebook.Tab", padding=[8, 4], font=("맑은 고딕", 9, "bold"))
+
+        # ========== [모던 탭 스타일] ==========
+        # 노트북 자체 (탭 영역 배경)
+        self.style.configure("TNotebook",
+                              background="#F5F6F8",
+                              borderwidth=0,
+                              tabmargins=[16, 12, 16, 0])
+        # 탭 (기본 상태)
+        self.style.configure("TNotebook.Tab",
+                              padding=[20, 10],
+                              font=("맑은 고딕", 10, "bold"),
+                              background="#F5F6F8",
+                              foreground="#6B7280",
+                              borderwidth=0,
+                              focuscolor="#F5F6F8")
+        # 탭 (선택/호버 상태)
+        self.style.map("TNotebook.Tab",
+                        background=[("selected", "white"),
+                                    ("active", "#E5E7EB")],
+                        foreground=[("selected", "#1877F2"),
+                                    ("active", "#374151")],
+                        expand=[("selected", [1, 1, 1, 0])])
+        # 탭 영역 아래 구분선 제거 + 컨텐츠 영역 배경
+        self.style.layout("TNotebook.Tab", [
+            ("Notebook.tab", {
+                "sticky": "nswe",
+                "children": [
+                    ("Notebook.padding", {
+                        "side": "top",
+                        "sticky": "nswe",
+                        "children": [
+                            ("Notebook.label", {"side": "top", "sticky": ""})
+                        ]
+                    })
+                ]
+            })
+        ])
+
         self.style.configure("Treeview", font=("맑은 고딕", 10), rowheight=25)
         self.style.configure("Treeview.Heading", font=("맑은 고딕", 10, "bold"))
 
@@ -94,13 +131,13 @@ class LogiPanApp:
         self.nb = ttk.Notebook(self.root)
         self.nb.pack(expand=True, fill="both", padx=5, pady=5)
 
-        self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="    입고    ")
-        self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="    출고    ")
-        self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="    맘스    ")
-        self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="  마감재고  ")
-        self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="  재고파악  ")
-        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="   작업보고   ")
-        self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="  공지/소통  ")
+        self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥  입고")
+        self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤  출고")
+        self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦  맘스")
+        self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊  마감재고")
+        self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍  재고파악")
+        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋  작업보고")
+        self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢  공지/소통")
 
         self.setup_inbound()
         self.setup_outbound()
