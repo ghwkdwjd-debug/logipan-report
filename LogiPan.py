@@ -566,57 +566,401 @@ class LogiPanApp:
 
     # --- [탭 2: 출고] ---
     def setup_outbound(self):
-        container = tk.Frame(self.t_out, bg="white", padx=10, pady=10)
+        container = tk.Frame(self.t_out, bg="#F5F6F8")
         container.pack(fill="both", expand=True)
 
-        # 🏬 매장 선택 (브랜드반납까지 한 줄 배치)
-        sf = tk.LabelFrame(container, text=" 🏬 매장 선택 ", font=("맑은 고딕", 9, "bold"), bg="white", padx=10, pady=12)
-        sf.pack(fill="x", pady=(0, 5))
-        
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="📤", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="출고 등록",
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_text_box, text="매장과 유형 선택 후 바코드 붙여넣기",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # ========== [선택 카드 영역 - 매장 + 유형 한 카드에] ==========
+        select_card_outer = tk.Frame(container, bg="#F5F6F8")
+        select_card_outer.pack(fill="x", padx=18, pady=(0, 8))
+
+        select_card = tk.Frame(select_card_outer, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        select_card.pack(fill="x")
+
+        # 좌측 액센트
+        tk.Frame(select_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+
+        select_inner = tk.Frame(select_card, bg="white", padx=16, pady=12)
+        select_inner.pack(side="left", fill="both", expand=True)
+
+        # === 매장 선택 ===
+        store_row = tk.Frame(select_inner, bg="white")
+        store_row.pack(fill="x", pady=(0, 8))
+        tk.Label(store_row, text="🏬 매장",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 9, "bold"), width=8, anchor="w").pack(side="left", padx=(0, 8))
+
+        store_btns_frame = tk.Frame(store_row, bg="white")
+        store_btns_frame.pack(side="left", fill="x", expand=True)
+
         stores = ["성수", "압구정", "갤러리아", "인하우스", "마케팅", "브랜드반납"]
         for idx, s in enumerate(stores):
-            # 한 줄에 다 들어가도록 row=0으로 고정
-            btn = tk.Button(sf, text=s, width=11, command=lambda x=s: self.select_opt('s', x), bg="#f0f0f0", font=("맑은 고딕", 10))
-            btn.grid(row=0, column=idx, padx=4, pady=5) # padx를 살짝 늘려 간격 조정
+            btn = tk.Button(store_btns_frame, text=s,
+                             command=lambda x=s: self.select_opt('s', x),
+                             bg="#F0F2F5", fg="#666",
+                             font=("맑은 고딕", 9, "bold"),
+                             relief="flat", padx=14, pady=6,
+                             cursor="hand2")
+            btn.pack(side="left", padx=2)
             self.s_btns[s] = btn
 
-        # 📝 유형 선택 (퀵출고까지 한 줄 배치)
-        tf = tk.LabelFrame(container, text=" 📝 유형 선택 ", font=("맑은 고딕", 9, "bold"), bg="white", padx=10, pady=12)
-        tf.pack(fill="x", pady=(0, 10))
-        
+        # === 유형 선택 ===
+        type_row = tk.Frame(select_inner, bg="white")
+        type_row.pack(fill="x")
+        tk.Label(type_row, text="📝 유형",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 9, "bold"), width=8, anchor="w").pack(side="left", padx=(0, 8))
+
+        type_btns_frame = tk.Frame(type_row, bg="white")
+        type_btns_frame.pack(side="left", fill="x", expand=True)
+
         types = ["매장출고", "신규출고", "긴급(픽업)출고", "보충출고", "택배출고", "촬영출고", "퀵출고"]
         for idx, t in enumerate(types):
-            # 한 줄에 다 들어가도록 row=0으로 고정
-            btn = tk.Button(tf, text=t, width=10, command=lambda x=t: self.select_opt('t', x), bg="#f0f0f0", font=("맑은 고딕", 9))
-            btn.grid(row=0, column=idx, padx=2, pady=5)
+            btn = tk.Button(type_btns_frame, text=t,
+                             command=lambda x=t: self.select_opt('t', x),
+                             bg="#F0F2F5", fg="#666",
+                             font=("맑은 고딕", 9, "bold"),
+                             relief="flat", padx=10, pady=6,
+                             cursor="hand2")
+            btn.pack(side="left", padx=2)
             self.t_btns[t] = btn
 
         # 기본값 설정
         self.select_opt('s', '성수')
         self.select_opt('t', '매장출고')
 
-        # 하단 입력 및 저장 영역 (기존과 동일)
-        self.lbl_out_qty = tk.Label(container, text="📡 출고 바코드 & 수량 붙여넣기 (0개)", font=("맑은 고딕", 9, "bold"), bg="white")
-        self.lbl_out_qty.pack(anchor="w")
+        # ========== [입력 카드] ==========
+        input_card_outer = tk.Frame(container, bg="#F5F6F8")
+        input_card_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
-        self.txt_out = tk.Text(container, font=("Consolas", 10), bd=1, relief="solid", height=12)
-        self.txt_out.pack(fill="both", expand=True, pady=5)
-        self.txt_out.bind("<KeyRelease>", lambda e: self.count_total_qty(self.txt_out, self.lbl_out_qty, "📡 출고 바코드 & 수량 붙여넣기"))
+        input_card = tk.Frame(input_card_outer, bg="white",
+                               highlightthickness=1, highlightbackground="#E5E7EB")
+        input_card.pack(fill="both", expand=True)
 
-        tk.Button(container, text="🚚 출고 CSV 저장 및 데이터 리셋", bg="#2196F3", fg="white", 
-                  font=("맑은 고딕", 13, "bold"), height=2, command=self.run_out).pack(fill="x", pady=(5, 0))
-        
+        # 좌측 액센트
+        tk.Frame(input_card, bg="#10B981", width=4).pack(side="left", fill="y")
+
+        input_inner = tk.Frame(input_card, bg="white", padx=16, pady=12)
+        input_inner.pack(side="left", fill="both", expand=True)
+
+        # 헤더
+        head = tk.Frame(input_inner, bg="white")
+        head.pack(fill="x", pady=(0, 8))
+        tk.Label(head, text="📡",
+                 bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
+
+        self.lbl_out_qty = tk.Label(head, text="출고 바코드 & 수량 붙여넣기 (0개)",
+                                     font=("맑은 고딕", 10, "bold"),
+                                     bg="white", fg="#111827")
+        self.lbl_out_qty.pack(side="left")
+
+        # [추가] 엑셀 불러오기 버튼 (헤더 우측)
+        tk.Button(head, text="📁 엑셀 불러오기",
+                   command=self.load_excel_to_outbound,
+                   bg="#E0F2FE", fg="#0C4A6E",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=10, pady=4,
+                   cursor="hand2").pack(side="right")
+
+        # [추가] 안내 문구
+        info_label = tk.Label(input_inner,
+                               text="💡 복붙 / 📁 버튼으로 엑셀 불러오기 / 엑셀 파일을 입력창에 드래그",
+                               bg="white", fg="#9CA3AF",
+                               font=("맑은 고딕", 8), anchor="w")
+        info_label.pack(fill="x", pady=(0, 4))
+
+        # 입력창
+        self.txt_out = tk.Text(input_inner, font=("Consolas", 10),
+                                bd=1, relief="solid",
+                                highlightthickness=1, highlightbackground="#E5E7EB",
+                                bg="#FAFAFA", padx=8, pady=6)
+        self.txt_out.pack(fill="both", expand=True)
+        self.txt_out.bind("<KeyRelease>",
+                           lambda e: self.count_total_qty(self.txt_out, self.lbl_out_qty,
+                                                            "📡 출고 바코드 & 수량 붙여넣기"))
+
+        # [추가] 드래그앤드롭 등록 (tkinterdnd2 있을 때만)
+        self._setup_dnd_for_outbound()
+
+        # ========== [저장 버튼] ==========
+        save_btn_frame = tk.Frame(container, bg="#F5F6F8")
+        save_btn_frame.pack(fill="x", padx=18, pady=(0, 12))
+
+        tk.Button(save_btn_frame, text="🚚 출고 CSV 저장 및 데이터 리셋",
+                  bg="#1877F2", fg="white",
+                  font=("맑은 고딕", 11, "bold"),
+                  relief="flat", pady=12,
+                  cursor="hand2",
+                  command=self.run_out).pack(fill="x")
+
     def select_opt(self, mode, val):
         if mode == 's':
             self.selected_store.set(val)
             for k, btn in self.s_btns.items():
-                btn.config(bg="#2196F3" if k == val else "#f0f0f0", 
-                           fg="white" if k == val else "black")
+                if k == val:
+                    btn.config(bg="#1877F2", fg="white")
+                else:
+                    btn.config(bg="#F0F2F5", fg="#666")
         else:
             self.selected_type.set(val)
             for k, btn in self.t_btns.items():
-                btn.config(bg="#673AB7" if k == val else "#f0f0f0", 
-                           fg="white" if k == val else "black")
+                if k == val:
+                    btn.config(bg="#8B5CF6", fg="white")
+                else:
+                    btn.config(bg="#F0F2F5", fg="#666")
+
+    # ========== [엑셀 → 출고창 자동 변환] ==========
+    def _setup_dnd_for_outbound(self):
+        """출고 입력창에 드래그앤드롭 등록 (tkinterdnd2 있을 때만)"""
+        try:
+            from tkinterdnd2 import DND_FILES
+            self.txt_out.drop_target_register(DND_FILES)
+            self.txt_out.dnd_bind('<<Drop>>', self._on_excel_dropped)
+            print("✅ 드래그앤드롭 활성화됨")
+        except ImportError:
+            print("ℹ️ tkinterdnd2 미설치 - 드래그앤드롭 비활성화 (파일 선택 버튼 사용)")
+        except Exception as e:
+            print(f"⚠️ 드래그앤드롭 설정 실패: {e}")
+
+    def _on_excel_dropped(self, event):
+        """엑셀 파일이 입력창에 드래그됐을 때"""
+        # event.data 는 보통 "{C:/path/to/file.xlsx}" 또는 그냥 경로
+        path = event.data.strip()
+        if path.startswith('{') and path.endswith('}'):
+            path = path[1:-1]
+        # 여러 파일이면 첫 번째만
+        if ' ' in path and not os.path.exists(path):
+            for p in path.split():
+                p = p.strip('{}')
+                if os.path.exists(p):
+                    path = p
+                    break
+        if not os.path.exists(path):
+            messagebox.showerror("오류", f"파일을 찾을 수 없습니다:\n{path}")
+            return
+        self._process_excel_file(path)
+        return event.action
+
+    def load_excel_to_outbound(self):
+        """파일 선택 다이얼로그로 엑셀 불러오기"""
+        path = filedialog.askopenfilename(
+            title="출고용 엑셀 파일 선택",
+            filetypes=[("Excel", "*.xlsx *.xls"), ("CSV", "*.csv"), ("모든 파일", "*.*")]
+        )
+        if not path:
+            return
+        self._process_excel_file(path)
+
+    def _process_excel_file(self, path):
+        """엑셀 파일을 읽어 바코드+수량 추출 후 입력창에 채움"""
+        try:
+            df = self._smart_parse_outbound_excel(path)
+            if df is None or df.empty:
+                messagebox.showwarning("결과 없음",
+                    "파일에서 바코드와 수량을 인식하지 못했습니다.\n"
+                    "헤더에 '바코드'와 '수량'(또는 유사 표현)이 있는지 확인해주세요.")
+                return
+
+            # 수량 0인 행 제거
+            df = df[df['수량'] > 0].copy()
+            if df.empty:
+                messagebox.showinfo("결과 없음", "수량이 0보다 큰 행이 없습니다.")
+                return
+
+            # 텍스트 형식으로 변환: 바코드\t수량\n...
+            new_lines = "\n".join(f"{row['바코드']}\t{int(row['수량'])}"
+                                    for _, row in df.iterrows())
+
+            # 기존 내용 확인
+            existing = self.txt_out.get("1.0", "end-1c").strip()
+            if existing:
+                # 선택 다이얼로그
+                choice = self._ask_excel_overwrite_choice(len(df), len(existing.split('\n')))
+                if choice is None:
+                    return
+                if choice == 'overwrite':
+                    self.txt_out.delete("1.0", tk.END)
+                    self.txt_out.insert("1.0", new_lines)
+                elif choice == 'append':
+                    self.txt_out.insert(tk.END, "\n" + new_lines)
+            else:
+                self.txt_out.insert("1.0", new_lines)
+
+            # 카운터 업데이트
+            self.count_total_qty(self.txt_out, self.lbl_out_qty,
+                                  "📡 출고 바코드 & 수량 붙여넣기")
+            messagebox.showinfo("불러오기 완료",
+                f"✅ {len(df)}건의 바코드+수량이 입력되었습니다.\n"
+                f"(수량 0인 행은 자동 제외)")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("오류", f"엑셀 불러오기 실패:\n{e}")
+
+    def _ask_excel_overwrite_choice(self, new_count, existing_count):
+        """기존 내용 있을 때 처리 방식 묻기"""
+        win = tk.Toplevel(self.root)
+        win.title("입력창에 이미 내용이 있습니다")
+        win.configure(bg="white")
+        win.transient(self.root)
+        win.grab_set()
+        try:
+            self.position_popup(win, 380, 220)
+        except Exception:
+            win.geometry("380x220")
+
+        result = {"choice": None}
+
+        tk.Label(win, text="⚠️ 입력창에 이미 데이터가 있습니다",
+                 bg="white", fg="#1A1A1A",
+                 font=("맑은 고딕", 11, "bold")).pack(pady=(20, 5))
+        tk.Label(win, text=f"기존 {existing_count}줄  +  새로 {new_count}줄",
+                 bg="white", fg="#666",
+                 font=("맑은 고딕", 9)).pack(pady=(0, 15))
+
+        btn_frame = tk.Frame(win, bg="white")
+        btn_frame.pack(fill="x", padx=20)
+
+        def pick(choice):
+            result["choice"] = choice
+            win.destroy()
+
+        tk.Button(btn_frame, text="🔄 덮어쓰기\n(기존 삭제 후 새로)",
+                  command=lambda: pick("overwrite"),
+                  bg="#FEF2F2", fg="#991B1B",
+                  font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=10, pady=8,
+                  cursor="hand2").pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(btn_frame, text="➕ 추가\n(기존 뒤에 붙임)",
+                  command=lambda: pick("append"),
+                  bg="#ECFDF5", fg="#065F46",
+                  font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=10, pady=8,
+                  cursor="hand2").pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(btn_frame, text="❌ 취소",
+                  command=lambda: pick(None),
+                  bg="#F3F4F6", fg="#374151",
+                  font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=10, pady=8,
+                  cursor="hand2").pack(side="left", expand=True, fill="x", padx=2)
+
+        win.wait_window()
+        return result["choice"]
+
+    def _smart_parse_outbound_excel(self, path):
+        """엑셀 파일에서 바코드+수량 자동 인식.
+        - 헤더가 1행이 아닐 수도 있음 (위 5줄까지 헤더 후보 탐색)
+        - 컬럼명: 바코드/sku/SKU/상품바코드/코드/Barcode 등
+        - 수량 컬럼명: 수량/qty/Qty/QTY/Q'TY/재고/가용재고/출고수량/배송수량 등
+        - CSV도 지원"""
+        ext = os.path.splitext(path)[1].lower()
+        if ext == '.csv':
+            df_raw = pd.read_csv(path, header=None, dtype=str, encoding='utf-8-sig', errors='ignore') \
+                if False else pd.read_csv(path, header=None, dtype=str, encoding='utf-8-sig')
+        else:
+            engine = 'xlrd' if ext == '.xls' else 'openpyxl'
+            try:
+                df_raw = pd.read_excel(path, header=None, dtype=str, engine=engine)
+            except Exception:
+                df_raw = pd.read_excel(path, header=None, dtype=str)
+
+        # 바코드/수량 키워드 (소문자 비교)
+        barcode_keywords = ['바코드', 'sku', '상품바코드', 'barcode', '품번', '제품코드']
+        qty_keywords = ['수량', 'qty', "q'ty", 'quantity', '재고', '가용재고',
+                        '출고수량', '배송수량', '출고', '주문수량', '발주수량']
+        # 우선순위: 정확히 '수량'이 가장 우선, 그 다음 출고/주문, 그 다음 가용재고
+        # 우선순위 점수 (낮을수록 우선)
+        qty_priority = {
+            '수량': 1, 'qty': 1, "q'ty": 1, 'quantity': 1,
+            '출고수량': 2, '출고': 2, '주문수량': 2, '발주수량': 2,
+            '배송수량': 3,
+            '가용재고': 4, '재고': 5
+        }
+
+        # 헤더 후보 행 찾기 (위 10행까지 시도)
+        header_row = -1
+        for i in range(min(10, len(df_raw))):
+            row = df_raw.iloc[i].fillna('').astype(str).str.strip().str.lower()
+            row_text = ' '.join(row.tolist())
+            has_barcode = any(k in row_text for k in barcode_keywords)
+            has_qty = any(k in row_text for k in qty_keywords)
+            if has_barcode and has_qty:
+                header_row = i
+                break
+
+        if header_row == -1:
+            return None
+
+        # 진짜 헤더로 다시 읽기
+        ext = os.path.splitext(path)[1].lower()
+        if ext == '.csv':
+            df = pd.read_csv(path, header=header_row, dtype=str, encoding='utf-8-sig')
+        else:
+            engine = 'xlrd' if ext == '.xls' else 'openpyxl'
+            try:
+                df = pd.read_excel(path, header=header_row, dtype=str, engine=engine)
+            except Exception:
+                df = pd.read_excel(path, header=header_row, dtype=str)
+
+        df.columns = [str(c).strip() for c in df.columns]
+
+        # 바코드 컬럼 찾기
+        bc_col = None
+        for col in df.columns:
+            col_l = col.lower()
+            if any(k in col_l for k in barcode_keywords):
+                bc_col = col
+                break
+        if bc_col is None:
+            return None
+
+        # 수량 컬럼 찾기 (우선순위 적용)
+        qty_col = None
+        best_priority = 999
+        for col in df.columns:
+            col_l = col.lower()
+            for k, prio in qty_priority.items():
+                if k in col_l and prio < best_priority:
+                    qty_col = col
+                    best_priority = prio
+                    break
+        if qty_col is None:
+            # 일반 키워드라도 매치
+            for col in df.columns:
+                col_l = col.lower()
+                if any(k in col_l for k in qty_keywords):
+                    qty_col = col
+                    break
+        if qty_col is None:
+            return None
+
+        # 결과 정리
+        result = pd.DataFrame()
+        result['바코드'] = df[bc_col].fillna('').astype(str).str.strip()
+        result['수량'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0).astype(int)
+        # 빈 바코드 제거
+        result = result[result['바코드'] != ''].copy()
+        # 같은 바코드가 여러 줄에 있으면 합치기 (수량 더하기)
+        result = result.groupby('바코드', as_index=False)['수량'].sum()
+
+        return result
     # --- [탭 3: 맘스] ---
     def setup_moms_v86(self):
         """맘스 입/출고 등록 - 모던 카드 스타일"""
@@ -3971,6 +4315,13 @@ class LogiPanApp:
 
 # --- 여기서부터는 클래스 밖 ---
 if __name__ == "__main__":
-    root = tk.Tk()
+    # [추가] 드래그앤드롭 지원 (tkinterdnd2 있으면 우선 사용, 없으면 기본 Tk)
+    try:
+        from tkinterdnd2 import TkinterDnD
+        root = TkinterDnD.Tk()
+        print("✅ tkinterdnd2 활성화 - 드래그앤드롭 사용 가능")
+    except ImportError:
+        root = tk.Tk()
+        print("ℹ️ tkinterdnd2 미설치 - 기본 모드 (파일 선택 버튼만 사용)")
     app = LogiPanApp(root)
     root.mainloop()
