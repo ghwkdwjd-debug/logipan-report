@@ -609,6 +609,16 @@ class LogiPanApp:
                  font=("맑은 고딕", 8),
                  bg="#F5F6F8", fg="#888").pack(anchor="w")
 
+        # [추가] 우측 작은 리셋 버튼 (눈에 안 띄게 회색)
+        reset_btn = tk.Button(header_frame, text="🔄 리셋",
+                                command=self.reset_inbound_all,
+                                bg="#F3F4F6", fg="#9CA3AF",
+                                activebackground="#E5E7EB",
+                                font=("맑은 고딕", 8),
+                                relief="flat", padx=8, pady=4,
+                                cursor="hand2")
+        reset_btn.pack(side="right", anchor="se")
+
         # ========== [💾 액션 버튼들 - 하단 고정] ==========
         action_outer = tk.Frame(container, bg="#F5F6F8")
         action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
@@ -629,13 +639,16 @@ class LogiPanApp:
             btn.bind("<Leave>", on_leave)
             return btn
 
-        make_modern_btn(action_outer, "🔍  대조 분석 실행",
+        make_modern_btn(action_outer, "🔍  대조 분석",
                          bg="#F59E0B", hover_bg="#D97706",
                          command=self.run_compare_in)
         make_modern_btn(action_outer, "📋  입고파일 생성",
                          bg="#1877F2", hover_bg="#1864c8",
                          command=self.create_inbound_file)
-        make_modern_btn(action_outer, "💾  CSV 저장 & 리셋",
+        make_modern_btn(action_outer, "📎  클립보드 복사",
+                         bg="#8B5CF6", hover_bg="#7C3AED",
+                         command=self.copy_inbound_to_clipboard)
+        make_modern_btn(action_outer, "💾  CSV 저장",
                          bg="#10B981", hover_bg="#059669",
                          command=self.save_csv_in)
 
@@ -2971,7 +2984,30 @@ class LogiPanApp:
         brand = self.ent_brand_in.get().strip(); today = datetime.now().strftime('%y%m%d')
         df = self.last_merged_df[self.last_merged_df['수량_스캔'] > 0][['바코드', '수량_스캔']].copy(); df.columns=['바코드','수량']; df['메모']=brand
         fn = self.get_unique_filename(f"{today} {brand} 입고", "csv")
-        df.to_csv(os.path.join(self.save_dir, fn), index=False, encoding="utf-8-sig"); self.reset_inbound(); messagebox.showinfo("완료", f"저장됨: {fn}")
+        df.to_csv(os.path.join(self.save_dir, fn), index=False, encoding="utf-8-sig")
+        # [수정] 자동 리셋 제거 - 별도 🔄 리셋 버튼으로 분리됨
+        messagebox.showinfo("저장 완료",
+            f"✅ 저장됨: {fn}\n\n💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
+
+    def copy_inbound_to_clipboard(self):
+        """[추가] 마지막에 생성한 입고파일 데이터를 클립보드에 복사 (헤더 제외, TSV)."""
+        df = getattr(self, '_last_inbound_df', None)
+        if df is None or df.empty:
+            messagebox.showwarning("복사 불가",
+                "복사할 입고 데이터가 없습니다.\n먼저 [📋 입고파일 생성]을 눌러주세요.")
+            return
+        try:
+            # TSV 형식 (탭 구분, 헤더 없음) - 엑셀에 그대로 붙여넣기 가능
+            tsv = df.to_csv(sep='\t', index=False, header=False)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(tsv)
+            self.root.update()  # 클립보드 확정
+            messagebox.showinfo("복사 완료",
+                f"✅ 클립보드에 복사되었습니다!\n\n"
+                f"📊 {len(df)}건 (박스번호~불량로케이션)\n"
+                f"📋 다른 시트나 시스템에 Ctrl+V로 붙여넣기")
+        except Exception as e:
+            messagebox.showerror("복사 실패", f"클립보드 복사 중 오류:\n{e}")
 
     def create_inbound_file(self):
         """[추가] 스캔칸의 5열 데이터로 엑셀 입고파일 생성.
@@ -3010,6 +3046,9 @@ class LogiPanApp:
                 '정상로케이션': r.get('정상로케', ''),
                 '불량로케이션': r.get('불량로케', ''),
             } for r in rows])
+
+            # [추가] 복사용으로 마지막 데이터 보관
+            self._last_inbound_df = df_out.copy()
 
             today = datetime.now().strftime('%y%m%d')
             brand = self.ent_brand_in.get().strip()
@@ -3299,7 +3338,41 @@ class LogiPanApp:
     def reset_inbound(self): 
         self.txt_in_master.tag_remove("mismatch", "1.0", tk.END)
         self.txt_in_scan.tag_remove("mismatch", "1.0", tk.END)
-        self.txt_in_master.delete("1.0", tk.END); self.txt_in_scan.delete("1.0", tk.END); self.ent_brand_in.delete(0, tk.END); self.is_matched = False; self.lbl_in_m.config(text="📦 브랜드 수량 (0개)"); self.lbl_in_s.config(text="📡 스캔 수량 (0개)")
+        self.txt_in_master.delete("1.0", tk.END); self.txt_in_scan.delete("1.0", tk.END); self.ent_brand_in.delete(0, tk.END); self.is_matched = False; self.lbl_in_m.config(text="브랜드 수량 (0개)"); self.lbl_in_s.config(text="스캔 수량 (0개)")
+
+    def reset_inbound_all(self):
+        """[추가] 입고 탭 전체 초기화 - 브랜드명 + 양쪽 입력창 + 리포트.
+        확인 다이얼로그 후 실행."""
+        # 비어있으면 그냥 패스
+        has_data = bool(
+            self.txt_in_master.get("1.0", "end-1c").strip() or
+            self.txt_in_scan.get("1.0", "end-1c").strip() or
+            self.ent_brand_in.get().strip() or
+            self.txt_in_report.get("1.0", "end-1c").strip()
+        )
+        if not has_data:
+            return
+        if not messagebox.askyesno("입고 탭 리셋",
+                                     "브랜드명, 브랜드 수량, 스캔 수량, 리포트를 모두 지우시겠습니까?",
+                                     parent=self.root):
+            return
+
+        # 입력창 + 라벨 리셋 (기존 reset_inbound 로직)
+        self.txt_in_master.tag_remove("mismatch", "1.0", tk.END)
+        self.txt_in_scan.tag_remove("mismatch", "1.0", tk.END)
+        self.txt_in_master.delete("1.0", tk.END)
+        self.txt_in_scan.delete("1.0", tk.END)
+        self.ent_brand_in.delete(0, tk.END)
+        self.is_matched = False
+        self.lbl_in_m.config(text="브랜드 수량 (0개)")
+        self.lbl_in_s.config(text="스캔 수량 (0개)")
+
+        # [추가] 리포트 비우기
+        self.txt_in_report.delete("1.0", tk.END)
+
+        # [추가] 마지막 입고 데이터도 비움 (혼동 방지)
+        self._last_inbound_df = None
+        self.last_scan_detail = []
     def smart_load_chk(self, path, is_master=False):
         skips = [1, 0, 2, 3, 4, 5] if is_master else [0, 1, 2, 3, 4, 5]
         for skip in skips:
