@@ -131,14 +131,14 @@ class LogiPanApp:
         self.nb = ttk.Notebook(self.root)
         self.nb.pack(expand=True, fill="both", padx=5, pady=5)
 
-        self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥  입고")
-        self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤  출고")
-        self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦  맘스")
-        self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🏷️  마스터")
-        self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍  재고파악")
-        self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢  공지/소통")
-        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋  작업보고")
-        self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊  마감재고")
+        self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥 입고")
+        self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤 출고")
+        self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦 맘스")
+        self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🏷️ 마스터")
+        self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍 재고파악")
+        self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
+        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
+        self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊 마감재고")
 
         self.setup_inbound()
         self.setup_outbound()
@@ -2128,28 +2128,217 @@ class LogiPanApp:
 
     # --- [탭 4: 마감재고 (수량 너비 확보)] ---
     def setup_closing_stock(self):
-        container = tk.Frame(self.t_end, bg="white", padx=30, pady=30); container.pack(fill="both", expand=True)
-        tk.Label(container, text="📊 실시간 마감재고 분석 (EMP)", font=("맑은 고딕", 22, "bold"), bg="white").pack(pady=20)
-        tk.Button(container, text="📁 EMP 재고 파일 선택 및 분석 실행", bg="#607D8B", fg="white", font=("맑은 고딕", 14, "bold"), height=2, command=self.run_closing_stock_logic).pack(fill="x", pady=10)
-        self.tree_end = ttk.Treeview(container, columns=("zone", "qty"), show="headings", height=8)
-        self.tree_end.heading("zone", text="최종 구역"); self.tree_end.column("zone", anchor="center", width=200)
-        self.tree_end.heading("qty", text="가용재고 합계"); self.tree_end.column("qty", anchor="e", width=180)
-        self.tree_end.pack(fill="both", expand=True)
-        self.lbl_end_total = tk.Label(container, text="📊 총 구역 합계: 0개", font=("맑은 고딕", 18, "bold"), bg="#f5f5f5", pady=15); self.lbl_end_total.pack(fill="x", pady=20)
+        """마감재고 - 전체 재고 → 구역별 수량"""
+        container = tk.Frame(self.t_end, bg="#F5F6F8")
+        container.pack(fill="both", expand=True)
 
-    # --- [탭 5: 재고파악] ---
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="📊", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="실시간 마감재고",
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_text_box, text="EMP 재고 파일 → 구역별 가용재고 집계",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # ========== [총합 - 하단 고정] ==========
+        total_outer = tk.Frame(container, bg="#F5F6F8")
+        total_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
+
+        total_card = tk.Frame(total_outer, bg="#1877F2",
+                                highlightthickness=0)
+        total_card.pack(fill="x")
+
+        self.lbl_end_total = tk.Label(total_card, text="📊  총 구역 합계: 0개",
+                                        font=("맑은 고딕", 14, "bold"),
+                                        bg="#1877F2", fg="white", pady=14)
+        self.lbl_end_total.pack(fill="x")
+
+        # ========== [실행 버튼 - 하단 (총합 위)] ==========
+        action_outer = tk.Frame(container, bg="#F5F6F8")
+        action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 8))
+
+        shadow = tk.Frame(action_outer, bg="#1864c8")
+        shadow.pack(fill="x")
+
+        run_btn = tk.Button(shadow, text="📁  EMP 재고 파일 선택 및 분석",
+                              bg="#1877F2", fg="white",
+                              activebackground="#1864c8", activeforeground="white",
+                              font=("맑은 고딕", 11, "bold"),
+                              relief="flat", bd=0,
+                              cursor="hand2",
+                              command=self.run_closing_stock_logic)
+        run_btn.pack(fill="x", ipady=10)
+        def on_e1(e): run_btn.config(bg="#1864c8")
+        def on_l1(e): run_btn.config(bg="#1877F2")
+        run_btn.bind("<Enter>", on_e1)
+        run_btn.bind("<Leave>", on_l1)
+
+        # ========== [결과 카드 - 메인 영역] ==========
+        result_outer = tk.Frame(container, bg="#F5F6F8")
+        result_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+
+        result_card = tk.Frame(result_outer, bg="white",
+                                 highlightthickness=1, highlightbackground="#E5E7EB")
+        result_card.pack(fill="both", expand=True)
+
+        tk.Frame(result_card, bg="#10B981", width=4).pack(side="left", fill="y")
+
+        result_inner = tk.Frame(result_card, bg="white", padx=14, pady=12)
+        result_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(result_inner, text="📍  구역별 가용재고 집계",
+                 bg="white", fg="#111827",
+                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 8))
+
+        tree_frame = tk.Frame(result_inner, bg="white")
+        tree_frame.pack(fill="both", expand=True)
+
+        self.tree_end = ttk.Treeview(tree_frame, columns=("zone", "qty"),
+                                       show="headings", height=10)
+        self.tree_end.heading("zone", text="최종 구역")
+        self.tree_end.column("zone", anchor="center", width=200)
+        self.tree_end.heading("qty", text="가용재고 합계")
+        self.tree_end.column("qty", anchor="e", width=180)
+        self.tree_end.pack(side="left", fill="both", expand=True)
+
+        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_end.yview)
+        self.tree_end.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+
+    # --- [탭: 재고파악] ---
     def setup_inventory_check_v95(self):
-        container = tk.Frame(self.t_chk, bg="#f5f5f5"); container.pack(fill="both", expand=True)
-        tk.Label(container, text="🔎 출고가능 재고파악 시스템", font=("맑은 고딕", 20, "bold"), bg="#f5f5f5", pady=15).pack()
-        chk_f = tk.LabelFrame(container, text=" 재고 분석 설정 ", font=("맑은 고딕", 12, "bold"), bg="white", padx=30, pady=40)
-        chk_f.pack(expand=True, fill="both", padx=30, pady=10)
-        r1 = tk.Frame(chk_f, bg="white"); r1.pack(fill="x", pady=15)
-        tk.Button(r1, text="1. 조회 리스트 선택", command=self.sel_chk_target, width=22, bg="#E8EAF6", font=("맑은 고딕", 10)).pack(side="left")
-        self.lbl_chk_target = tk.Label(r1, text="(출고리스트) 미선택", fg="#777", bg="white", font=("맑은 고딕", 10)); self.lbl_chk_target.pack(side="left", padx=20)
-        r2 = tk.Frame(chk_f, bg="white"); r2.pack(fill="x", pady=15)
-        tk.Button(r2, text="2. 재고 마스터 선택", command=self.sel_chk_master, width=22, bg="#E8EAF6", font=("맑은 고딕", 10)).pack(side="left")
-        self.lbl_chk_master = tk.Label(r2, text="(EMP 재고파일) 미선택", fg="#777", bg="white", font=("맑은 고딕", 10)); self.lbl_chk_master.pack(side="left", padx=20)
-        tk.Button(chk_f, text="📋 출고가능 리스트 생성", bg="#673AB7", fg="white", font=("맑은 고딕", 16, "bold"), height=2, command=self.run_inventory_check_logic).pack(side="bottom", fill="x", pady=(30, 0))
+        """재고파악 - 출고리스트 vs 전체재고 → 출고가능 추출"""
+        container = tk.Frame(self.t_chk, bg="#F5F6F8")
+        container.pack(fill="both", expand=True)
+
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="🔍", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="출고가능 재고파악",
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_text_box, text="출고리스트 ↔ 전체재고 비교 → 출고가능 상품 추출",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # ========== [실행 버튼 - 하단 고정] ==========
+        action_outer = tk.Frame(container, bg="#F5F6F8")
+        action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
+
+        shadow = tk.Frame(action_outer, bg="#7C3AED")
+        shadow.pack(fill="x")
+
+        run_btn = tk.Button(shadow, text="📋  출고가능 리스트 생성",
+                              bg="#8B5CF6", fg="white",
+                              activebackground="#7C3AED", activeforeground="white",
+                              font=("맑은 고딕", 11, "bold"),
+                              relief="flat", bd=0,
+                              cursor="hand2",
+                              command=self.run_inventory_check_logic)
+        run_btn.pack(fill="x", ipady=10)
+        def on_e2(e): run_btn.config(bg="#7C3AED")
+        def on_l2(e): run_btn.config(bg="#8B5CF6")
+        run_btn.bind("<Enter>", on_e2)
+        run_btn.bind("<Leave>", on_l2)
+
+        # ========== [파일 선택 카드들] ==========
+        # 카드 1: 조회 리스트
+        c1_outer = tk.Frame(container, bg="#F5F6F8")
+        c1_outer.pack(fill="x", padx=18, pady=(0, 8))
+
+        c1 = tk.Frame(c1_outer, bg="white",
+                       highlightthickness=1, highlightbackground="#E5E7EB")
+        c1.pack(fill="x")
+        tk.Frame(c1, bg="#3B82F6", width=4).pack(side="left", fill="y")
+
+        c1_inner = tk.Frame(c1, bg="white", padx=14, pady=14)
+        c1_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(c1_inner, text="1️⃣  출고리스트 (조회)",
+                 bg="white", fg="#1E40AF",
+                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 6))
+
+        c1_row = tk.Frame(c1_inner, bg="white")
+        c1_row.pack(fill="x")
+        tk.Button(c1_row, text="📁 파일 선택",
+                   command=self.sel_chk_target,
+                   bg="#EFF6FF", fg="#1E40AF",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="left")
+        self.lbl_chk_target = tk.Label(c1_row, text="미선택",
+                                          fg="#9CA3AF", bg="white",
+                                          font=("맑은 고딕", 9))
+        self.lbl_chk_target.pack(side="left", padx=10)
+
+        # 카드 2: 재고 마스터
+        c2_outer = tk.Frame(container, bg="#F5F6F8")
+        c2_outer.pack(fill="x", padx=18, pady=(0, 8))
+
+        c2 = tk.Frame(c2_outer, bg="white",
+                       highlightthickness=1, highlightbackground="#E5E7EB")
+        c2.pack(fill="x")
+        tk.Frame(c2, bg="#10B981", width=4).pack(side="left", fill="y")
+
+        c2_inner = tk.Frame(c2, bg="white", padx=14, pady=14)
+        c2_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(c2_inner, text="2️⃣  EMP 재고 마스터 (전체재고)",
+                 bg="white", fg="#065F46",
+                 font=("맑은 고딕", 10, "bold")).pack(anchor="w", pady=(0, 6))
+
+        c2_row = tk.Frame(c2_inner, bg="white")
+        c2_row.pack(fill="x")
+        tk.Button(c2_row, text="📁 파일 선택",
+                   command=self.sel_chk_master,
+                   bg="#ECFDF5", fg="#065F46",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="left")
+        self.lbl_chk_master = tk.Label(c2_row, text="미선택",
+                                          fg="#9CA3AF", bg="white",
+                                          font=("맑은 고딕", 9))
+        self.lbl_chk_master.pack(side="left", padx=10)
+
+        # 안내
+        info_outer = tk.Frame(container, bg="#F5F6F8")
+        info_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+
+        info_card = tk.Frame(info_outer, bg="#FFFBEB",
+                              highlightthickness=1, highlightbackground="#FEF3C7")
+        info_card.pack(fill="both", expand=True)
+
+        info_inner = tk.Frame(info_card, bg="#FFFBEB", padx=20, pady=20)
+        info_inner.pack(fill="both", expand=True)
+
+        tk.Label(info_inner, text="💡",
+                 bg="#FFFBEB", font=("맑은 고딕", 24)).pack(pady=(20, 8))
+        tk.Label(info_inner, text="동작 방식",
+                 bg="#FFFBEB", fg="#92400E",
+                 font=("맑은 고딕", 11, "bold")).pack()
+        tk.Label(info_inner,
+                 text="1️⃣ 출고리스트와 2️⃣ 전체재고를 비교하여\n"
+                       "현재 출고 가능한 상품만 추출합니다.\n\n"
+                       "결과는 엑셀 파일로 저장됩니다.",
+                 bg="#FFFBEB", fg="#78350F",
+                 font=("맑은 고딕", 9),
+                 justify="center").pack(pady=(6, 20))
     
     # --- [탭 6: 현장소통] ---
     def setup_field_comm(self, container):
