@@ -769,33 +769,54 @@ class LogiPanApp:
                    highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
 
     def _test_jira_connection(self, cfg):
-        """Jira 연결 테스트 - 사용자 정보 가져오기"""
+        """Jira 연결 테스트 - Cloud(/api/3) + Server(/api/2) 둘 다 시도"""
         try:
             import base64
             domain = cfg.get("domain", "")
             email = cfg.get("email", "")
             token = cfg.get("api_token", "")
             project = cfg.get("project_key", "")
-            if not all([domain, email, token, project]):
-                return False, "도메인/이메일/토큰/프로젝트 키 모두 필요합니다."
+            if not all([domain, token, project]):
+                return False, "도메인/토큰/프로젝트 키 필수입니다."
 
-            url = f"https://{domain}/rest/api/3/project/{project}"
-            auth_str = f"{email}:{token}"
-            auth_b64 = base64.b64encode(auth_str.encode()).decode()
-            req = urllib.request.Request(url, headers={
-                'Authorization': f'Basic {auth_b64}',
-                'Accept': 'application/json'
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
-            return True, f"연결 성공! 프로젝트: {data.get('name', project)}"
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                return False, "인증 실패 - 이메일/토큰 확인하세요."
-            elif e.code == 404:
-                return False, f"프로젝트 '{project}' 못 찾음. 키 확인하세요."
-            else:
-                return False, f"HTTP 에러 {e.code}: {e.reason}"
+            # 인증 헤더 후보들
+            auth_headers = []
+            if email:
+                # Basic auth (Cloud + 일부 Server)
+                auth_str = f"{email}:{token}"
+                auth_b64 = base64.b64encode(auth_str.encode()).decode()
+                auth_headers.append(('Basic auth', f'Basic {auth_b64}'))
+            # Bearer token (Server PAT)
+            auth_headers.append(('Bearer token', f'Bearer {token}'))
+
+            # API 버전 후보들 (Cloud는 3, Server는 2)
+            api_versions = ['3', '2']
+
+            last_error = ""
+            for auth_name, auth_value in auth_headers:
+                for api_v in api_versions:
+                    url = f"https://{domain}/rest/api/{api_v}/project/{project}"
+                    try:
+                        req = urllib.request.Request(url, headers={
+                            'Authorization': auth_value,
+                            'Accept': 'application/json'
+                        })
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            data = json.loads(resp.read())
+                        # 성공! 어떤 조합이 통했는지 저장
+                        cfg['_api_version'] = api_v
+                        cfg['_auth_method'] = auth_name
+                        # 임시로 저장 (실제 저장은 사용자가 [저장] 누를 때)
+                        return True, (f"연결 성공! 프로젝트: {data.get('name', project)}\n"
+                                       f"(API v{api_v}, {auth_name})")
+                    except urllib.error.HTTPError as e:
+                        last_error = f"[{auth_name} api/{api_v}] HTTP {e.code}: {e.reason}"
+                        continue
+                    except Exception as e:
+                        last_error = f"[{auth_name} api/{api_v}] {e}"
+                        continue
+
+            return False, f"모든 시도 실패. 마지막: {last_error}"
         except Exception as e:
             return False, f"연결 실패: {e}"
 
@@ -809,72 +830,99 @@ class LogiPanApp:
         try:
             import base64
             domain = cfg["domain"]
-            email = cfg["email"]
+            email = cfg.get("email", "")
             token = cfg["api_token"]
             project = cfg["project_key"]
             assignee = cfg.get("assignee_id", "")
             issue_type = cfg.get("issue_type", "Task")
 
-            auth_str = f"{email}:{token}"
-            auth_b64 = base64.b64encode(auth_str.encode()).decode()
-            auth_header = f'Basic {auth_b64}'
+            # 인증 헤더 후보들
+            auth_headers = []
+            if email:
+                auth_str = f"{email}:{token}"
+                auth_b64 = base64.b64encode(auth_str.encode()).decode()
+                auth_headers.append(('Basic', f'Basic {auth_b64}'))
+            auth_headers.append(('Bearer', f'Bearer {token}'))
 
-            # 1. 티켓 생성
-            issue_url = f"https://{domain}/rest/api/3/issue"
-            payload = {
-                "fields": {
-                    "project": {"key": project},
-                    "summary": title,
-                    "issuetype": {"name": issue_type},
-                    "description": {
-                        "type": "doc",
-                        "version": 1,
-                        "content": [{
-                            "type": "paragraph",
+            # API 버전 후보들
+            api_versions = ['3', '2']
+
+            last_error = ""
+            for auth_name, auth_value in auth_headers:
+                for api_v in api_versions:
+                    issue_url = f"https://{domain}/rest/api/{api_v}/issue"
+                    # API v3는 Atlassian Document Format, v2는 plain text
+                    if api_v == '3':
+                        description_field = {
+                            "type": "doc",
+                            "version": 1,
                             "content": [{
-                                "type": "text",
-                                "text": description
+                                "type": "paragraph",
+                                "content": [{
+                                    "type": "text",
+                                    "text": description
+                                }]
                             }]
-                        }]
+                        }
+                    else:
+                        description_field = description  # plain text
+
+                    payload = {
+                        "fields": {
+                            "project": {"key": project},
+                            "summary": title,
+                            "issuetype": {"name": issue_type},
+                            "description": description_field
+                        }
                     }
-                }
-            }
-            if assignee:
-                payload["fields"]["assignee"] = {"accountId": assignee}
+                    if assignee:
+                        # Cloud: accountId / Server: name
+                        if api_v == '3':
+                            payload["fields"]["assignee"] = {"accountId": assignee}
+                        else:
+                            payload["fields"]["assignee"] = {"name": assignee}
 
-            data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(issue_url, data=data, headers={
-                'Authorization': auth_header,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            }, method='POST')
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                result = json.loads(resp.read())
-            issue_key = result.get('key')
-            if not issue_key:
-                return False, "티켓 생성 실패 (키 없음)"
+                    data = json.dumps(payload).encode('utf-8')
+                    try:
+                        req = urllib.request.Request(issue_url, data=data, headers={
+                            'Authorization': auth_value,
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        }, method='POST')
+                        with urllib.request.urlopen(req, timeout=15) as resp:
+                            result = json.loads(resp.read())
+                        issue_key = result.get('key')
+                        if not issue_key:
+                            last_error = "티켓 키 없음"
+                            continue
 
-            # 2. 첨부파일 업로드 (multipart/form-data)
-            if attachment_path and os.path.exists(attachment_path):
-                try:
-                    self._upload_jira_attachment(domain, auth_header, issue_key, attachment_path)
-                except Exception as e:
-                    print(f"⚠️ 첨부파일 업로드 실패: {e}")
+                        # 성공! 첨부파일 업로드
+                        if attachment_path and os.path.exists(attachment_path):
+                            try:
+                                self._upload_jira_attachment(domain, auth_value, issue_key, attachment_path, api_v)
+                            except Exception as e:
+                                print(f"⚠️ 첨부파일 업로드 실패: {e}")
 
-            ticket_url = f"https://{domain}/browse/{issue_key}"
-            return True, ticket_url
-        except urllib.error.HTTPError as e:
-            try:
-                err_body = e.read().decode()
-            except:
-                err_body = ""
-            return False, f"HTTP {e.code}: {err_body[:200]}"
+                        ticket_url = f"https://{domain}/browse/{issue_key}"
+                        return True, ticket_url
+                    except urllib.error.HTTPError as e:
+                        try:
+                            err_body = e.read().decode()
+                        except:
+                            err_body = ""
+                        last_error = f"[{auth_name} api/{api_v}] HTTP {e.code}: {err_body[:200]}"
+                        continue
+                    except Exception as e:
+                        last_error = f"[{auth_name} api/{api_v}] {e}"
+                        continue
+
+            return False, f"모든 시도 실패. 마지막: {last_error}"
         except Exception as e:
             return False, f"오류: {e}"
 
-    def _upload_jira_attachment(self, domain, auth_header, issue_key, file_path):
+    def _upload_jira_attachment(self, domain, auth_header, issue_key, file_path, api_v='3'):
         """Jira 티켓에 파일 첨부 (multipart/form-data 직접 구성)"""
-        url = f"https://{domain}/rest/api/3/issue/{issue_key}/attachments"
+        url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}/attachments"
         boundary = '----LogiPanBoundary' + str(int(__import__('time').time()))
         filename = os.path.basename(file_path)
 
