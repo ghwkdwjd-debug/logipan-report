@@ -769,7 +769,101 @@ class LogiPanApp:
                    highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
 
     def _test_jira_connection(self, cfg):
-        """Jira 연결 테스트 - Cloud(/api/3) + Server(/api/2) 둘 다 시도"""
+        """Jira 연결 테스트 - 단계별로 진단
+        1) /myself - 인증 자체가 되는지 (401 = 토큰 문제, 403 = 권한 부족)
+        2) /project/{KEY} - 프로젝트 접근 가능한지
+        """
+        try:
+            import base64
+            domain = cfg.get("domain", "")
+            email = cfg.get("email", "")
+            token = cfg.get("api_token", "")
+            project = cfg.get("project_key", "")
+            if not all([domain, token, project]):
+                return False, "도메인/토큰/프로젝트 키 필수입니다."
+
+            # 인증 헤더 후보들
+            auth_headers = []
+            if email:
+                auth_str = f"{email}:{token}"
+                auth_b64 = base64.b64encode(auth_str.encode()).decode()
+                auth_headers.append(('Basic', f'Basic {auth_b64}'))
+            auth_headers.append(('Bearer', f'Bearer {token}'))
+
+            api_versions = ['3', '2']
+
+            # === 1단계: /myself로 인증 테스트 ===
+            myself_results = []
+            for auth_name, auth_value in auth_headers:
+                for api_v in api_versions:
+                    url = f"https://{domain}/rest/api/{api_v}/myself"
+                    try:
+                        req = urllib.request.Request(url, headers={
+                            'Authorization': auth_value,
+                            'Accept': 'application/json'
+                        })
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            data = json.loads(resp.read())
+                        # 인증 성공! 본인 정보
+                        my_name = data.get('displayName') or data.get('name', '?')
+                        my_id = data.get('accountId') or data.get('key') or data.get('name', '?')
+                        myself_results.append((auth_name, api_v, my_name, my_id, None))
+                        break  # 이 auth로 일단 인증은 됨
+                    except urllib.error.HTTPError as e:
+                        try:
+                            err_body = e.read().decode()[:200]
+                        except:
+                            err_body = ""
+                        myself_results.append((auth_name, api_v, None, None,
+                                              f"{e.code}: {err_body or e.reason}"))
+                    except Exception as e:
+                        myself_results.append((auth_name, api_v, None, None, str(e)[:100]))
+
+            # 성공한 인증 찾기
+            auth_success = [r for r in myself_results if r[2] is not None]
+            if not auth_success:
+                # 인증 자체가 다 실패
+                msgs = [f"  {r[0]} api/{r[1]}: {r[4]}" for r in myself_results]
+                return False, "인증 실패 (모든 시도):\n" + "\n".join(msgs)
+
+            # 인증 성공한 첫 번째 조합으로 프로젝트 접근 테스트
+            best_auth_name, best_api_v, my_name, my_id, _ = auth_success[0]
+            best_auth_value = next(av for an, av in auth_headers if an == best_auth_name)
+
+            # === 2단계: /project/{KEY}로 프로젝트 권한 테스트 ===
+            url = f"https://{domain}/rest/api/{best_api_v}/project/{project}"
+            try:
+                req = urllib.request.Request(url, headers={
+                    'Authorization': best_auth_value,
+                    'Accept': 'application/json'
+                })
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                return True, (f"✅ 연결 성공!\n"
+                               f"  로그인: {my_name} (ID: {my_id})\n"
+                               f"  프로젝트: {data.get('name', project)}\n"
+                               f"  ({best_auth_name}, api/{best_api_v})")
+            except urllib.error.HTTPError as e:
+                try:
+                    err_body = e.read().decode()[:200]
+                except:
+                    err_body = ""
+                if e.code == 403:
+                    return False, (f"⚠️ 인증은 OK ({my_name}으로 로그인됨)\n"
+                                    f"하지만 '{project}' 프로젝트에 API 접근 권한 없음\n"
+                                    f"(403 Forbidden)\n\n"
+                                    f"💡 회사 IT/보안팀에 문의 필요:\n"
+                                    f"   - REST API 접근 권한\n"
+                                    f"   - {project} 프로젝트 권한")
+                elif e.code == 404:
+                    return False, f"프로젝트 '{project}' 못 찾음. 키 확인하세요."
+                else:
+                    return False, f"인증 OK인데 프로젝트 접근 HTTP {e.code}: {err_body}"
+        except Exception as e:
+            return False, f"연결 실패: {e}"
+
+    def _test_jira_connection_OLD_unused(self, cfg):
+        """예전 버전 (참고용)"""
         try:
             import base64
             domain = cfg.get("domain", "")
@@ -810,7 +904,11 @@ class LogiPanApp:
                         return True, (f"연결 성공! 프로젝트: {data.get('name', project)}\n"
                                        f"(API v{api_v}, {auth_name})")
                     except urllib.error.HTTPError as e:
-                        last_error = f"[{auth_name} api/{api_v}] HTTP {e.code}: {e.reason}"
+                        try:
+                            err_body = e.read().decode()[:300]
+                        except:
+                            err_body = ""
+                        last_error = f"[{auth_name} api/{api_v}] HTTP {e.code}: {err_body or e.reason}"
                         continue
                     except Exception as e:
                         last_error = f"[{auth_name} api/{api_v}] {e}"
