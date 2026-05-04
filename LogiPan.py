@@ -6,6 +6,8 @@ import json
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, simpledialog
 import re
+import urllib.request
+import urllib.error
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
 
@@ -583,6 +585,317 @@ class LogiPanApp:
         except Exception as e:
             print(f"⚠️ 사용자 이름 저장 실패: {e}")
 
+    # ========== [Jira 연동] ==========
+    def load_jira_settings(self):
+        """로컬 config 파일에서 Jira 설정 로드"""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                return cfg.get("jira_settings", {})
+        except Exception:
+            pass
+        return {}
+
+    def save_jira_settings(self, settings):
+        """로컬 config 파일에 Jira 설정 저장"""
+        try:
+            cfg = {}
+            if os.path.exists(self.config_path):
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except Exception:
+                    cfg = {}
+            cfg["jira_settings"] = settings
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            messagebox.showerror("저장 실패", f"Jira 설정 저장 실패: {e}")
+            return False
+
+    def open_jira_settings(self):
+        """Jira 연동 설정 팝업"""
+        win = tk.Toplevel(self.root)
+        win.title("⚙️ Jira 연동 설정")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 480, 600)
+        except Exception:
+            win.geometry("480x600")
+        win.transient(self.root)
+        win.grab_set()
+
+        s = self.load_jira_settings()
+
+        # 헤더
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        tk.Label(head, text="⚙️", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="Jira 연동 설정",
+                 font=("맑은 고딕", 14, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+        tk.Label(win, text="입고 CSV 저장 시 자동으로 Jira 티켓 생성 (CSV 첨부)",
+                 bg="#F5F6F8", fg="#666",
+                 font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
+
+        # 카드
+        card = tk.Frame(win, bg="white",
+                          highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=12)
+        tk.Frame(card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+        inner = tk.Frame(card, bg="white", padx=14, pady=12)
+        inner.pack(side="left", fill="both", expand=True)
+
+        # 입력 필드들
+        entries = {}
+
+        def add_field(label, key, default="", show=None, hint=""):
+            frame = tk.Frame(inner, bg="white")
+            frame.pack(fill="x", pady=4)
+            tk.Label(frame, text=label, bg="white",
+                     font=("맑은 고딕", 9, "bold"),
+                     fg="#374151").pack(anchor="w")
+            ent = tk.Entry(frame, font=("맑은 고딕", 10),
+                            bd=1, relief="solid",
+                            highlightthickness=0)
+            if show:
+                ent.config(show=show)
+            ent.pack(fill="x", ipady=4, pady=(2, 0))
+            ent.insert(0, s.get(key, default))
+            entries[key] = ent
+            if hint:
+                tk.Label(frame, text=hint,
+                         bg="white", fg="#9CA3AF",
+                         font=("맑은 고딕", 8),
+                         anchor="w").pack(fill="x")
+            return ent
+
+        add_field("Atlassian 도메인",
+                   "domain",
+                   hint="예: yourcompany.atlassian.net (https:// 빼고)")
+        add_field("본인 이메일", "email",
+                   hint="Atlassian 로그인 이메일")
+        add_field("API Token", "api_token", show="•",
+                   hint="https://id.atlassian.com/manage-profile/security/api-tokens 에서 생성")
+        add_field("프로젝트 키", "project_key",
+                   hint="예: LOG, OPS (대문자, Jira에서 확인)")
+        add_field("담당자 이름", "assignee_name",
+                   hint="본문에 표시될 이름 (예: 김상품)")
+        add_field("담당자 Account ID", "assignee_id",
+                   hint="비워두면 미지정. Jira Profile에서 Account ID 확인")
+        add_field("이슈 타입", "issue_type", default="Task",
+                   hint="Task, Bug, Story 등")
+
+        # 활성화 체크박스
+        enabled_var = tk.BooleanVar(value=s.get("enabled", False))
+        chk_frame = tk.Frame(inner, bg="white")
+        chk_frame.pack(fill="x", pady=(10, 0))
+        tk.Checkbutton(chk_frame, text="✅ 입고 CSV 저장 시 자동 티켓 생성",
+                        variable=enabled_var, bg="white",
+                        font=("맑은 고딕", 9, "bold"),
+                        fg="#065F46").pack(anchor="w")
+
+        # 결과 표시 라벨
+        result_lbl = tk.Label(inner, text="", bg="white",
+                                font=("맑은 고딕", 8),
+                                wraplength=360, justify="left")
+        result_lbl.pack(fill="x", pady=(8, 0))
+
+        # 버튼
+        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame.pack(fill="x", padx=18, pady=(0, 14))
+
+        def collect():
+            return {
+                "domain": entries["domain"].get().strip().rstrip('/'),
+                "email": entries["email"].get().strip(),
+                "api_token": entries["api_token"].get().strip(),
+                "project_key": entries["project_key"].get().strip().upper(),
+                "assignee_name": entries["assignee_name"].get().strip(),
+                "assignee_id": entries["assignee_id"].get().strip(),
+                "issue_type": entries["issue_type"].get().strip() or "Task",
+                "enabled": enabled_var.get(),
+            }
+
+        def test_connection():
+            cfg = collect()
+            result_lbl.config(text="🔄 연결 테스트 중...", fg="#6B7280")
+            win.update()
+            ok, msg = self._test_jira_connection(cfg)
+            if ok:
+                result_lbl.config(text=f"✅ {msg}", fg="#16A34A")
+            else:
+                result_lbl.config(text=f"❌ {msg}", fg="#DC2626")
+
+        def do_save():
+            cfg = collect()
+            if cfg["enabled"]:
+                # 활성화 시 필수 항목 체크
+                missing = [k for k in ["domain", "email", "api_token", "project_key"]
+                           if not cfg[k]]
+                if missing:
+                    messagebox.showwarning("입력 누락",
+                        f"활성화하려면 다음 항목이 필요합니다:\n{', '.join(missing)}",
+                        parent=win)
+                    return
+            if self.save_jira_settings(cfg):
+                messagebox.showinfo("저장 완료",
+                    "✅ Jira 설정이 저장되었습니다." +
+                    ("\n\n다음 입고 CSV 저장 시 자동으로 티켓이 생성됩니다." if cfg["enabled"] else ""),
+                    parent=win)
+                win.destroy()
+
+        tk.Button(btn_frame, text="🧪 연결 테스트",
+                   command=test_connection,
+                   bg="#F0F2F5", fg="#374151",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="left")
+
+        tk.Button(btn_frame, text="💾 저장",
+                   command=do_save,
+                   bg="#1877F2", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="right")
+        tk.Button(btn_frame, text="취소",
+                   command=win.destroy,
+                   bg="white", fg="#666",
+                   font=("맑은 고딕", 9),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
+
+    def _test_jira_connection(self, cfg):
+        """Jira 연결 테스트 - 사용자 정보 가져오기"""
+        try:
+            import base64
+            domain = cfg.get("domain", "")
+            email = cfg.get("email", "")
+            token = cfg.get("api_token", "")
+            project = cfg.get("project_key", "")
+            if not all([domain, email, token, project]):
+                return False, "도메인/이메일/토큰/프로젝트 키 모두 필요합니다."
+
+            url = f"https://{domain}/rest/api/3/project/{project}"
+            auth_str = f"{email}:{token}"
+            auth_b64 = base64.b64encode(auth_str.encode()).decode()
+            req = urllib.request.Request(url, headers={
+                'Authorization': f'Basic {auth_b64}',
+                'Accept': 'application/json'
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            return True, f"연결 성공! 프로젝트: {data.get('name', project)}"
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return False, "인증 실패 - 이메일/토큰 확인하세요."
+            elif e.code == 404:
+                return False, f"프로젝트 '{project}' 못 찾음. 키 확인하세요."
+            else:
+                return False, f"HTTP 에러 {e.code}: {e.reason}"
+        except Exception as e:
+            return False, f"연결 실패: {e}"
+
+    def create_jira_ticket(self, title, description, attachment_path=None):
+        """Jira 티켓 생성 + 첨부파일 업로드.
+        Returns: (성공여부, 결과메시지/URL)"""
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled", False):
+            return None, "Jira 비활성화됨"
+
+        try:
+            import base64
+            domain = cfg["domain"]
+            email = cfg["email"]
+            token = cfg["api_token"]
+            project = cfg["project_key"]
+            assignee = cfg.get("assignee_id", "")
+            issue_type = cfg.get("issue_type", "Task")
+
+            auth_str = f"{email}:{token}"
+            auth_b64 = base64.b64encode(auth_str.encode()).decode()
+            auth_header = f'Basic {auth_b64}'
+
+            # 1. 티켓 생성
+            issue_url = f"https://{domain}/rest/api/3/issue"
+            payload = {
+                "fields": {
+                    "project": {"key": project},
+                    "summary": title,
+                    "issuetype": {"name": issue_type},
+                    "description": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [{
+                            "type": "paragraph",
+                            "content": [{
+                                "type": "text",
+                                "text": description
+                            }]
+                        }]
+                    }
+                }
+            }
+            if assignee:
+                payload["fields"]["assignee"] = {"accountId": assignee}
+
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(issue_url, data=data, headers={
+                'Authorization': auth_header,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }, method='POST')
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                result = json.loads(resp.read())
+            issue_key = result.get('key')
+            if not issue_key:
+                return False, "티켓 생성 실패 (키 없음)"
+
+            # 2. 첨부파일 업로드 (multipart/form-data)
+            if attachment_path and os.path.exists(attachment_path):
+                try:
+                    self._upload_jira_attachment(domain, auth_header, issue_key, attachment_path)
+                except Exception as e:
+                    print(f"⚠️ 첨부파일 업로드 실패: {e}")
+
+            ticket_url = f"https://{domain}/browse/{issue_key}"
+            return True, ticket_url
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode()
+            except:
+                err_body = ""
+            return False, f"HTTP {e.code}: {err_body[:200]}"
+        except Exception as e:
+            return False, f"오류: {e}"
+
+    def _upload_jira_attachment(self, domain, auth_header, issue_key, file_path):
+        """Jira 티켓에 파일 첨부 (multipart/form-data 직접 구성)"""
+        url = f"https://{domain}/rest/api/3/issue/{issue_key}/attachments"
+        boundary = '----LogiPanBoundary' + str(int(__import__('time').time()))
+        filename = os.path.basename(file_path)
+
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+
+        body = b''
+        body += f'--{boundary}\r\n'.encode()
+        body += f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode('utf-8')
+        body += b'Content-Type: text/csv\r\n\r\n'
+        body += file_content
+        body += f'\r\n--{boundary}--\r\n'.encode()
+
+        req = urllib.request.Request(url, data=body, headers={
+            'Authorization': auth_header,
+            'X-Atlassian-Token': 'no-check',
+            'Content-Type': f'multipart/form-data; boundary={boundary}',
+        }, method='POST')
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+
     def change_save_dir(self):
         """경로 변경 버튼 - 폴더 선택 다이얼로그 띄우고 변경 후 영구 저장."""
         new_dir = filedialog.askdirectory(
@@ -782,6 +1095,16 @@ class LogiPanApp:
                                 cursor="hand2")
         reset_btn.pack(side="right", anchor="se")
 
+        # [추가] Jira 설정 버튼
+        jira_btn = tk.Button(header_frame, text="⚙️ Jira",
+                              command=self.open_jira_settings,
+                              bg="#F3F4F6", fg="#9CA3AF",
+                              activebackground="#E5E7EB",
+                              font=("맑은 고딕", 8),
+                              relief="flat", padx=8, pady=4,
+                              cursor="hand2")
+        jira_btn.pack(side="right", anchor="se", padx=(0, 4))
+
         # ========== [💾 액션 버튼들 - 하단 고정] ==========
         action_outer = tk.Frame(container, bg="#F5F6F8")
         action_outer.pack(side="bottom", fill="x", padx=18, pady=(0, 14))
@@ -808,12 +1131,12 @@ class LogiPanApp:
         make_modern_btn(action_outer, "📋  입고파일 생성",
                          bg="#1877F2", hover_bg="#1864c8",
                          command=self.create_inbound_file)
-        make_modern_btn(action_outer, "📎  클립보드 복사",
-                         bg="#8B5CF6", hover_bg="#7C3AED",
-                         command=self.copy_inbound_to_clipboard)
         make_modern_btn(action_outer, "💾  CSV 저장",
                          bg="#10B981", hover_bg="#059669",
                          command=self.save_csv_in)
+        make_modern_btn(action_outer, "🎫  Jira 상신",
+                         bg="#8B5CF6", hover_bg="#7C3AED",
+                         command=self.save_csv_with_jira)
 
         # ========== [📝 리포트 카드 - 하단 (버튼 위)] ==========
         report_card_outer = tk.Frame(container, bg="#F5F6F8")
@@ -834,9 +1157,20 @@ class LogiPanApp:
         tk.Label(rh, text="📝  대조 분석 상세 리포트",
                  bg="white", fg="#111827",
                  font=("맑은 고딕", 10, "bold")).pack(side="left")
+
+        # [추가] 클립보드 복사 버튼 - 리포트 우측에
+        clip_btn = tk.Button(rh, text="📎 클립보드 복사",
+                              command=self.copy_inbound_to_clipboard,
+                              bg="#EDE9FE", fg="#6D28D9",
+                              activebackground="#DDD6FE",
+                              font=("맑은 고딕", 8, "bold"),
+                              relief="flat", padx=10, pady=3,
+                              cursor="hand2")
+        clip_btn.pack(side="right")
+
         tk.Label(rh, text="※ 엔터 2번 시 스캔수량으로 이동",
                  bg="white", fg="#9CA3AF",
-                 font=("맑은 고딕", 8)).pack(side="right")
+                 font=("맑은 고딕", 8)).pack(side="right", padx=(0, 8))
 
         self.txt_in_report = tk.Text(report_inner, height=6,
                                        font=("Consolas", 10),
@@ -863,6 +1197,7 @@ class LogiPanApp:
         brand_inner = tk.Frame(brand_card, bg="white", padx=14, pady=10)
         brand_inner.pack(side="left", fill="both", expand=True)
 
+        # 한 줄에 [브랜드명] [담당 MD] 함께
         tk.Label(brand_inner, text="🔖",
                  bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
         tk.Label(brand_inner, text="브랜드명",
@@ -872,6 +1207,16 @@ class LogiPanApp:
                                        bd=1, relief="solid",
                                        highlightthickness=0)
         self.ent_brand_in.pack(side="left", fill="x", expand=True, ipady=5)
+
+        # [추가] 담당 MD 입력
+        tk.Label(brand_inner, text="  👤 담당MD",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(12, 6))
+        self.ent_md_in = tk.Entry(brand_inner, font=("맑은 고딕", 11),
+                                    bd=1, relief="solid",
+                                    highlightthickness=0,
+                                    width=10)
+        self.ent_md_in.pack(side="left", ipady=5)
 
         # ========== [📦 브랜드 수량 + 📡 스캔 수량 - 2분할] ==========
         cols_outer = tk.Frame(container, bg="#F5F6F8")
@@ -1745,10 +2090,10 @@ class LogiPanApp:
         make_modern_btn(action_outer, "🔄  변환 실행",
                          bg="#F59E0B", hover_bg="#D97706",
                          command=self.run_master_conversion)
-        make_modern_btn(action_outer, "📎  상품관리 등록 복사",
+        make_modern_btn(action_outer, "📎  마스터 등록 복사",
                          bg="#3B82F6", hover_bg="#1D4ED8",
                          command=self.copy_master_table_to_clipboard)
-        make_modern_btn(action_outer, "📎  상품옵션 등록 복사",
+        make_modern_btn(action_outer, "📎  옵션 등록 복사",
                          bg="#10B981", hover_bg="#059669",
                          command=self.copy_option_table_to_clipboard)
 
@@ -4515,10 +4860,20 @@ class LogiPanApp:
                 thumb_label.config(image=self._board_pending_thumb_img)
                 w, h = pil_img.size
                 info_label.config(text=f"📎 첨부됨 ({w}×{h})\n전송 시 자동 업로드")
-                photo_status_frame.pack_forget()
-                photo_status_frame.pack(fill="x", pady=(0, 5))
+                # [수정] footer 첫 자식 앞에 끼워넣기
+                children = footer.winfo_children()
+                if children and children[0] != photo_status_frame:
+                    photo_status_frame.pack_forget()
+                    photo_status_frame.pack(fill="x", pady=(0, 5),
+                                             before=children[0])
+                else:
+                    photo_status_frame.pack(fill="x", pady=(0, 5))
+                print(f"✅ 썸네일 표시: {w}x{h}")
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 info_label.config(text=f"썸네일 생성 실패: {e}")
+                photo_status_frame.pack(fill="x", pady=(0, 5))
 
         def attach_image_from_clipboard():
             try:
@@ -5204,14 +5559,88 @@ class LogiPanApp:
             offset += line_len + 1  # +1 for \n
 
     def save_csv_in(self):
-        if not self.is_matched: messagebox.showwarning("주의", "결과 불일치로 저장 불가"); return
-        brand = self.ent_brand_in.get().strip(); today = datetime.now().strftime('%y%m%d')
-        df = self.last_merged_df[self.last_merged_df['수량_스캔'] > 0][['바코드', '수량_스캔']].copy(); df.columns=['바코드','수량']; df['메모']=brand
+        """CSV 파일만 저장 (Jira 안 보냄)"""
+        if not self.is_matched:
+            messagebox.showwarning("주의", "결과 불일치로 저장 불가")
+            return
+        brand = self.ent_brand_in.get().strip()
+        if not brand:
+            messagebox.showwarning("주의", "브랜드명을 입력해주세요.")
+            return
+        today = datetime.now().strftime('%y%m%d')
+        df = self.last_merged_df[self.last_merged_df['수량_스캔'] > 0][['바코드', '수량_스캔']].copy()
+        df.columns = ['바코드', '수량']
+        df['메모'] = brand
         fn = self.get_unique_filename(f"{today} {brand} 입고", "csv")
-        df.to_csv(os.path.join(self.save_dir, fn), index=False, encoding="utf-8-sig")
-        # [수정] 자동 리셋 제거 - 별도 🔄 리셋 버튼으로 분리됨
+        full_path = os.path.join(self.save_dir, fn)
+        df.to_csv(full_path, index=False, encoding="utf-8-sig")
+
         messagebox.showinfo("저장 완료",
-            f"✅ 저장됨: {fn}\n\n💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
+            f"✅ 저장됨: {fn}\n\n"
+            f"💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
+
+    def save_csv_with_jira(self):
+        """CSV 저장 + Jira 티켓 자동 상신"""
+        if not self.is_matched:
+            messagebox.showwarning("주의", "결과 불일치로 저장 불가")
+            return
+        brand = self.ent_brand_in.get().strip()
+        if not brand:
+            messagebox.showwarning("주의", "브랜드명을 입력해주세요.")
+            return
+
+        # Jira 설정 체크
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled", False):
+            if messagebox.askyesno("Jira 비활성화",
+                    "Jira 연동이 비활성화되어 있습니다.\n"
+                    "지금 설정을 열까요?"):
+                self.open_jira_settings()
+            return
+
+        # 담당 MD 입력 체크
+        md_name = self.ent_md_in.get().strip() if hasattr(self, 'ent_md_in') else ''
+        if not md_name:
+            if not messagebox.askyesno("담당 MD 미입력",
+                    "담당 MD를 입력하지 않았습니다.\n그래도 상신하시겠습니까?"):
+                return
+
+        # CSV 먼저 저장
+        today = datetime.now().strftime('%y%m%d')
+        df = self.last_merged_df[self.last_merged_df['수량_스캔'] > 0][['바코드', '수량_스캔']].copy()
+        df.columns = ['바코드', '수량']
+        df['메모'] = brand
+        fn = self.get_unique_filename(f"{today} {brand} 입고", "csv")
+        full_path = os.path.join(self.save_dir, fn)
+        df.to_csv(full_path, index=False, encoding="utf-8-sig")
+
+        # Jira 티켓 생성
+        title = f"{brand} 입고"
+        description_lines = [
+            f"[{brand}] 입고 파일 전달드립니다",
+            "",
+            f"최종 : {md_name}님 할당" if md_name else "최종 : (담당 MD 미입력)",
+        ]
+        description = "\n".join(description_lines)
+
+        ok, result = self.create_jira_ticket(title, description, full_path)
+        if ok:
+            jira_msg = f"\n\n🎫 Jira 티켓 생성됨:\n{result}"
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(result)
+                self.root.update()
+                jira_msg += "\n(URL이 클립보드에 복사됨)"
+            except: pass
+            messagebox.showinfo("Jira 상신 완료",
+                f"✅ CSV 저장 + Jira 티켓 생성 완료!\n\n"
+                f"📄 파일: {fn}{jira_msg}\n\n"
+                f"💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
+        else:
+            messagebox.showerror("Jira 상신 실패",
+                f"⚠️ CSV는 저장됐지만 Jira 티켓 생성에 실패했습니다.\n\n"
+                f"📄 파일: {fn}\n\n"
+                f"오류: {result}")
 
     def copy_inbound_to_clipboard(self):
         """[추가] 마지막에 생성한 입고파일 데이터를 클립보드에 복사 (헤더 제외, TSV)."""
@@ -5587,6 +6016,8 @@ class LogiPanApp:
         self.txt_in_master.delete("1.0", tk.END)
         self.txt_in_scan.delete("1.0", tk.END)
         self.ent_brand_in.delete(0, tk.END)
+        if hasattr(self, 'ent_md_in'):
+            self.ent_md_in.delete(0, tk.END)
         self.is_matched = False
         self.lbl_in_m.config(text="브랜드 수량 (0개)")
         self.lbl_in_s.config(text="스캔 수량 (0개)")
@@ -6249,11 +6680,11 @@ class LogiPanApp:
         # 썸네일 PhotoImage 참조 유지용
         self._pending_thumb_img = None
 
-        # [추가] 첨부 사진 미리보기 영역 (큰 박스)
+        # [추가] 첨부 사진 미리보기 영역 (큰 박스) - footer 맨 위에 위치
         photo_status_frame = tk.Frame(footer, bg="#FFF9E6", relief="flat",
                                        highlightthickness=1, highlightbackground="#FFD966")
-        photo_status_frame.pack(fill="x", pady=(0, 5))
-        # 평소엔 숨겨둠 (사진 첨부 시에만 표시)
+        # [수정] footer의 첫 번째 자식으로 배치 (다른 위젯보다 위에 보이도록)
+        # 평소엔 숨겨둠
         photo_status_frame.pack_forget()
 
         thumb_label = tk.Label(photo_status_frame, bg="#FFF9E6")
@@ -6292,13 +6723,23 @@ class LogiPanApp:
 
                 w, h = pil_img.size
                 info_label.config(text=f"📎 첨부됨 ({w}×{h})\n전송 시 자동 업로드")
-                # 박스 표시
-                photo_status_frame.pack(fill="x", pady=(0, 5), before=entry.master.winfo_children()[-1] if False else None)
-                # 위치 보정: btn_container 위에 놓이도록 다시 pack
-                photo_status_frame.pack_forget()
-                photo_status_frame.pack(fill="x", pady=(0, 5))
+
+                # [수정] footer의 모든 children보다 맨 위에 보이도록
+                children = footer.winfo_children()
+                if children and children[0] != photo_status_frame:
+                    # 첫 번째 자식 앞에 끼워넣기
+                    photo_status_frame.pack_forget()
+                    photo_status_frame.pack(fill="x", pady=(0, 5),
+                                             before=children[0])
+                else:
+                    photo_status_frame.pack(fill="x", pady=(0, 5))
+                print(f"✅ 썸네일 표시: {w}x{h}")
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 info_label.config(text=f"썸네일 생성 실패: {e}")
+                # 실패해도 박스는 보이게
+                photo_status_frame.pack(fill="x", pady=(0, 5))
 
         def attach_image_from_clipboard():
             """클립보드의 이미지를 임시 파일로 저장 후 첨부"""
@@ -6341,11 +6782,26 @@ class LogiPanApp:
             try:
                 from PIL import ImageGrab
                 img = ImageGrab.grabclipboard()
-                if img is not None and not isinstance(img, list):
-                    attach_image_from_clipboard()
-                    return "break"
-            except Exception:
-                pass
+                # [디버그] 무엇이 클립보드에 있는지 콘솔 + 화면 둘 다 출력
+                print(f"[DEBUG] Ctrl+V 감지됨. 클립보드 내용: {type(img)}, 값: {img if isinstance(img, list) else 'PIL Image'}")
+                if img is None:
+                    print("[DEBUG] 클립보드에 이미지 없음 (텍스트만 있거나 비어있음)")
+                    return None  # 텍스트는 기본 동작 (붙여넣기)
+                if isinstance(img, list):
+                    # 파일 경로 리스트
+                    print(f"[DEBUG] 파일 리스트: {img}")
+                    if img and any(str(p).lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')) for p in img):
+                        attach_image_from_clipboard()
+                        return "break"
+                    return None
+                # PIL 이미지
+                print("[DEBUG] PIL 이미지 발견. attach 호출")
+                attach_image_from_clipboard()
+                return "break"
+            except Exception as e:
+                import traceback
+                print(f"[DEBUG] on_paste 오류: {e}")
+                traceback.print_exc()
             return None
         entry.bind("<Control-v>", on_paste)
 
