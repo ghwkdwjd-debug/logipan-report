@@ -4912,12 +4912,27 @@ class LogiPanApp:
             try:
                 from PIL import ImageGrab
                 img = ImageGrab.grabclipboard()
-                if img is not None and not isinstance(img, list):
-                    attach_image_from_clipboard()
-                    return "break"
-            except: pass
+                print(f"[DEBUG board] Ctrl+V. 클립보드: {type(img)}")
+                if img is None:
+                    print("[DEBUG board] 클립보드 이미지 없음")
+                    return None
+                if isinstance(img, list):
+                    if img and any(str(p).lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')) for p in img):
+                        attach_image_from_clipboard()
+                        return "break"
+                    return None
+                print("[DEBUG board] PIL 이미지. attach")
+                attach_image_from_clipboard()
+                return "break"
+            except Exception as e:
+                import traceback
+                print(f"[DEBUG board] 오류: {e}")
+                traceback.print_exc()
             return None
+        # [수정] Text 위젯은 여러 방식으로 바인딩
         entry.bind("<Control-v>", on_paste)
+        entry.bind("<Control-V>", on_paste)
+        entry.bind("<<Paste>>", on_paste)
 
         btn_container = tk.Frame(footer, bg="white")
         btn_container.pack(fill="x")
@@ -6803,7 +6818,13 @@ class LogiPanApp:
                 print(f"[DEBUG] on_paste 오류: {e}")
                 traceback.print_exc()
             return None
+        # [수정] Text 위젯은 여러 방식으로 바인딩해야 확실함
         entry.bind("<Control-v>", on_paste)
+        entry.bind("<Control-V>", on_paste)  # 한글 입력 상태 등
+        entry.bind("<<Paste>>", on_paste)    # 가상 이벤트 (가장 확실)
+        # bind_class도 추가 - 모든 Text 위젯에 적용 (혹시 모를 경우 대비)
+        # bind_class는 부작용 있을 수 있어서 주석 처리
+        # entry.bind_class("Text", "<<Paste>>", on_paste)
 
         btn_container = tk.Frame(footer, bg="white")
         btn_container.pack(fill="x")
