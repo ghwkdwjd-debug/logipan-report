@@ -1143,9 +1143,10 @@ class LogiPanApp:
                     if self._normalize_for_match(cell_brand) != target_brand:
                         continue
                     # 담당자 매칭 (입력했을 때만)
+                    md_matched = True  # 담당자 매칭 여부 표시
                     if target_md and cell_md:
                         if self._normalize_for_match(cell_md) != target_md:
-                            continue
+                            md_matched = False
                     # URL이 http:// 또는 https://로 시작 안 하면 스킵
                     cell_url_str = str(cell_url).strip()
                     if not (cell_url_str.startswith('http://') or cell_url_str.startswith('https://')):
@@ -1158,6 +1159,7 @@ class LogiPanApp:
                         'brand': cell_brand,
                         'md': cell_md,
                         'url': cell_url_str,
+                        'md_matched': md_matched,  # 담당자도 매칭됐는지
                     })
             except Exception as e:
                 print(f"⚠️ {sheet_display_name} 검색 오류: {e}")
@@ -1168,6 +1170,169 @@ class LogiPanApp:
         if progress_callback:
             progress_callback(f"✅ 검색 완료 ({len(results)}건)")
         return results
+
+    def search_sheet_smart(self, brand_name, md_name=None, progress_callback=None):
+        """스마트 검색: 정확매칭 우선 → 0개면 브랜드명만으로 fallback.
+        Returns: (results, mode)
+            mode: 'strict' (담당자까지 매칭) | 'brand_only' (브랜드만 매칭) | 'none' (0개)
+        """
+        # 1차: 브랜드+담당자 모두 매칭된 결과만
+        all_results = self.search_sheet_for_brand(
+            brand_name, md_name=md_name, progress_callback=progress_callback)
+        strict = [r for r in all_results if r.get('md_matched', True)]
+        if strict:
+            return strict, 'strict'
+        # 0개면 브랜드만 매칭된 결과로 fallback
+        if all_results:
+            if progress_callback:
+                progress_callback("🔁 담당자 미매칭 - 브랜드명만으로 재검색")
+            return all_results, 'brand_only'
+        return [], 'none'
+
+    # ========== [MD ↔ Slack 매핑 - Firestore 공유] ==========
+    def load_md_mapping(self):
+        """Firestore에서 MD 매핑 가져오기 (캐시 우선).
+        Returns: {md_name: slack_member_id, ...}
+        """
+        if hasattr(self, '_md_mapping_cache') and self._md_mapping_cache is not None:
+            return self._md_mapping_cache
+        try:
+            if not hasattr(self, 'db') or self.db is None:
+                self._md_mapping_cache = {}
+                return {}
+            doc = self.db.collection('config_md_mapping').document('list').get()
+            if doc.exists:
+                data = doc.to_dict() or {}
+                mapping = data.get('mapping', {})
+                if not isinstance(mapping, dict):
+                    mapping = {}
+                self._md_mapping_cache = mapping
+                return mapping
+        except Exception as e:
+            print(f"⚠️ MD 매핑 로드 실패: {e}")
+        self._md_mapping_cache = {}
+        return {}
+
+    def save_md_mapping(self, mapping):
+        """Firestore에 MD 매핑 저장.
+        Args:
+            mapping: {md_name: slack_member_id, ...}
+        """
+        try:
+            if not hasattr(self, 'db') or self.db is None:
+                messagebox.showerror("저장 실패",
+                    "Firestore 연결이 없어 저장할 수 없습니다.")
+                return False
+            self.db.collection('config_md_mapping').document('list').set({
+                'mapping': mapping,
+                'updated_at': firestore.SERVER_TIMESTAMP,
+                'updated_by': getattr(self, 'current_user', '관리자'),
+            })
+            self._md_mapping_cache = mapping
+            return True
+        except Exception as e:
+            messagebox.showerror("저장 실패", f"MD 매핑 저장 실패: {e}")
+            return False
+
+    def open_md_mapping_dialog(self, parent_win, edit_name=None, on_done=None):
+        """MD 매핑 추가/수정 팝업"""
+        win = tk.Toplevel(parent_win)
+        is_edit = edit_name is not None
+        win.title("✏️ MD 수정" if is_edit else "➕ MD 추가")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 460, 280)
+        except Exception:
+            win.geometry("460x280")
+        win.transient(parent_win)
+        win.grab_set()
+
+        mapping = dict(self.load_md_mapping())
+        existing_id = mapping.get(edit_name, '') if is_edit else ''
+
+        # 카드
+        card = tk.Frame(win, bg="white",
+                          highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=14)
+        tk.Frame(card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+        inner = tk.Frame(card, bg="white", padx=14, pady=12)
+        inner.pack(side="left", fill="both", expand=True)
+
+        # MD 이름
+        tk.Label(inner, text="MD 이름", bg="white",
+                 font=("맑은 고딕", 9, "bold"),
+                 fg="#374151").pack(anchor="w")
+        ent_name = tk.Entry(inner, font=("맑은 고딕", 10),
+                              bd=1, relief="solid",
+                              highlightthickness=0)
+        ent_name.pack(fill="x", ipady=5, pady=(2, 0))
+        ent_name.insert(0, edit_name or '')
+        if is_edit:
+            ent_name.config(state="readonly")  # 수정 시 이름 변경 불가
+        tk.Label(inner,
+                 text="시트의 '브랜드 담당자' 컬럼에 적힌 이름과 정확히 일치해야 합니다.",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8), wraplength=400, justify="left").pack(anchor="w")
+
+        # Slack 멤버 ID
+        tk.Label(inner, text="\nSlack 멤버 ID", bg="white",
+                 font=("맑은 고딕", 9, "bold"),
+                 fg="#374151").pack(anchor="w")
+        ent_id = tk.Entry(inner, font=("맑은 고딕", 10),
+                            bd=1, relief="solid",
+                            highlightthickness=0)
+        ent_id.pack(fill="x", ipady=5, pady=(2, 0))
+        ent_id.insert(0, existing_id)
+        tk.Label(inner,
+                 text="예: U01ABC123XYZ (Slack 프로필 → ⋮ → '멤버 ID 복사')",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8), wraplength=400, justify="left").pack(anchor="w")
+
+        # 결과 메시지
+        msg_lbl = tk.Label(inner, text="", bg="white",
+                             font=("맑은 고딕", 8),
+                             wraplength=400, justify="left")
+        msg_lbl.pack(fill="x", pady=(6, 0))
+
+        # 버튼
+        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame.pack(fill="x", padx=18, pady=(0, 14))
+
+        def do_save():
+            name = ent_name.get().strip()
+            slack_id = ent_id.get().strip()
+            if not name:
+                msg_lbl.config(text="❌ MD 이름을 입력하세요.", fg="#DC2626")
+                return
+            if not slack_id:
+                msg_lbl.config(text="❌ Slack 멤버 ID를 입력하세요.", fg="#DC2626")
+                return
+            # Slack ID 형식 간단 검증 (U나 W로 시작 + 영숫자)
+            if not re.match(r'^[UW][A-Z0-9]{5,}$', slack_id):
+                msg_lbl.config(
+                    text="⚠️ Slack 멤버 ID 형식이 이상합니다. (보통 U로 시작)",
+                    fg="#D97706")
+                # 경고만 하고 저장은 허용
+            current = dict(self.load_md_mapping())
+            current[name] = slack_id
+            if self.save_md_mapping(current):
+                if on_done:
+                    on_done()
+                win.destroy()
+
+        tk.Button(btn_frame, text="💾 저장",
+                   command=do_save,
+                   bg="#3B82F6", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="right")
+        tk.Button(btn_frame, text="취소",
+                   command=win.destroy,
+                   bg="white", fg="#666",
+                   font=("맑은 고딕", 9),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
 
     def open_sheet_match_picker(self, brand_name, results, on_pick):
         """다중 매칭 시 선택 팝업.
@@ -1289,9 +1454,9 @@ class LogiPanApp:
         win.title("💬 Slack 알림 설정")
         win.configure(bg="#F5F6F8")
         try:
-            self.position_popup(win, 540, 760)
+            self.position_popup(win, 560, 900)
         except Exception:
-            win.geometry("540x760")
+            win.geometry("560x900")
         win.transient(self.root)
         win.grab_set()
 
@@ -1344,6 +1509,22 @@ class LogiPanApp:
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8),
                  anchor="w").pack(fill="x")
+
+        # CC 멘션 (선택)
+        tk.Label(inner, text="\nCC 멘션 (선택)", bg="white",
+                 font=("맑은 고딕", 9, "bold"),
+                 fg="#374151").pack(anchor="w")
+        ent_cc = tk.Entry(inner, font=("맑은 고딕", 10),
+                            bd=1, relief="solid",
+                            highlightthickness=0)
+        ent_cc.pack(fill="x", ipady=4, pady=(2, 0))
+        ent_cc.insert(0, s.get("cc_mention", ""))
+        tk.Label(inner,
+                 text=("모든 메시지 끝에 자동으로 'CC. ...' 줄 추가\n"
+                       "사용자그룹: <!subteam^S09B9UPG4UV>  /  여러명: <@U01> <@U02>"),
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8),
+                 anchor="w", justify="left").pack(fill="x")
 
         # 활성화
         enabled_var = tk.BooleanVar(value=s.get("enabled", False))
@@ -1611,6 +1792,116 @@ class LogiPanApp:
                    relief="flat", padx=8, pady=2,
                    cursor="hand2").pack(side="left")
 
+        # ========== [MD ↔ Slack 매핑 섹션] ==========
+        md_card = tk.Frame(win, bg="white",
+                             highlightthickness=1, highlightbackground="#E5E7EB")
+        md_card.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+        tk.Frame(md_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+        md_inner = tk.Frame(md_card, bg="white", padx=14, pady=10)
+        md_inner.pack(side="left", fill="both", expand=True)
+
+        # 헤더
+        md_head = tk.Frame(md_inner, bg="white")
+        md_head.pack(fill="x")
+        tk.Label(md_head, text="👥 MD 슬랙 매핑",
+                 bg="white", fg="#1A1A1A",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left")
+        # 활성화
+        md_mention_var = tk.BooleanVar(value=s.get("md_mention_enabled", False))
+        tk.Checkbutton(md_head, text="멘션 활성화",
+                        variable=md_mention_var, bg="white",
+                        font=("맑은 고딕", 9),
+                        fg="#3B82F6").pack(side="right")
+
+        tk.Label(md_inner,
+                 text="MD 이름 → Slack 멤버 ID 매핑. 매핑된 사람은 Slack 메시지에서 진짜 멘션 알림을 받습니다.",
+                 bg="white", fg="#6B7280",
+                 font=("맑은 고딕", 8),
+                 wraplength=460, justify="left", anchor="w").pack(fill="x", pady=(2, 6))
+
+        # 등록된 매핑 리스트
+        md_list_outer = tk.Frame(md_inner, bg="#F9FAFB",
+                                    highlightthickness=1, highlightbackground="#E5E7EB")
+        md_list_outer.pack(fill="both", expand=True, pady=(0, 6))
+
+        md_list_canvas = tk.Canvas(md_list_outer, bg="#F9FAFB",
+                                      highlightthickness=0, height=120)
+        md_list_canvas.pack(side="left", fill="both", expand=True)
+        md_list_scroll = tk.Scrollbar(md_list_outer, command=md_list_canvas.yview)
+        md_list_scroll.pack(side="right", fill="y")
+        md_list_canvas.configure(yscrollcommand=md_list_scroll.set)
+        md_list_inner = tk.Frame(md_list_canvas, bg="#F9FAFB")
+        md_list_canvas.create_window((0, 0), window=md_list_inner, anchor="nw")
+
+        def refresh_md_list():
+            for w in md_list_inner.winfo_children():
+                w.destroy()
+            mapping = self.load_md_mapping()
+            if not mapping:
+                tk.Label(md_list_inner,
+                         text="등록된 MD가 없습니다.\n[➕ MD 추가] 버튼으로 등록하세요.",
+                         bg="#F9FAFB", fg="#9CA3AF",
+                         font=("맑은 고딕", 9), justify="center").pack(pady=20)
+            else:
+                for md_name in sorted(mapping.keys()):
+                    slack_id = mapping[md_name]
+                    row = tk.Frame(md_list_inner, bg="white",
+                                     highlightthickness=1,
+                                     highlightbackground="#E5E7EB")
+                    row.pack(fill="x", padx=2, pady=2)
+                    info = tk.Frame(row, bg="white")
+                    info.pack(side="left", fill="x", expand=True, padx=8, pady=6)
+                    tk.Label(info, text=f"👤 {md_name}",
+                             bg="white", fg="#1A1A1A",
+                             font=("맑은 고딕", 9, "bold"),
+                             anchor="w").pack(fill="x")
+                    tk.Label(info, text=f"→ {slack_id}",
+                             bg="white", fg="#3B82F6",
+                             font=("맑은 고딕", 8),
+                             anchor="w").pack(fill="x")
+                    btn_box = tk.Frame(row, bg="white")
+                    btn_box.pack(side="right", padx=4)
+                    def make_edit(name):
+                        return lambda: self.open_md_mapping_dialog(
+                            win, edit_name=name, on_done=refresh_md_list)
+                    def make_delete(name):
+                        def _del():
+                            current = dict(self.load_md_mapping())
+                            if name in current:
+                                if messagebox.askyesno(
+                                        "삭제 확인",
+                                        f"'{name}' 매핑을 제거할까요?",
+                                        parent=win):
+                                    del current[name]
+                                    if self.save_md_mapping(current):
+                                        refresh_md_list()
+                        return _del
+                    tk.Button(btn_box, text="✏️",
+                               command=make_edit(md_name),
+                               bg="white", fg="#3B82F6",
+                               font=("맑은 고딕", 9),
+                               relief="flat", cursor="hand2",
+                               width=2).pack(side="left")
+                    tk.Button(btn_box, text="🗑️",
+                               command=make_delete(md_name),
+                               bg="white", fg="#DC2626",
+                               font=("맑은 고딕", 9),
+                               relief="flat", cursor="hand2",
+                               width=2).pack(side="left")
+            md_list_inner.update_idletasks()
+            md_list_canvas.configure(scrollregion=md_list_canvas.bbox("all"))
+
+        refresh_md_list()
+
+        # MD 추가 버튼
+        tk.Button(md_inner, text="➕ MD 추가",
+                   command=lambda: self.open_md_mapping_dialog(
+                       win, on_done=refresh_md_list),
+                   bg="#3B82F6", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=12, pady=5,
+                   cursor="hand2").pack(anchor="w")
+
         # 버튼
         btn_frame = tk.Frame(win, bg="#F5F6F8")
         btn_frame.pack(fill="x", padx=18, pady=(0, 14))
@@ -1619,8 +1910,10 @@ class LogiPanApp:
             return {
                 "webhook_url": ent_url.get().strip(),
                 "channel_name": ent_channel.get().strip(),
+                "cc_mention": ent_cc.get().strip(),
                 "enabled": enabled_var.get(),
                 "sheet_search_enabled": sheet_enabled_var.get(),
+                "md_mention_enabled": md_mention_var.get(),
             }
 
         def test_connection():
@@ -7058,6 +7351,7 @@ class LogiPanApp:
                     # [추가] 구글시트 검색 (활성화된 경우만)
                     sheet_url = None
                     sheet_match_info = None
+                    sheet_match_mode = 'none'  # strict / brand_only / none
                     try:
                         if slack_cfg.get("sheet_search_enabled", False):
                             sheet_list = self.load_sheet_list()
@@ -7085,10 +7379,11 @@ class LogiPanApp:
                                     except Exception:
                                         pass
                                 try:
-                                    matches = self.search_sheet_for_brand(
+                                    matches, sheet_match_mode = self.search_sheet_smart(
                                         brand, md_name=md_name, progress_callback=_cb)
                                 except Exception as e:
                                     matches = []
+                                    sheet_match_mode = 'none'
                                     print(f"⚠️ 시트 검색 오류: {e}")
                                 progress.destroy()
 
@@ -7108,6 +7403,28 @@ class LogiPanApp:
                     except Exception as e:
                         print(f"⚠️ 시트 검색 처리 오류: {e}")
 
+                    # [추가] MD 멘션 처리 (활성화된 경우)
+                    mention_text = None
+                    try:
+                        if slack_cfg.get("md_mention_enabled", False) and md_name:
+                            mapping = self.load_md_mapping()
+                            slack_id = mapping.get(md_name)
+                            if slack_id:
+                                # 정확 매칭 안 됐을 때 부분 매칭 시도 (옵션)
+                                pass
+                            if not slack_id:
+                                # 부분 매칭: 입력값이 매핑 키에 포함되거나 그 반대
+                                norm_input = self._normalize_for_match(md_name)
+                                for k, v in mapping.items():
+                                    nk = self._normalize_for_match(k)
+                                    if nk == norm_input or nk in norm_input or norm_input in nk:
+                                        slack_id = v
+                                        break
+                            if slack_id:
+                                mention_text = f"<@{slack_id}>"
+                    except Exception as e:
+                        print(f"⚠️ 멘션 처리 오류: {e}")
+
                     # Slack 메시지 - 간단한 카드 스타일
                     slack_blocks = [
                         {
@@ -7120,15 +7437,29 @@ class LogiPanApp:
                         }
                     ]
 
-                    # 특이사항 + 시트 링크 + Jira 링크를 한 섹션에
+                    # 본문: 담당자 + 특이사항 + 시트 링크 + Jira 링크
                     body_lines = []
+                    if mention_text:
+                        body_lines.append(f"*👤 담당:* {mention_text}")
+                    elif md_name:
+                        body_lines.append(f"*👤 담당:* {md_name}")
                     if note_text:
                         body_lines.append(f"*📝 특이사항:* {note_text}")
                     if sheet_url:
-                        # 시트명을 링크 텍스트로 사용 (없으면 "시트 보기")
+                        # 시트명을 링크 텍스트로 사용
                         link_text = brand if sheet_match_info else "시트 보기"
-                        body_lines.append(f"📋 *브랜드 시트:* <{sheet_url}|{link_text} 보기>")
+                        sheet_line = f"📋 *브랜드 시트:* <{sheet_url}|{link_text} 보기>"
+                        # 담당자 매칭이 안 된 경우(brand_only fallback) 표시
+                        if sheet_match_mode == 'brand_only':
+                            sheet_line += "  _(담당자 미매칭)_"
+                        body_lines.append(sheet_line)
                     body_lines.append(f"🔗 *Jira 티켓:* <{result}|티켓 보기>")
+
+                    # CC 멘션 (활성화/비활성화 상관없이 설정값에 있으면 추가)
+                    cc_text = slack_cfg.get("cc_mention", "").strip()
+                    if cc_text:
+                        body_lines.append("")  # 빈 줄
+                        body_lines.append(f"CC. {cc_text}")
 
                     slack_blocks.append({
                         "type": "section",
@@ -7142,8 +7473,13 @@ class LogiPanApp:
                     ok_s, msg_s = self.send_slack_message(fallback_text, blocks=slack_blocks)
                     if ok_s:
                         slack_msg = "\n💬 슬랙 알림 전송됨"
+                        extras = []
                         if sheet_url:
-                            slack_msg += " (📋 시트 링크 포함)"
+                            extras.append("📋 시트 링크")
+                        if mention_text:
+                            extras.append("👤 멘션")
+                        if extras:
+                            slack_msg += f" ({' + '.join(extras)} 포함)"
                     else:
                         slack_msg = f"\n⚠️ 슬랙 전송 실패: {msg_s}"
             except Exception as e:
