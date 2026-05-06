@@ -1454,29 +1454,68 @@ class LogiPanApp:
         win.title("💬 Slack 알림 설정")
         win.configure(bg="#F5F6F8")
         try:
-            self.position_popup(win, 560, 900)
+            self.position_popup(win, 560, 740)
         except Exception:
-            win.geometry("560x900")
+            win.geometry("560x740")
         win.transient(self.root)
         win.grab_set()
+
+        # ===== 스크롤 컨테이너 =====
+        # 외부: 스크롤바 + 캔버스
+        scroll_outer = tk.Frame(win, bg="#F5F6F8")
+        scroll_outer.pack(fill="both", expand=True)
+        scroll_canvas = tk.Canvas(scroll_outer, bg="#F5F6F8",
+                                     highlightthickness=0, bd=0)
+        scroll_canvas.pack(side="left", fill="both", expand=True)
+        scroll_bar = tk.Scrollbar(scroll_outer, command=scroll_canvas.yview)
+        scroll_bar.pack(side="right", fill="y")
+        scroll_canvas.configure(yscrollcommand=scroll_bar.set)
+
+        # 내부: 실제 위젯이 들어갈 프레임 (이게 곧 'win'을 대체)
+        win_body = tk.Frame(scroll_canvas, bg="#F5F6F8")
+        body_window = scroll_canvas.create_window((0, 0), window=win_body, anchor="nw")
+
+        def _on_body_resize(event):
+            scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+        def _on_canvas_resize(event):
+            # 캔버스 폭에 맞춰 내부 프레임 폭 조정
+            scroll_canvas.itemconfig(body_window, width=event.width)
+        win_body.bind("<Configure>", _on_body_resize)
+        scroll_canvas.bind("<Configure>", _on_canvas_resize)
+
+        # 마우스 휠 스크롤
+        def _on_mousewheel(event):
+            try:
+                # Windows
+                scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # 팝업 닫힐 때 전역 바인딩 해제
+        def _cleanup_scroll(event=None):
+            try:
+                scroll_canvas.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
+        win.bind("<Destroy>", _cleanup_scroll)
 
         s = self.load_slack_settings()
 
         # 헤더
-        head = tk.Frame(win, bg="#F5F6F8")
+        head = tk.Frame(win_body, bg="#F5F6F8")
         head.pack(fill="x", padx=18, pady=(14, 4))
         tk.Label(head, text="💬", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
         tk.Label(head, text="Slack 알림 설정",
                  font=("맑은 고딕", 14, "bold"),
                  bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
-        tk.Label(win, text="Jira 상신 시 슬랙 채널에 자동 알림",
+        tk.Label(win_body, text="Jira 상신 시 슬랙 채널에 자동 알림",
                  bg="#F5F6F8", fg="#666",
                  font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
 
         # 카드
-        card = tk.Frame(win, bg="white",
+        card = tk.Frame(win_body, bg="white",
                           highlightthickness=1, highlightbackground="#E5E7EB")
-        card.pack(fill="both", expand=True, padx=18, pady=12)
+        card.pack(fill="x", padx=18, pady=12)
         tk.Frame(card, bg="#4A154B", width=4).pack(side="left", fill="y")  # Slack 색상
         inner = tk.Frame(card, bg="white", padx=14, pady=12)
         inner.pack(side="left", fill="both", expand=True)
@@ -1542,9 +1581,9 @@ class LogiPanApp:
         result_lbl.pack(fill="x", pady=(6, 0))
 
         # ========== [구글시트 관리 섹션] ==========
-        sheet_card = tk.Frame(win, bg="white",
+        sheet_card = tk.Frame(win_body, bg="white",
                                 highlightthickness=1, highlightbackground="#E5E7EB")
-        sheet_card.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+        sheet_card.pack(fill="x", padx=18, pady=(0, 12))
         tk.Frame(sheet_card, bg="#16A34A", width=4).pack(side="left", fill="y")
         sheet_inner = tk.Frame(sheet_card, bg="white", padx=14, pady=10)
         sheet_inner.pack(side="left", fill="both", expand=True)
@@ -1793,9 +1832,9 @@ class LogiPanApp:
                    cursor="hand2").pack(side="left")
 
         # ========== [MD ↔ Slack 매핑 섹션] ==========
-        md_card = tk.Frame(win, bg="white",
+        md_card = tk.Frame(win_body, bg="white",
                              highlightthickness=1, highlightbackground="#E5E7EB")
-        md_card.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+        md_card.pack(fill="x", padx=18, pady=(0, 12))
         tk.Frame(md_card, bg="#3B82F6", width=4).pack(side="left", fill="y")
         md_inner = tk.Frame(md_card, bg="white", padx=14, pady=10)
         md_inner.pack(side="left", fill="both", expand=True)
@@ -1903,7 +1942,7 @@ class LogiPanApp:
                    cursor="hand2").pack(anchor="w")
 
         # 버튼
-        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame = tk.Frame(win_body, bg="#F5F6F8")
         btn_frame.pack(fill="x", padx=18, pady=(0, 14))
 
         def collect():
@@ -1973,29 +2012,62 @@ class LogiPanApp:
         win.title("⚙️ Jira 연동 설정")
         win.configure(bg="#F5F6F8")
         try:
-            self.position_popup(win, 480, 600)
+            self.position_popup(win, 480, 620)
         except Exception:
-            win.geometry("480x600")
+            win.geometry("480x620")
         win.transient(self.root)
         win.grab_set()
+
+        # ===== 스크롤 컨테이너 =====
+        scroll_outer = tk.Frame(win, bg="#F5F6F8")
+        scroll_outer.pack(fill="both", expand=True)
+        scroll_canvas = tk.Canvas(scroll_outer, bg="#F5F6F8",
+                                     highlightthickness=0, bd=0)
+        scroll_canvas.pack(side="left", fill="both", expand=True)
+        scroll_bar = tk.Scrollbar(scroll_outer, command=scroll_canvas.yview)
+        scroll_bar.pack(side="right", fill="y")
+        scroll_canvas.configure(yscrollcommand=scroll_bar.set)
+        win_body = tk.Frame(scroll_canvas, bg="#F5F6F8")
+        body_window = scroll_canvas.create_window((0, 0), window=win_body, anchor="nw")
+
+        def _on_body_resize(event):
+            scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+        def _on_canvas_resize(event):
+            scroll_canvas.itemconfig(body_window, width=event.width)
+        win_body.bind("<Configure>", _on_body_resize)
+        scroll_canvas.bind("<Configure>", _on_canvas_resize)
+
+        # 마우스 휠
+        def _on_mousewheel(event):
+            try:
+                scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _cleanup_scroll(event=None):
+            try:
+                scroll_canvas.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
+        win.bind("<Destroy>", _cleanup_scroll)
 
         s = self.load_jira_settings()
 
         # 헤더
-        head = tk.Frame(win, bg="#F5F6F8")
+        head = tk.Frame(win_body, bg="#F5F6F8")
         head.pack(fill="x", padx=18, pady=(14, 4))
         tk.Label(head, text="⚙️", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
         tk.Label(head, text="Jira 연동 설정",
                  font=("맑은 고딕", 14, "bold"),
                  bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
-        tk.Label(win, text="입고 CSV 저장 시 자동으로 Jira 티켓 생성 (CSV 첨부)",
+        tk.Label(win_body, text="입고 CSV 저장 시 자동으로 Jira 티켓 생성 (CSV 첨부)",
                  bg="#F5F6F8", fg="#666",
                  font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
 
         # 카드
-        card = tk.Frame(win, bg="white",
+        card = tk.Frame(win_body, bg="white",
                           highlightthickness=1, highlightbackground="#E5E7EB")
-        card.pack(fill="both", expand=True, padx=18, pady=12)
+        card.pack(fill="x", padx=18, pady=12)
         tk.Frame(card, bg="#3B82F6", width=4).pack(side="left", fill="y")
         inner = tk.Frame(card, bg="white", padx=14, pady=12)
         inner.pack(side="left", fill="both", expand=True)
@@ -2056,7 +2128,7 @@ class LogiPanApp:
         result_lbl.pack(fill="x", pady=(8, 0))
 
         # 버튼
-        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame = tk.Frame(win_body, bg="#F5F6F8")
         btn_frame.pack(fill="x", padx=18, pady=(0, 14))
 
         def collect():
