@@ -1598,6 +1598,34 @@ class LogiPanApp:
                                     width=10)
         self.ent_md_in.pack(side="left", ipady=5)
 
+        # [추가] 특이사항 입력 (Slack 알림 전용)
+        tk.Label(brand_inner, text="  📝 특이사항",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(12, 6))
+        self.ent_note_in = tk.Entry(brand_inner, font=("맑은 고딕", 11),
+                                      bd=1, relief="solid",
+                                      highlightthickness=0,
+                                      fg="#9CA3AF")
+        self.ent_note_in.pack(side="left", fill="x", expand=True, ipady=5)
+
+        # placeholder 처리
+        self._note_placeholder = "Slack 알림용 - 특이사항 간단하게 (선택)"
+        self.ent_note_in.insert(0, self._note_placeholder)
+
+        def _note_focus_in(event):
+            if self.ent_note_in.get() == self._note_placeholder:
+                self.ent_note_in.delete(0, tk.END)
+                self.ent_note_in.config(fg="#111827")
+
+        def _note_focus_out(event):
+            if not self.ent_note_in.get().strip():
+                self.ent_note_in.delete(0, tk.END)
+                self.ent_note_in.insert(0, self._note_placeholder)
+                self.ent_note_in.config(fg="#9CA3AF")
+
+        self.ent_note_in.bind("<FocusIn>", _note_focus_in)
+        self.ent_note_in.bind("<FocusOut>", _note_focus_out)
+
         # ========== [📦 브랜드 수량 + 📡 스캔 수량 - 2분할] ==========
         cols_outer = tk.Frame(container, bg="#F5F6F8")
         cols_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
@@ -6183,39 +6211,42 @@ class LogiPanApp:
             try:
                 slack_cfg = self.load_slack_settings()
                 if slack_cfg.get("enabled", False):
-                    total_qty = int(df['수량'].sum())
-                    unique_count = len(df)
-                    today = datetime.now().strftime('%y%m%d')
                     user_name = getattr(self, 'current_user', '관리자')
-                    # Slack 메시지 - blocks 포맷 (예쁜 카드 스타일)
+
+                    # 특이사항 가져오기 (placeholder는 무시)
+                    note_text = ""
+                    if hasattr(self, 'ent_note_in'):
+                        raw_note = self.ent_note_in.get().strip()
+                        if raw_note and raw_note != getattr(self, '_note_placeholder', ''):
+                            note_text = raw_note
+
+                    # Slack 메시지 - 간단한 카드 스타일
                     slack_blocks = [
                         {
                             "type": "header",
                             "text": {
                                 "type": "plain_text",
-                                "text": f"🎫 {brand} 입고 티켓 상신",
+                                "text": f"📦 [{brand}] 입고 완료했습니다.",
                                 "emoji": True
-                            }
-                        },
-                        {
-                            "type": "section",
-                            "fields": [
-                                {"type": "mrkdwn", "text": f"*📅 작업일*\n{today}"},
-                                {"type": "mrkdwn", "text": f"*👤 작성자*\n{user_name}"},
-                                {"type": "mrkdwn", "text": f"*🎯 담당 MD*\n{md_name or '미입력'}"},
-                                {"type": "mrkdwn", "text": f"*📊 수량*\n{unique_count}종 / {total_qty}개"},
-                            ]
-                        },
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"🔗 *Jira 티켓:* <{result}|티켓 보기>"
                             }
                         }
                     ]
-                    fallback_text = (f"🎫 {brand} 입고 티켓 상신 | {user_name} | "
-                                      f"{unique_count}종/{total_qty}개 | {result}")
+
+                    # 특이사항 + Jira 링크를 한 섹션에
+                    body_lines = []
+                    if note_text:
+                        body_lines.append(f"*📝 특이사항:* {note_text}")
+                    body_lines.append(f"🔗 *Jira 티켓:* <{result}|티켓 보기>")
+
+                    slack_blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "\n".join(body_lines)
+                        }
+                    })
+
+                    fallback_text = f"📦 [{brand}] 입고 완료했습니다. | {result}"
                     ok_s, msg_s = self.send_slack_message(fallback_text, blocks=slack_blocks)
                     if ok_s:
                         slack_msg = "\n💬 슬랙 알림 전송됨"
@@ -6610,6 +6641,11 @@ class LogiPanApp:
         self.ent_brand_in.delete(0, tk.END)
         if hasattr(self, 'ent_md_in'):
             self.ent_md_in.delete(0, tk.END)
+        # [추가] 특이사항 칸 리셋 + placeholder 복원
+        if hasattr(self, 'ent_note_in'):
+            self.ent_note_in.delete(0, tk.END)
+            self.ent_note_in.insert(0, getattr(self, '_note_placeholder', ''))
+            self.ent_note_in.config(fg="#9CA3AF")
         self.is_matched = False
         self.lbl_in_m.config(text="브랜드 수량 (0개)")
         self.lbl_in_s.config(text="스캔 수량 (0개)")
