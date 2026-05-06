@@ -1169,6 +1169,120 @@ class LogiPanApp:
             progress_callback(f"✅ 검색 완료 ({len(results)}건)")
         return results
 
+    def open_sheet_match_picker(self, brand_name, results, on_pick):
+        """다중 매칭 시 선택 팝업.
+        Args:
+            brand_name: 검색한 브랜드명
+            results: search_sheet_for_brand 결과 리스트
+            on_pick: 선택 콜백 — on_pick(picked_dict | None)
+                None이면 시트 링크 없이 진행
+        """
+        win = tk.Toplevel(self.root)
+        win.title("🔍 시트 행 선택")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 600, 480)
+        except Exception:
+            win.geometry("600x480")
+        win.transient(self.root)
+        win.grab_set()
+
+        # 헤더
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        tk.Label(head, text="🔍", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text=f"'{brand_name}' 매칭 결과 {len(results)}건",
+                 font=("맑은 고딕", 13, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+        tk.Label(win, text="Slack 알림에 첨부할 시트 행을 선택하세요.",
+                 bg="#F5F6F8", fg="#666",
+                 font=("맑은 고딕", 9)).pack(padx=18, anchor="w")
+
+        # 카드 (스크롤 영역)
+        card = tk.Frame(win, bg="white",
+                          highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=12)
+
+        canvas = tk.Canvas(card, bg="white", highlightthickness=0)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll = tk.Scrollbar(card, command=canvas.yview)
+        scroll.pack(side="right", fill="y")
+        canvas.configure(yscrollcommand=scroll.set)
+        list_inner = tk.Frame(canvas, bg="white")
+        canvas.create_window((0, 0), window=list_inner, anchor="nw")
+
+        picked_var = {"value": None}
+
+        def make_pick(item):
+            def _pick():
+                picked_var["value"] = item
+                win.destroy()
+            return _pick
+
+        for r in results:
+            row = tk.Frame(list_inner, bg="white",
+                             highlightthickness=1, highlightbackground="#E5E7EB",
+                             cursor="hand2")
+            row.pack(fill="x", padx=8, pady=4)
+
+            content = tk.Frame(row, bg="white", padx=10, pady=8)
+            content.pack(fill="x")
+
+            # 1줄: 시트명 + 행번호
+            line1 = tk.Frame(content, bg="white")
+            line1.pack(fill="x")
+            tk.Label(line1, text=f"📋 {r['sheet_name']}",
+                     bg="white", fg="#1A1A1A",
+                     font=("맑은 고딕", 10, "bold")).pack(side="left")
+            tk.Label(line1, text=f"  행 {r['row_index']}",
+                     bg="white", fg="#9CA3AF",
+                     font=("맑은 고딕", 9)).pack(side="left")
+
+            # 2줄: 브랜드 / 담당자
+            line2 = tk.Frame(content, bg="white")
+            line2.pack(fill="x", pady=(2, 0))
+            tk.Label(line2, text=f"🏷️ {r['brand']}",
+                     bg="white", fg="#374151",
+                     font=("맑은 고딕", 9)).pack(side="left")
+            tk.Label(line2, text=f"   👤 {r['md'] or '(담당자 정보 없음)'}",
+                     bg="white", fg="#374151",
+                     font=("맑은 고딕", 9)).pack(side="left")
+
+            # 3줄: URL 미리보기
+            url_short = r['url']
+            if len(url_short) > 70:
+                url_short = url_short[:65] + "..."
+            tk.Label(content, text=f"🔗 {url_short}",
+                     bg="white", fg="#3B82F6",
+                     font=("맑은 고딕", 8)).pack(anchor="w", pady=(2, 0))
+
+            # 선택 버튼
+            tk.Button(content, text="✓ 이 행 선택",
+                       command=make_pick(r),
+                       bg="#16A34A", fg="white",
+                       font=("맑은 고딕", 9, "bold"),
+                       relief="flat", padx=10, pady=4,
+                       cursor="hand2").pack(anchor="e", pady=(4, 0))
+
+        list_inner.update_idletasks()
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+        # 하단 버튼
+        bottom = tk.Frame(win, bg="#F5F6F8")
+        bottom.pack(fill="x", padx=18, pady=(0, 14))
+
+        tk.Button(bottom, text="시트 링크 없이 진행",
+                   command=lambda: (picked_var.update(value=None), win.destroy()),
+                   bg="white", fg="#666",
+                   font=("맑은 고딕", 9),
+                   relief="flat", padx=12, pady=6,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="left")
+
+        # 모달 대기
+        win.wait_window()
+        on_pick(picked_var["value"])
+
     def open_slack_settings(self):
         """Slack 연동 설정 팝업"""
         win = tk.Toplevel(self.root)
@@ -6941,6 +7055,59 @@ class LogiPanApp:
                         if raw_note and raw_note != getattr(self, '_note_placeholder', ''):
                             note_text = raw_note
 
+                    # [추가] 구글시트 검색 (활성화된 경우만)
+                    sheet_url = None
+                    sheet_match_info = None
+                    try:
+                        if slack_cfg.get("sheet_search_enabled", False):
+                            sheet_list = self.load_sheet_list()
+                            if sheet_list and self.is_google_authed():
+                                # 검색 진행 표시
+                                progress = tk.Toplevel(self.root)
+                                progress.title("시트 검색 중")
+                                progress.configure(bg="#F5F6F8")
+                                try:
+                                    self.position_popup(progress, 360, 100)
+                                except Exception:
+                                    progress.geometry("360x100")
+                                progress.transient(self.root)
+                                tk.Label(progress, text=f"🔍 '{brand}' 시트 검색 중...",
+                                         bg="#F5F6F8",
+                                         font=("맑은 고딕", 10, "bold")).pack(pady=(20, 4))
+                                p_lbl = tk.Label(progress, text="시작",
+                                                  bg="#F5F6F8", fg="#6B7280",
+                                                  font=("맑은 고딕", 9))
+                                p_lbl.pack()
+                                progress.update()
+                                def _cb(m):
+                                    try:
+                                        p_lbl.config(text=m); progress.update()
+                                    except Exception:
+                                        pass
+                                try:
+                                    matches = self.search_sheet_for_brand(
+                                        brand, md_name=md_name, progress_callback=_cb)
+                                except Exception as e:
+                                    matches = []
+                                    print(f"⚠️ 시트 검색 오류: {e}")
+                                progress.destroy()
+
+                                if len(matches) == 1:
+                                    sheet_url = matches[0]['url']
+                                    sheet_match_info = matches[0]
+                                elif len(matches) > 1:
+                                    # 다중 매칭 - 사용자 선택 대기
+                                    picked_holder = {"v": None}
+                                    def _on_pick(picked):
+                                        picked_holder["v"] = picked
+                                    self.open_sheet_match_picker(brand, matches, _on_pick)
+                                    if picked_holder["v"]:
+                                        sheet_url = picked_holder["v"]['url']
+                                        sheet_match_info = picked_holder["v"]
+                                # 0개면 그냥 sheet_url=None
+                    except Exception as e:
+                        print(f"⚠️ 시트 검색 처리 오류: {e}")
+
                     # Slack 메시지 - 간단한 카드 스타일
                     slack_blocks = [
                         {
@@ -6953,10 +7120,14 @@ class LogiPanApp:
                         }
                     ]
 
-                    # 특이사항 + Jira 링크를 한 섹션에
+                    # 특이사항 + 시트 링크 + Jira 링크를 한 섹션에
                     body_lines = []
                     if note_text:
                         body_lines.append(f"*📝 특이사항:* {note_text}")
+                    if sheet_url:
+                        # 시트명을 링크 텍스트로 사용 (없으면 "시트 보기")
+                        link_text = brand if sheet_match_info else "시트 보기"
+                        body_lines.append(f"📋 *브랜드 시트:* <{sheet_url}|{link_text} 보기>")
                     body_lines.append(f"🔗 *Jira 티켓:* <{result}|티켓 보기>")
 
                     slack_blocks.append({
@@ -6971,6 +7142,8 @@ class LogiPanApp:
                     ok_s, msg_s = self.send_slack_message(fallback_text, blocks=slack_blocks)
                     if ok_s:
                         slack_msg = "\n💬 슬랙 알림 전송됨"
+                        if sheet_url:
+                            slack_msg += " (📋 시트 링크 포함)"
                     else:
                         slack_msg = f"\n⚠️ 슬랙 전송 실패: {msg_s}"
             except Exception as e:
