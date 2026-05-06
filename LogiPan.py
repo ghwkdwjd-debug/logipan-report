@@ -615,6 +615,230 @@ class LogiPanApp:
             messagebox.showerror("저장 실패", f"Jira 설정 저장 실패: {e}")
             return False
 
+    # ========== [Slack 연동] ==========
+    def load_slack_settings(self):
+        """로컬 config 파일에서 Slack 설정 로드"""
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                return cfg.get("slack_settings", {})
+        except Exception:
+            pass
+        return {}
+
+    def save_slack_settings(self, settings):
+        """로컬 config 파일에 Slack 설정 저장"""
+        try:
+            cfg = {}
+            if os.path.exists(self.config_path):
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                except Exception:
+                    cfg = {}
+            cfg["slack_settings"] = settings
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            messagebox.showerror("저장 실패", f"Slack 설정 저장 실패: {e}")
+            return False
+
+    def send_slack_message(self, text, blocks=None):
+        """Slack Webhook으로 메시지 전송.
+        Returns: (성공여부, 메시지)"""
+        cfg = self.load_slack_settings()
+        if not cfg.get("enabled", False):
+            return None, "Slack 비활성화됨"
+        webhook_url = cfg.get("webhook_url", "").strip()
+        if not webhook_url:
+            return False, "Webhook URL 없음"
+        try:
+            payload = {"text": text}
+            if blocks:
+                payload["blocks"] = blocks
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(webhook_url, data=data, headers={
+                'Content-Type': 'application/json'
+            }, method='POST')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = resp.read().decode()
+            if result == 'ok':
+                return True, "전송 완료"
+            else:
+                return False, f"응답: {result[:100]}"
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode()[:200]
+            except:
+                err_body = ""
+            return False, f"HTTP {e.code}: {err_body}"
+        except Exception as e:
+            return False, f"오류: {e}"
+
+    def _test_slack_connection(self, webhook_url):
+        """Slack 연결 테스트 - 테스트 메시지 보내기"""
+        try:
+            payload = {"text": "🧪 로지판 Slack 연동 테스트입니다"}
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(webhook_url.strip(), data=data, headers={
+                'Content-Type': 'application/json'
+            }, method='POST')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = resp.read().decode()
+            if result == 'ok':
+                return True, "✅ 채널에 테스트 메시지 전송됨!"
+            else:
+                return False, f"응답 이상: {result[:100]}"
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode()[:200]
+            except:
+                err_body = ""
+            return False, f"HTTP {e.code}: {err_body}"
+        except Exception as e:
+            return False, f"오류: {e}"
+
+    def open_slack_settings(self):
+        """Slack 연동 설정 팝업"""
+        win = tk.Toplevel(self.root)
+        win.title("💬 Slack 알림 설정")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 480, 380)
+        except Exception:
+            win.geometry("480x380")
+        win.transient(self.root)
+        win.grab_set()
+
+        s = self.load_slack_settings()
+
+        # 헤더
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        tk.Label(head, text="💬", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="Slack 알림 설정",
+                 font=("맑은 고딕", 14, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+        tk.Label(win, text="Jira 상신 시 슬랙 채널에 자동 알림",
+                 bg="#F5F6F8", fg="#666",
+                 font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
+
+        # 카드
+        card = tk.Frame(win, bg="white",
+                          highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=12)
+        tk.Frame(card, bg="#4A154B", width=4).pack(side="left", fill="y")  # Slack 색상
+        inner = tk.Frame(card, bg="white", padx=14, pady=12)
+        inner.pack(side="left", fill="both", expand=True)
+
+        # Webhook URL
+        tk.Label(inner, text="Webhook URL", bg="white",
+                 font=("맑은 고딕", 9, "bold"),
+                 fg="#374151").pack(anchor="w")
+        ent_url = tk.Entry(inner, font=("맑은 고딕", 9),
+                            bd=1, relief="solid",
+                            highlightthickness=0,
+                            show="•")
+        ent_url.pack(fill="x", ipady=4, pady=(2, 0))
+        ent_url.insert(0, s.get("webhook_url", ""))
+        tk.Label(inner, text="https://hooks.slack.com/services/T.../B.../...",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8),
+                 anchor="w").pack(fill="x")
+
+        # 채널명 (선택, 표시용)
+        tk.Label(inner, text="\n채널명 (참고용)", bg="white",
+                 font=("맑은 고딕", 9, "bold"),
+                 fg="#374151").pack(anchor="w")
+        ent_channel = tk.Entry(inner, font=("맑은 고딕", 10),
+                                 bd=1, relief="solid",
+                                 highlightthickness=0)
+        ent_channel.pack(fill="x", ipady=4, pady=(2, 0))
+        ent_channel.insert(0, s.get("channel_name", ""))
+        tk.Label(inner, text="예: #입고알림 (메모용, 실제 채널은 Webhook이 결정)",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8),
+                 anchor="w").pack(fill="x")
+
+        # 활성화
+        enabled_var = tk.BooleanVar(value=s.get("enabled", False))
+        chk_frame = tk.Frame(inner, bg="white")
+        chk_frame.pack(fill="x", pady=(12, 0))
+        tk.Checkbutton(chk_frame, text="✅ Jira 상신 시 슬랙 알림 자동 전송",
+                        variable=enabled_var, bg="white",
+                        font=("맑은 고딕", 9, "bold"),
+                        fg="#4A154B").pack(anchor="w")
+
+        # 결과 표시
+        result_lbl = tk.Label(inner, text="", bg="white",
+                                font=("맑은 고딕", 8),
+                                wraplength=380, justify="left")
+        result_lbl.pack(fill="x", pady=(6, 0))
+
+        # 버튼
+        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame.pack(fill="x", padx=18, pady=(0, 14))
+
+        def collect():
+            return {
+                "webhook_url": ent_url.get().strip(),
+                "channel_name": ent_channel.get().strip(),
+                "enabled": enabled_var.get(),
+            }
+
+        def test_connection():
+            url = ent_url.get().strip()
+            if not url:
+                result_lbl.config(text="❌ Webhook URL을 먼저 입력하세요.", fg="#DC2626")
+                return
+            if not url.startswith("https://hooks.slack.com/"):
+                result_lbl.config(text="⚠️ Webhook URL 형식이 이상합니다.", fg="#D97706")
+                return
+            result_lbl.config(text="🔄 테스트 메시지 전송 중...", fg="#6B7280")
+            win.update()
+            ok, msg = self._test_slack_connection(url)
+            if ok:
+                result_lbl.config(text=msg, fg="#16A34A")
+            else:
+                result_lbl.config(text=f"❌ {msg}", fg="#DC2626")
+
+        def do_save():
+            cfg = collect()
+            if cfg["enabled"] and not cfg["webhook_url"]:
+                messagebox.showwarning("입력 누락",
+                    "활성화하려면 Webhook URL이 필요합니다.",
+                    parent=win)
+                return
+            if self.save_slack_settings(cfg):
+                messagebox.showinfo("저장 완료",
+                    "✅ Slack 설정이 저장되었습니다." +
+                    ("\n\nJira 상신 시 자동으로 슬랙 알림이 갑니다." if cfg["enabled"] else ""),
+                    parent=win)
+                win.destroy()
+
+        tk.Button(btn_frame, text="🧪 테스트 메시지",
+                   command=test_connection,
+                   bg="#F0F2F5", fg="#374151",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="left")
+
+        tk.Button(btn_frame, text="💾 저장",
+                   command=do_save,
+                   bg="#4A154B", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="right")
+        tk.Button(btn_frame, text="취소",
+                   command=win.destroy,
+                   bg="white", fg="#666",
+                   font=("맑은 고딕", 9),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
+
     def open_jira_settings(self):
         """Jira 연동 설정 팝업"""
         win = tk.Toplevel(self.root)
@@ -1250,6 +1474,16 @@ class LogiPanApp:
                               relief="flat", padx=8, pady=4,
                               cursor="hand2")
         jira_btn.pack(side="right", anchor="se", padx=(0, 4))
+
+        # [추가] Slack 설정 버튼
+        slack_btn = tk.Button(header_frame, text="💬 Slack",
+                               command=self.open_slack_settings,
+                               bg="#F3F4F6", fg="#9CA3AF",
+                               activebackground="#E5E7EB",
+                               font=("맑은 고딕", 8),
+                               relief="flat", padx=8, pady=4,
+                               cursor="hand2")
+        slack_btn.pack(side="right", anchor="se", padx=(0, 4))
 
         # ========== [💾 액션 버튼들 - 하단 고정] ==========
         action_outer = tk.Frame(container, bg="#F5F6F8")
@@ -2614,39 +2848,165 @@ class LogiPanApp:
         self._last_option_table_df = None
 
     # ========== [브랜드 캐시 + 매니저] ==========
-    def refresh_brand_cache(self):
-        """Firestore의 brand_master 컬렉션을 메모리에 로드 (수동 갱신용)"""
+    @property
+    def _brand_cache_path(self):
+        """로컬 브랜드 캐시 파일 경로"""
+        return os.path.join(os.path.expanduser("~"), ".logipan_brand_cache.json")
+
+    def refresh_brand_cache(self, force=False):
+        """브랜드 캐시 로드 - 우선순위:
+        1) 로컬 캐시 파일 (read 0!)
+        2) 메타 도큐먼트 비교해서 변경 시만 전체 다시 받기
+        3) force=True면 무조건 전체 다시 받기 (사용자가 새로고침 누름)"""
         try:
+            # === 1. 로컬 캐시 먼저 로드 ===
+            local_cache = {}
+            local_meta_time = None
+            if os.path.exists(self._brand_cache_path):
+                try:
+                    with open(self._brand_cache_path, "r", encoding="utf-8") as f:
+                        cache_data = json.load(f)
+                    local_cache = cache_data.get("brands", {})
+                    local_meta_time = cache_data.get("meta_time")
+                except Exception:
+                    local_cache = {}
+
+            # 강제 새로고침 아니고 로컬 캐시 있으면 일단 사용
+            if local_cache and not force:
+                self._brand_cache = local_cache
+                print(f"✅ 브랜드 로컬 캐시 사용: {len(local_cache)}건 (read 0)")
+
+            # === 2. 메타 도큐먼트 체크 (1 read) ===
+            try:
+                meta_doc = self.db.collection('brand_master_meta').document('info').get()
+                if meta_doc.exists:
+                    meta_data = meta_doc.to_dict()
+                    server_meta_time = meta_data.get('last_updated')
+                    server_time_str = str(server_meta_time) if server_meta_time else None
+
+                    # 로컬과 서버 시각이 같으면 → 변경 없음, 캐시 그대로 사용
+                    if not force and local_cache and server_time_str == local_meta_time:
+                        print(f"✅ 변경 없음 (서버: {server_time_str}). 캐시 그대로")
+                        self._brand_cache = local_cache
+                        return
+                    # 다르면 → 전체 다시 받기
+                    print(f"🔄 변경 감지 (로컬: {local_meta_time}, 서버: {server_time_str})")
+                else:
+                    server_time_str = None
+                    print("ℹ️ 메타 도큐먼트 없음 - 첫 실행 가능성")
+            except Exception as e:
+                # 메타 체크 실패 시 로컬 캐시 있으면 그대로 사용
+                print(f"⚠️ 메타 체크 실패: {e}")
+                if local_cache:
+                    self._brand_cache = local_cache
+                    return
+                server_time_str = None
+
+            # === 3. 전체 받기 (변경 있거나 캐시 없음) ===
+            print("📥 brand_master 전체 다시 받는 중...")
             docs = self.db.collection('brand_master').get()
             self._brand_cache = {}
             for d in docs:
                 data = d.to_dict()
                 self._brand_cache[d.id] = data.get('brand_name', d.id)
-            print(f"✅ 브랜드 캐시: {len(self._brand_cache)}건")
+            print(f"✅ 브랜드 전체 로드: {len(self._brand_cache)}건")
+
+            # 로컬 캐시 파일에 저장
+            try:
+                with open(self._brand_cache_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "brands": self._brand_cache,
+                        "meta_time": server_time_str,
+                        "saved_at": datetime.now().isoformat()
+                    }, f, ensure_ascii=False, indent=2)
+                print(f"💾 로컬 캐시 저장됨: {self._brand_cache_path}")
+            except Exception as e:
+                print(f"⚠️ 로컬 캐시 저장 실패: {e}")
+
         except Exception as e:
             print(f"⚠️ 브랜드 캐시 로드 실패: {e}")
-            self._brand_cache = {}
+            if not hasattr(self, '_brand_cache'):
+                self._brand_cache = {}
+
+    def _update_brand_meta(self):
+        """[내부 헬퍼] brand_master 변경 시 호출 - 메타 도큐먼트의 last_updated 갱신.
+        다른 PC들이 다음 폴링 때 이 변경 감지함"""
+        try:
+            self.db.collection('brand_master_meta').document('info').set({
+                'last_updated': firestore.SERVER_TIMESTAMP,
+                'updated_by': getattr(self, 'current_user', '관리자')
+            }, merge=True)
+        except Exception as e:
+            print(f"⚠️ 메타 갱신 실패: {e}")
 
     def start_brand_listener(self):
-        """[추가] brand_master 실시간 리스너 - 다른 PC에서 변경하면 즉시 반영"""
-        def on_brand_snapshot(col_snapshot, changes, read_time):
+        """[변경] 실시간 리스너 대신 5분마다 메타 폴링.
+        변경 감지 시 자동으로 brand_master 다시 받음 + 알림"""
+        def poll_brand_meta():
             try:
-                for change in changes:
-                    doc_id = change.document.id
-                    data = change.document.to_dict()
-                    if change.type.name == 'ADDED' or change.type.name == 'MODIFIED':
-                        self._brand_cache[doc_id] = data.get('brand_name', doc_id)
-                    elif change.type.name == 'REMOVED':
-                        self._brand_cache.pop(doc_id, None)
-            except Exception as e:
-                print(f"⚠️ 브랜드 리스너 처리 오류: {e}")
+                if not hasattr(self, '_brand_cache'):
+                    return
+                # 메타만 체크 (1 read)
+                meta_doc = self.db.collection('brand_master_meta').document('info').get()
+                if meta_doc.exists:
+                    meta_data = meta_doc.to_dict()
+                    server_time_str = str(meta_data.get('last_updated', ''))
 
+                    # 로컬 캐시 시각과 비교
+                    local_meta_time = None
+                    if os.path.exists(self._brand_cache_path):
+                        try:
+                            with open(self._brand_cache_path, "r", encoding="utf-8") as f:
+                                local_meta_time = json.load(f).get("meta_time")
+                        except Exception: pass
+
+                    if server_time_str != local_meta_time:
+                        # 변경 감지! 전체 다시 받기
+                        old_count = len(self._brand_cache)
+                        self.refresh_brand_cache()
+                        new_count = len(self._brand_cache)
+
+                        # 토스트 알림 (메인 스레드에서)
+                        delta = new_count - old_count
+                        if delta != 0:
+                            msg = f"📦 브랜드 마스터 동기화: {abs(delta)}건 {'추가' if delta > 0 else '제거'}됨"
+                        else:
+                            msg = f"📦 브랜드 마스터 갱신됨"
+                        try:
+                            self.root.after(0, lambda: self._show_brand_toast(msg))
+                        except Exception: pass
+            except Exception as e:
+                print(f"⚠️ 브랜드 폴링 오류 (무시): {e}")
+            finally:
+                # 5분 후 다시 체크
+                try:
+                    self.root.after(300000, poll_brand_meta)  # 5분 = 300,000ms
+                except Exception: pass
+
+        # 첫 폴링은 5분 후부터
         try:
-            query = self.db.collection('brand_master')
-            self._brand_listener = query.on_snapshot(on_brand_snapshot)
-            print("📡 브랜드 마스터 실시간 리스너 가동")
+            self.root.after(300000, poll_brand_meta)
+            print("📡 브랜드 폴링 시작 (5분 간격)")
         except Exception as e:
-            print(f"❌ 브랜드 리스너 설정 오류: {e}")
+            print(f"❌ 브랜드 폴링 설정 오류: {e}")
+
+    def _show_brand_toast(self, msg):
+        """브랜드 동기화 알림 토스트 (우상단에 잠깐 표시)"""
+        try:
+            toast = tk.Toplevel(self.root)
+            toast.overrideredirect(True)
+            toast.configure(bg="#1877F2")
+            # 우상단 배치
+            x = self.root.winfo_x() + self.root.winfo_width() - 320
+            y = self.root.winfo_y() + 60
+            toast.geometry(f"300x44+{x}+{y}")
+            tk.Label(toast, text=msg, bg="#1877F2", fg="white",
+                     font=("맑은 고딕", 9, "bold"),
+                     padx=14, pady=10).pack()
+            # 4초 후 자동 닫기
+            toast.after(4000, toast.destroy)
+        except Exception as e:
+            print(f"토스트 표시 실패: {e}")
 
     def open_brand_manager(self):
         """브랜드 관리 팝업 - 등록/수정/삭제"""
@@ -2665,6 +3025,23 @@ class LogiPanApp:
         tk.Label(head, text="브랜드 관리",
                  font=("맑은 고딕", 14, "bold"),
                  bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+
+        # [추가] 우측에 새로고침 버튼
+        def force_refresh():
+            self.refresh_brand_cache(force=True)
+            try:
+                refresh_list()
+            except Exception: pass
+            messagebox.showinfo("새로고침 완료",
+                f"✅ 서버에서 다시 받았습니다.\n총 {len(self._brand_cache)}건",
+                parent=win)
+        tk.Button(head, text="🔄 새로고침",
+                   command=force_refresh,
+                   bg="white", fg="#444",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=10, pady=4,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="right")
 
         # ===== 신규 등록 카드 =====
         add_card = tk.Frame(win, bg="white",
@@ -2716,6 +3093,7 @@ class LogiPanApp:
                     'updated_at': firestore.SERVER_TIMESTAMP
                 })
                 self._brand_cache[code] = name
+                self._update_brand_meta()  # [추가] 메타 갱신
                 ent_code.delete(0, tk.END)
                 ent_name.delete(0, tk.END)
                 refresh_list()
@@ -2811,6 +3189,10 @@ class LogiPanApp:
                         total_done += 1
                     batch.commit()
 
+                # [추가] 일괄 등록 후 메타 한 번만 갱신
+                if total_done > 0:
+                    self._update_brand_meta()
+
                 refresh_list()
                 messagebox.showinfo("일괄 등록 완료",
                     f"✅ {total_done}건 등록되었습니다!\n\n"
@@ -2897,6 +3279,7 @@ class LogiPanApp:
                     'updated_at': firestore.SERVER_TIMESTAMP
                 })
                 self._brand_cache[code] = new_name.strip()
+                self._update_brand_meta()  # [추가] 메타 갱신
                 refresh_list()
             except Exception as e:
                 messagebox.showerror("오류", f"수정 실패: {e}", parent=win)
@@ -2913,6 +3296,7 @@ class LogiPanApp:
             try:
                 self.db.collection('brand_master').document(code).delete()
                 self._brand_cache.pop(code, None)
+                self._update_brand_meta()  # [추가] 메타 갱신
                 refresh_list()
             except Exception as e:
                 messagebox.showerror("오류", f"삭제 실패: {e}", parent=win)
@@ -5793,9 +6177,56 @@ class LogiPanApp:
                 self.root.update()
                 jira_msg += "\n(URL이 클립보드에 복사됨)"
             except: pass
+
+            # [추가] Slack 알림 (활성화된 경우)
+            slack_msg = ""
+            try:
+                slack_cfg = self.load_slack_settings()
+                if slack_cfg.get("enabled", False):
+                    total_qty = int(df['수량'].sum())
+                    unique_count = len(df)
+                    today = datetime.now().strftime('%y%m%d')
+                    user_name = getattr(self, 'current_user', '관리자')
+                    # Slack 메시지 - blocks 포맷 (예쁜 카드 스타일)
+                    slack_blocks = [
+                        {
+                            "type": "header",
+                            "text": {
+                                "type": "plain_text",
+                                "text": f"🎫 {brand} 입고 티켓 상신",
+                                "emoji": True
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "fields": [
+                                {"type": "mrkdwn", "text": f"*📅 작업일*\n{today}"},
+                                {"type": "mrkdwn", "text": f"*👤 작성자*\n{user_name}"},
+                                {"type": "mrkdwn", "text": f"*🎯 담당 MD*\n{md_name or '미입력'}"},
+                                {"type": "mrkdwn", "text": f"*📊 수량*\n{unique_count}종 / {total_qty}개"},
+                            ]
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"🔗 *Jira 티켓:* <{result}|티켓 보기>"
+                            }
+                        }
+                    ]
+                    fallback_text = (f"🎫 {brand} 입고 티켓 상신 | {user_name} | "
+                                      f"{unique_count}종/{total_qty}개 | {result}")
+                    ok_s, msg_s = self.send_slack_message(fallback_text, blocks=slack_blocks)
+                    if ok_s:
+                        slack_msg = "\n💬 슬랙 알림 전송됨"
+                    else:
+                        slack_msg = f"\n⚠️ 슬랙 전송 실패: {msg_s}"
+            except Exception as e:
+                slack_msg = f"\n⚠️ 슬랙 처리 오류: {e}"
+
             messagebox.showinfo("Jira 상신 완료",
                 f"✅ CSV 저장 + Jira 티켓 생성 완료!\n\n"
-                f"📄 파일: {fn}{jira_msg}\n\n"
+                f"📄 파일: {fn}{jira_msg}{slack_msg}\n\n"
                 f"💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
         else:
             messagebox.showerror("Jira 상신 실패",
