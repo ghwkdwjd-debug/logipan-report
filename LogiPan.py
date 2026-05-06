@@ -700,15 +700,196 @@ class LogiPanApp:
         except Exception as e:
             return False, f"오류: {e}"
 
+    # ========== [구글시트 목록 관리 - Firestore 공유] ==========
+    def load_sheet_list(self):
+        """Firestore에서 등록된 시트 목록 가져오기.
+        캐시 우선, 첫 호출 시에만 Firestore read.
+        Returns: [{name, sheet_id, gid}, ...]
+        """
+        # 캐시 우선
+        if hasattr(self, '_sheet_list_cache') and self._sheet_list_cache is not None:
+            return self._sheet_list_cache
+        try:
+            if not hasattr(self, 'db') or self.db is None:
+                self._sheet_list_cache = []
+                return []
+            doc = self.db.collection('config_sheets').document('list').get()
+            if doc.exists:
+                data = doc.to_dict() or {}
+                sheets = data.get('sheets', [])
+                if not isinstance(sheets, list):
+                    sheets = []
+                self._sheet_list_cache = sheets
+                return sheets
+        except Exception as e:
+            print(f"⚠️ 시트 목록 로드 실패: {e}")
+        self._sheet_list_cache = []
+        return []
+
+    def save_sheet_list(self, sheets):
+        """Firestore에 시트 목록 저장.
+        Args:
+            sheets: [{name, sheet_id, gid}, ...]
+        Returns: bool
+        """
+        try:
+            if not hasattr(self, 'db') or self.db is None:
+                messagebox.showerror("저장 실패",
+                    "Firestore 연결이 없어 저장할 수 없습니다.")
+                return False
+            self.db.collection('config_sheets').document('list').set({
+                'sheets': sheets,
+                'updated_at': firestore.SERVER_TIMESTAMP,
+                'updated_by': getattr(self, 'current_user', '관리자'),
+            })
+            # 캐시 갱신
+            self._sheet_list_cache = sheets
+            return True
+        except Exception as e:
+            messagebox.showerror("저장 실패", f"시트 목록 저장 실패: {e}")
+            return False
+
+    def extract_sheet_id_from_url(self, url_or_id):
+        """URL 또는 ID 문자열에서 시트 ID와 gid 추출.
+        Returns: (sheet_id, gid)  / 실패 시 (None, None)
+        """
+        if not url_or_id:
+            return None, None
+        s = url_or_id.strip()
+        # URL이면 정규식으로 추출
+        m = re.search(r'/spreadsheets/d/([a-zA-Z0-9_-]+)', s)
+        sheet_id = m.group(1) if m else None
+        if not sheet_id:
+            # URL 형식 아니면 그냥 ID로 간주
+            if re.match(r'^[a-zA-Z0-9_-]{20,}$', s):
+                sheet_id = s
+        # gid 추출
+        gid = None
+        m2 = re.search(r'[?&#]gid=(\d+)', s)
+        if m2:
+            gid = m2.group(1)
+        return sheet_id, gid
+
+    def open_sheet_add_dialog(self, parent_win, edit_index=None, on_done=None):
+        """시트 추가/수정 팝업.
+        Args:
+            parent_win: 부모 창
+            edit_index: 수정 시 기존 인덱스 (None이면 추가)
+            on_done: 저장 완료 후 콜백
+        """
+        win = tk.Toplevel(parent_win)
+        is_edit = edit_index is not None
+        win.title("✏️ 시트 수정" if is_edit else "➕ 시트 추가")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 460, 280)
+        except Exception:
+            win.geometry("460x280")
+        win.transient(parent_win)
+        win.grab_set()
+
+        sheets = list(self.load_sheet_list())
+        existing = sheets[edit_index] if is_edit and 0 <= edit_index < len(sheets) else {}
+
+        # 카드
+        card = tk.Frame(win, bg="white",
+                          highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=14)
+        tk.Frame(card, bg="#16A34A", width=4).pack(side="left", fill="y")
+        inner = tk.Frame(card, bg="white", padx=14, pady=12)
+        inner.pack(side="left", fill="both", expand=True)
+
+        # 시트 이름
+        tk.Label(inner, text="시트 이름", bg="white",
+                 font=("맑은 고딕", 9, "bold"),
+                 fg="#374151").pack(anchor="w")
+        ent_name = tk.Entry(inner, font=("맑은 고딕", 10),
+                              bd=1, relief="solid",
+                              highlightthickness=0)
+        ent_name.pack(fill="x", ipady=5, pady=(2, 0))
+        ent_name.insert(0, existing.get('name', ''))
+        tk.Label(inner, text="예: SS26 입출고리스트_매입 VER 1",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8)).pack(anchor="w")
+
+        # 시트 URL/ID
+        tk.Label(inner, text="\n시트 URL 또는 ID", bg="white",
+                 font=("맑은 고딕", 9, "bold"),
+                 fg="#374151").pack(anchor="w")
+        ent_url = tk.Entry(inner, font=("맑은 고딕", 9),
+                             bd=1, relief="solid",
+                             highlightthickness=0)
+        ent_url.pack(fill="x", ipady=5, pady=(2, 0))
+        # 기존 값 복원 (URL 형태로)
+        if existing.get('sheet_id'):
+            existing_url = f"https://docs.google.com/spreadsheets/d/{existing['sheet_id']}/edit"
+            if existing.get('gid'):
+                existing_url += f"?gid={existing['gid']}"
+            ent_url.insert(0, existing_url)
+        tk.Label(inner, text="구글시트 주소 통째로 붙여넣기 OK (gid도 자동 인식)",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8)).pack(anchor="w")
+
+        # 결과 메시지
+        msg_lbl = tk.Label(inner, text="", bg="white",
+                             font=("맑은 고딕", 8),
+                             wraplength=380, justify="left")
+        msg_lbl.pack(fill="x", pady=(6, 0))
+
+        # 버튼
+        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame.pack(fill="x", padx=18, pady=(0, 14))
+
+        def do_save():
+            name = ent_name.get().strip()
+            url = ent_url.get().strip()
+            if not name:
+                msg_lbl.config(text="❌ 시트 이름을 입력하세요.", fg="#DC2626")
+                return
+            sheet_id, gid = self.extract_sheet_id_from_url(url)
+            if not sheet_id:
+                msg_lbl.config(text="❌ 시트 ID를 인식할 수 없습니다. URL 또는 ID를 확인하세요.",
+                                fg="#DC2626")
+                return
+            new_entry = {'name': name, 'sheet_id': sheet_id, 'gid': gid or ''}
+            current = list(self.load_sheet_list())
+            if is_edit:
+                if 0 <= edit_index < len(current):
+                    current[edit_index] = new_entry
+            else:
+                # 중복 시트 ID 체크
+                if any(x.get('sheet_id') == sheet_id for x in current):
+                    msg_lbl.config(text="⚠️ 이미 등록된 시트입니다.", fg="#D97706")
+                    return
+                current.append(new_entry)
+            if self.save_sheet_list(current):
+                if on_done:
+                    on_done()
+                win.destroy()
+
+        tk.Button(btn_frame, text="💾 저장",
+                   command=do_save,
+                   bg="#16A34A", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2").pack(side="right")
+        tk.Button(btn_frame, text="취소",
+                   command=win.destroy,
+                   bg="white", fg="#666",
+                   font=("맑은 고딕", 9),
+                   relief="flat", padx=14, pady=6,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
+
     def open_slack_settings(self):
         """Slack 연동 설정 팝업"""
         win = tk.Toplevel(self.root)
         win.title("💬 Slack 알림 설정")
         win.configure(bg="#F5F6F8")
         try:
-            self.position_popup(win, 480, 380)
+            self.position_popup(win, 520, 680)
         except Exception:
-            win.geometry("480x380")
+            win.geometry("520x680")
         win.transient(self.root)
         win.grab_set()
 
@@ -777,6 +958,122 @@ class LogiPanApp:
                                 wraplength=380, justify="left")
         result_lbl.pack(fill="x", pady=(6, 0))
 
+        # ========== [구글시트 관리 섹션] ==========
+        sheet_card = tk.Frame(win, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        sheet_card.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+        tk.Frame(sheet_card, bg="#16A34A", width=4).pack(side="left", fill="y")
+        sheet_inner = tk.Frame(sheet_card, bg="white", padx=14, pady=10)
+        sheet_inner.pack(side="left", fill="both", expand=True)
+
+        # 헤더
+        sheet_head = tk.Frame(sheet_inner, bg="white")
+        sheet_head.pack(fill="x")
+        tk.Label(sheet_head, text="📊 구글시트 자동 검색",
+                 bg="white", fg="#1A1A1A",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left")
+        # 시트 활성화
+        sheet_enabled_var = tk.BooleanVar(value=s.get("sheet_search_enabled", False))
+        tk.Checkbutton(sheet_head, text="활성화",
+                        variable=sheet_enabled_var, bg="white",
+                        font=("맑은 고딕", 9),
+                        fg="#16A34A").pack(side="right")
+
+        tk.Label(sheet_inner,
+                 text="입고 시 브랜드명+담당MD로 시트 검색 → Slack 알림에 시트 링크 자동 첨부",
+                 bg="white", fg="#6B7280",
+                 font=("맑은 고딕", 8),
+                 wraplength=440, justify="left", anchor="w").pack(fill="x", pady=(2, 6))
+
+        # 등록된 시트 리스트 (스크롤 가능 영역)
+        list_outer = tk.Frame(sheet_inner, bg="#F9FAFB",
+                                 highlightthickness=1, highlightbackground="#E5E7EB")
+        list_outer.pack(fill="both", expand=True, pady=(0, 6))
+
+        # 캔버스 + 스크롤바 (Tk 기본은 Listbox에 줄단위 위젯이 어려워서 Canvas 사용)
+        list_canvas = tk.Canvas(list_outer, bg="#F9FAFB", highlightthickness=0, height=140)
+        list_canvas.pack(side="left", fill="both", expand=True)
+        list_scroll = tk.Scrollbar(list_outer, command=list_canvas.yview)
+        list_scroll.pack(side="right", fill="y")
+        list_canvas.configure(yscrollcommand=list_scroll.set)
+        list_inner = tk.Frame(list_canvas, bg="#F9FAFB")
+        list_canvas.create_window((0, 0), window=list_inner, anchor="nw")
+
+        def refresh_sheet_list():
+            # 기존 위젯 다 지우고
+            for w in list_inner.winfo_children():
+                w.destroy()
+            sheets = self.load_sheet_list()
+            if not sheets:
+                tk.Label(list_inner, text="등록된 시트가 없습니다.\n[+ 시트 추가] 버튼으로 등록하세요.",
+                         bg="#F9FAFB", fg="#9CA3AF",
+                         font=("맑은 고딕", 9), justify="center").pack(pady=20)
+            else:
+                for idx, sh in enumerate(sheets):
+                    row = tk.Frame(list_inner, bg="white",
+                                     highlightthickness=1, highlightbackground="#E5E7EB")
+                    row.pack(fill="x", padx=2, pady=2)
+
+                    info = tk.Frame(row, bg="white")
+                    info.pack(side="left", fill="x", expand=True, padx=8, pady=6)
+                    tk.Label(info, text="📋 " + sh.get('name', '(이름 없음)'),
+                             bg="white", fg="#1A1A1A",
+                             font=("맑은 고딕", 9, "bold"),
+                             anchor="w").pack(fill="x")
+                    sid = sh.get('sheet_id', '')
+                    sid_short = (sid[:20] + "...") if len(sid) > 23 else sid
+                    tk.Label(info, text=f"ID: {sid_short}",
+                             bg="white", fg="#9CA3AF",
+                             font=("맑은 고딕", 8),
+                             anchor="w").pack(fill="x")
+
+                    btn_box = tk.Frame(row, bg="white")
+                    btn_box.pack(side="right", padx=4)
+
+                    def make_edit(i):
+                        return lambda: self.open_sheet_add_dialog(
+                            win, edit_index=i, on_done=refresh_sheet_list)
+                    def make_delete(i):
+                        def _del():
+                            sheets_now = list(self.load_sheet_list())
+                            if 0 <= i < len(sheets_now):
+                                if messagebox.askyesno(
+                                        "삭제 확인",
+                                        f"'{sheets_now[i].get('name', '')}' 시트를 목록에서 제거할까요?",
+                                        parent=win):
+                                    del sheets_now[i]
+                                    if self.save_sheet_list(sheets_now):
+                                        refresh_sheet_list()
+                        return _del
+
+                    tk.Button(btn_box, text="✏️",
+                               command=make_edit(idx),
+                               bg="white", fg="#3B82F6",
+                               font=("맑은 고딕", 9),
+                               relief="flat", cursor="hand2",
+                               width=2).pack(side="left")
+                    tk.Button(btn_box, text="🗑️",
+                               command=make_delete(idx),
+                               bg="white", fg="#DC2626",
+                               font=("맑은 고딕", 9),
+                               relief="flat", cursor="hand2",
+                               width=2).pack(side="left")
+
+            # 캔버스 스크롤 영역 갱신
+            list_inner.update_idletasks()
+            list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+
+        refresh_sheet_list()
+
+        # 시트 추가 버튼
+        tk.Button(sheet_inner, text="➕ 시트 추가",
+                   command=lambda: self.open_sheet_add_dialog(
+                       win, on_done=refresh_sheet_list),
+                   bg="#16A34A", fg="white",
+                   font=("맑은 고딕", 9, "bold"),
+                   relief="flat", padx=12, pady=5,
+                   cursor="hand2").pack(anchor="w")
+
         # 버튼
         btn_frame = tk.Frame(win, bg="#F5F6F8")
         btn_frame.pack(fill="x", padx=18, pady=(0, 14))
@@ -786,6 +1083,7 @@ class LogiPanApp:
                 "webhook_url": ent_url.get().strip(),
                 "channel_name": ent_channel.get().strip(),
                 "enabled": enabled_var.get(),
+                "sheet_search_enabled": sheet_enabled_var.get(),
             }
 
         def test_connection():
