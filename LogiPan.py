@@ -7742,6 +7742,26 @@ class LogiPanApp:
 
             offset += line_len + 1  # +1 for \n
 
+    @staticmethod
+    def _normalize_barcode_for_output(barcode):
+        """[추가] 파일/클립보드 출력용 바코드 변환.
+        - 이미 하이픈 있으면 → 그대로
+        - 영문 섞이면 → 그대로 (예: UGGU242PASG032BR0SM)
+        - 전체가 숫자면 → 첫 자 다음 하이픈 추가 (예: 11722020001 → 1-1722020001)
+        """
+        if barcode is None:
+            return ''
+        s = str(barcode).strip()
+        if not s:
+            return s
+        if '-' in s:
+            return s
+        if not s.isdigit():
+            return s
+        if len(s) >= 2:
+            return s[0] + '-' + s[1:]
+        return s
+
     def save_csv_in(self):
         """CSV 파일만 저장 (Jira 안 보냄)"""
         if not self.is_matched:
@@ -7754,6 +7774,8 @@ class LogiPanApp:
         today = datetime.now().strftime('%y%m%d')
         df = self.last_merged_df[self.last_merged_df['수량_스캔'] > 0][['바코드', '수량_스캔']].copy()
         df.columns = ['바코드', '수량']
+        # [추가] 바코드 하이픈 변환 적용
+        df['바코드'] = df['바코드'].apply(self._normalize_barcode_for_output)
         df['메모'] = brand
         fn = self.get_unique_filename(f"{today} {brand} 입고", "csv")
         full_path = os.path.join(self.save_dir, fn)
@@ -7793,6 +7815,8 @@ class LogiPanApp:
         today = datetime.now().strftime('%y%m%d')
         df = self.last_merged_df[self.last_merged_df['수량_스캔'] > 0][['바코드', '수량_스캔']].copy()
         df.columns = ['바코드', '수량']
+        # [추가] 바코드 하이픈 변환 적용
+        df['바코드'] = df['바코드'].apply(self._normalize_barcode_for_output)
         df['메모'] = brand
         fn = self.get_unique_filename(f"{today} {brand} 입고", "csv")
         full_path = os.path.join(self.save_dir, fn)
@@ -8016,9 +8040,23 @@ class LogiPanApp:
                 "  NIKU261MSSN107BK280  1  0  DD-02-06-03  00-00-00-00")
             return
 
+        # [추가] 불량 모드면 정상↔불량 자리 바꿈 (대조 분석에서 했어도 parse_logi_data가 다시 채우니까 또 함)
+        is_defect_mode = getattr(self, 'defect_mode_var', None)
+        is_defect_mode = is_defect_mode.get() if is_defect_mode else False
+        if is_defect_mode:
+            for r in self.last_scan_detail:
+                normal_q = r.get('정상수', 0)
+                defect_q = r.get('불량수', 0)
+                r['정상수'] = defect_q
+                r['불량수'] = normal_q
+                normal_loc = r.get('정상로케', '')
+                defect_loc = r.get('불량로케', '')
+                r['정상로케'] = defect_loc
+                r['불량로케'] = normal_loc
+
         rows = self.last_scan_detail
         # 5열 형식이 아예 하나도 없으면 그냥 단순 형식인 거니까 안내
-        any_5col = any(r.get('정상로케') for r in rows)
+        any_5col = any(r.get('정상로케') or r.get('불량로케') for r in rows)
         if not any_5col:
             if not messagebox.askyesno("확인",
                 "스캔칸에 5열 형식 데이터가 없는 것 같습니다.\n"
@@ -8029,7 +8067,7 @@ class LogiPanApp:
         try:
             df_out = pd.DataFrame([{
                 '박스번호': '',
-                '바코드': r['바코드'],
+                '바코드': self._normalize_barcode_for_output(r['바코드']),  # [추가] 하이픈 변환
                 '정상수량': r.get('정상수', 0),
                 '불량수량': r.get('불량수', 0),
                 '정상로케이션': r.get('정상로케', ''),
