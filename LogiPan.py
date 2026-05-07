@@ -1487,21 +1487,11 @@ class LogiPanApp:
         win_body.bind("<Configure>", _on_body_resize)
         scroll_canvas.bind("<Configure>", _on_canvas_resize)
 
-        # 마우스 휠 스크롤
-        def _on_mousewheel(event):
-            try:
-                # Windows
-                scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-        scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        # 팝업 닫힐 때 전역 바인딩 해제
-        def _cleanup_scroll(event=None):
-            try:
-                scroll_canvas.unbind_all("<MouseWheel>")
-            except Exception:
-                pass
-        win.bind("<Destroy>", _cleanup_scroll)
+        # 마우스 휠 스크롤 - 캔버스/win_body에만 바인딩 (전역 X)
+        # 자손 위젯은 아직 안 그려졌으므로 나중에 다시 바인딩 (deferred)
+        rebind_wheel_slack = self._bind_mousewheel(scroll_canvas, win_body)
+        # win_body의 자손이 모두 추가된 후 다시 바인딩하기 위한 핸들 저장
+        self._slack_wheel_rebind = rebind_wheel_slack
 
         s = self.load_slack_settings()
 
@@ -2011,6 +2001,13 @@ class LogiPanApp:
                    cursor="hand2",
                    highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
 
+        # 모든 위젯이 추가된 후, 자손에게도 휠 바인딩 적용
+        try:
+            win.update_idletasks()
+            self._slack_wheel_rebind(win_body)
+        except Exception:
+            pass
+
     def open_jira_settings(self):
         """Jira 연동 설정 팝업"""
         win = tk.Toplevel(self.root)
@@ -2043,19 +2040,9 @@ class LogiPanApp:
         win_body.bind("<Configure>", _on_body_resize)
         scroll_canvas.bind("<Configure>", _on_canvas_resize)
 
-        # 마우스 휠
-        def _on_mousewheel(event):
-            try:
-                scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-        scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        def _cleanup_scroll(event=None):
-            try:
-                scroll_canvas.unbind_all("<MouseWheel>")
-            except Exception:
-                pass
-        win.bind("<Destroy>", _cleanup_scroll)
+        # 마우스 휠 - 캔버스/win_body에만 (전역 X)
+        rebind_wheel_jira = self._bind_mousewheel(scroll_canvas, win_body)
+        self._jira_wheel_rebind = rebind_wheel_jira
 
         s = self.load_jira_settings()
 
@@ -2197,6 +2184,13 @@ class LogiPanApp:
                    relief="flat", padx=14, pady=6,
                    cursor="hand2",
                    highlightthickness=1, highlightbackground="#DDD").pack(side="right", padx=(0, 6))
+
+        # 자손에게 휠 바인딩
+        try:
+            win.update_idletasks()
+            self._jira_wheel_rebind(win_body)
+        except Exception:
+            pass
 
     def _test_jira_connection(self, cfg):
         """Jira 연결 테스트 - 단계별로 진단
@@ -2655,6 +2649,40 @@ class LogiPanApp:
             # focus_set은 position_popup에서 focus_force로 처리하니 OK
         except Exception as e:
             print(f"⚠️ ESC 바인딩 실패: {e}")
+
+    def _bind_mousewheel(self, canvas, container=None):
+        """[추가] 마우스 휠 스크롤 바인딩 (전역 X, 해당 영역만).
+        bind_all 안티패턴 대신 캔버스 + 컨테이너 + 자손에게만 바인딩.
+
+        Args:
+            canvas: 스크롤할 tk.Canvas
+            container: 휠 이벤트를 받을 컨테이너 (없으면 canvas 자기 자신)
+        """
+        def _on_wheel(event):
+            try:
+                # 캔버스가 살아있고 스크롤 가능한 경우에만
+                if not canvas.winfo_exists():
+                    return
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+            return "break"  # 부모로 전파 X (중첩 스크롤 방지)
+
+        target = container if container is not None else canvas
+
+        def _bind_recursive(widget):
+            try:
+                widget.bind("<MouseWheel>", _on_wheel)
+                for child in widget.winfo_children():
+                    _bind_recursive(child)
+            except Exception:
+                pass
+
+        # 즉시 바인딩 (현재 자손들)
+        _bind_recursive(target)
+
+        # 새 자손 추가될 때 다시 바인딩하는 용도 - 외부에서 호출 가능
+        return _bind_recursive
 
     def clean_code_strictly(self, series):
         return series.astype(str).str.strip().str.replace(r'\.0$', '', regex=True).str.upper()
@@ -5866,8 +5894,7 @@ class LogiPanApp:
 
         def _update_field_scrollregion(e):
             list_canvas.configure(scrollregion=list_canvas.bbox("all"))
-            # [수정] 카드 새로 그릴 때 항상 맨 위로
-            list_canvas.yview_moveto(0)
+            # [수정] 자동으로 맨 위 이동 제거 - 사용자가 보던 위치 유지
 
         self.cards_frame.bind("<Configure>", _update_field_scrollregion)
         canvas_window = list_canvas.create_window((0, 0), window=self.cards_frame, anchor="nw")
@@ -5880,16 +5907,9 @@ class LogiPanApp:
         list_scrollbar.pack(side="right", fill="y")
         list_canvas.pack(side="left", fill="both", expand=True)
 
-        def _on_mousewheel(event):
-            try:
-                list_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            except: pass
-        list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        # 윈도우가 다른 탭으로 전환 시 바인딩 안 풀리는 문제 방지: 마우스가 영역 안에 있을 때만 작동하도록
-        def _bind_wheel(e): list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        def _unbind_wheel(e): list_canvas.unbind_all("<MouseWheel>")
-        list_canvas.bind("<Enter>", _bind_wheel)
-        list_canvas.bind("<Leave>", _unbind_wheel)
+        # 마우스 휠 - 캔버스/cards_frame에만 (전역 X)
+        # 카드들이 동적으로 추가되니 update_table_view에서도 다시 호출 필요
+        self._field_wheel_rebind = self._bind_mousewheel(list_canvas, self.cards_frame)
 
         # 우클릭 메뉴 (삭제용)
         self.context_menu = tk.Menu(self.root, tearoff=0, font=("맑은 고딕", 10))
@@ -6034,8 +6054,7 @@ class LogiPanApp:
 
         def _update_scrollregion(e):
             list_canvas.configure(scrollregion=list_canvas.bbox("all"))
-            # [수정] 카드 새로 그릴 때 항상 맨 위로
-            list_canvas.yview_moveto(0)
+            # [수정] 자동으로 맨 위 이동 제거 - 사용자가 보던 위치 유지
 
         self.board_cards_frame.bind("<Configure>", _update_scrollregion)
         canvas_window = list_canvas.create_window((0, 0), window=self.board_cards_frame, anchor="nw")
@@ -6047,14 +6066,8 @@ class LogiPanApp:
         list_scrollbar.pack(side="right", fill="y")
         list_canvas.pack(side="left", fill="both", expand=True)
 
-        def _on_mousewheel(event):
-            try:
-                list_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-            except: pass
-        def _bind_wheel(e): list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        def _unbind_wheel(e): list_canvas.unbind_all("<MouseWheel>")
-        list_canvas.bind("<Enter>", _bind_wheel)
-        list_canvas.bind("<Leave>", _unbind_wheel)
+        # 마우스 휠 - 캔버스/board_cards_frame에만 (전역 X)
+        self._board_wheel_rebind = self._bind_mousewheel(list_canvas, self.board_cards_frame)
 
         # 우클릭 메뉴
         self.board_context_menu = tk.Menu(self.root, tearoff=0, font=("맑은 고딕", 10))
@@ -6926,6 +6939,13 @@ class LogiPanApp:
                                  bg="#F5F6F8", fg="#999",
                                  font=("맑은 고딕", 8), pady=15, justify="center")
                 hint.pack(side="bottom")
+
+            # [추가] 새로 추가된 카드들에도 휠 바인딩 적용
+            try:
+                if hasattr(self, '_board_wheel_rebind'):
+                    self._board_wheel_rebind(self.board_cards_frame)
+            except Exception:
+                pass
 
         except Exception as e:
             import traceback
@@ -9125,6 +9145,13 @@ class LogiPanApp:
                                  bg="#F5F6F8", fg="#999",
                                  font=("맑은 고딕", 8), pady=15, justify="center")
                 hint.pack(side="bottom")
+
+            # [추가] 새로 추가된 카드들에도 휠 바인딩 적용
+            try:
+                if hasattr(self, '_field_wheel_rebind'):
+                    self._field_wheel_rebind(self.cards_frame)
+            except Exception:
+                pass
 
         except Exception as e:
             import traceback
