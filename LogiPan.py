@@ -5969,8 +5969,14 @@ class LogiPanApp:
                   bg="#34a853", fg="white",
                   relief="flat", padx=14, pady=8,
                   cursor="hand2").pack(side="right", padx=(8, 0))
-        tk.Button(action_box, text="✏️ 공지 작성",
-                  command=self.send_global_notice,
+        tk.Button(action_box, text="👤 개인 메시지",
+                  command=lambda: self.send_global_notice(mode="individual"),
+                  font=("맑은 고딕", 9, "bold"),
+                  bg="#8B5CF6", fg="white",
+                  relief="flat", padx=14, pady=8,
+                  cursor="hand2").pack(side="right", padx=(8, 0))
+        tk.Button(action_box, text="📢 전체 공지",
+                  command=lambda: self.send_global_notice(mode="all"),
                   font=("맑은 고딕", 9, "bold"),
                   bg="#1877F2", fg="white",
                   relief="flat", padx=14, pady=8,
@@ -6091,84 +6097,325 @@ class LogiPanApp:
             else:
                 chip.config(bg="#F0F2F5", fg="#666")
 
-    def send_global_notice(self):
-            notice_win = tk.Toplevel(self.root)
-            notice_win.title("📢 메시지 전송")
-            notice_win.configure(bg="#f8f9fa")
-            self.position_popup(notice_win, 500, 650)
-            self._bind_esc_close(notice_win)
+    def get_worker_list(self):
+        """fcm_tokens 컬렉션에서 등록된 작업자 이름 목록"""
+        try:
+            if not hasattr(self, 'db') or self.db is None:
+                return []
+            docs = self.db.collection('fcm_tokens').stream()
+            return sorted([doc.id for doc in docs])
+        except Exception as e:
+            print(f"⚠️ 작업자 목록 로드 실패: {e}")
+            return []
 
-            # 1. 대상 선택
-            target_var = tk.StringVar(value="all")
-            
-            target_frame = tk.LabelFrame(notice_win, text="수신 대상", font=("맑은 고딕", 10, "bold"), bg="#f8f9fa", pady=10)
-            target_frame.pack(fill="x", padx=20, pady=10)
+    def send_global_notice(self, mode="all"):
+        """공지/메시지 작성 팝업 (모던 UI + 사진 첨부 지원).
+        Args:
+            mode: 'all' (전체 공지) | 'individual' (개인 메시지)
+        """
+        is_all = (mode == "all")
 
-            tk.Radiobutton(target_frame, text="전체 공지사항", variable=target_var, value="all", bg="#f8f9fa").pack(side="left", padx=20)
-            tk.Radiobutton(target_frame, text="특정 작업자 지정", variable=target_var, value="individual", bg="#f8f9fa").pack(side="left", padx=20)
+        # 모드별 테마
+        if is_all:
+            theme_color = "#1877F2"
+            theme_icon = "📢"
+            theme_title = "전체 공지 작성"
+            theme_subtitle = "모든 작업자에게 발송됩니다"
+        else:
+            theme_color = "#8B5CF6"
+            theme_icon = "👤"
+            theme_title = "개인 메시지 작성"
+            theme_subtitle = "특정 작업자에게 1:1로 전달됩니다"
 
-            # [추가] 현재 작성자(=내 이름) 표시
-            sender_name = getattr(self, 'current_user', '관리자')
-            tk.Label(notice_win, text=f"✍️ 작성자: {sender_name}  (변경하려면 '⚙️ 내 이름 설정' 사용)",
-                     font=("맑은 고딕", 9, "bold"), bg="#f8f9fa", fg="#1a73e8").pack(anchor="w", padx=25, pady=(5, 0))
+        notice_win = tk.Toplevel(self.root)
+        notice_win.title(f"{theme_icon} {theme_title}")
+        notice_win.configure(bg="#F5F6F8")
+        win_height = 580 if is_all else 620
+        self.position_popup(notice_win, 540, win_height)
+        self._bind_esc_close(notice_win)
+        notice_win.transient(self.root)
+        notice_win.grab_set()
 
-            # 2. 작업자명 입력 (타이핑 방식)
-            tk.Label(notice_win, text="👤 받는 사람 이름 (개인 전송 시 필수)", font=("맑은 고딕", 9), bg="#f8f9fa", fg="#666").pack(anchor="w", padx=25)
-            name_entry = tk.Entry(notice_win, font=("맑은 고딕", 11), bd=1, relief="solid")
-            name_entry.pack(fill="x", padx=20, pady=(0, 15))
+        # ========== [헤더] ==========
+        head = tk.Frame(notice_win, bg="#F5F6F8")
+        head.pack(fill="x", padx=22, pady=(18, 6))
+        tk.Label(head, text=theme_icon, font=("맑은 고딕", 24),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 10))
+        title_box = tk.Frame(head, bg="#F5F6F8")
+        title_box.pack(side="left", anchor="w")
+        tk.Label(title_box, text=theme_title,
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_box, text=theme_subtitle,
+                 font=("맑은 고딕", 9),
+                 bg="#F5F6F8", fg="#6B7280").pack(anchor="w")
 
-            # 3. 내용 입력
-            tk.Label(notice_win, text="💬 메시지 내용", font=("맑은 고딕", 10, "bold"), bg="#f8f9fa").pack(anchor="w", padx=25)
-            notice_text = tk.Text(notice_win, font=("맑은 고딕", 11), height=15, bd=1, relief="solid")
-            notice_text.pack(padx=20, pady=5, fill='x')
+        # ========== [작성자 정보 카드] ==========
+        sender_name = getattr(self, 'current_user', '관리자')
+        info_card = tk.Frame(notice_win, bg="white",
+                              highlightthickness=1,
+                              highlightbackground="#E5E7EB")
+        info_card.pack(fill="x", padx=22, pady=(8, 8))
+        tk.Frame(info_card, bg=theme_color, width=4).pack(side="left", fill="y")
+        info_inner = tk.Frame(info_card, bg="white", padx=14, pady=10)
+        info_inner.pack(side="left", fill="both", expand=True)
 
-            def submit_notice():
-                target = target_var.get()
-                receiver_name = name_entry.get().strip()
-                content = notice_text.get("1.0", tk.END).strip()
+        tk.Label(info_inner, text="✍️ 작성자",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8, "bold")).pack(anchor="w")
+        tk.Label(info_inner, text=sender_name,
+                 bg="white", fg="#1A1A1A",
+                 font=("맑은 고딕", 11, "bold")).pack(anchor="w")
 
-                if target == "individual" and not receiver_name:
-                    messagebox.showwarning("경고", "이름을 입력해주세요.", parent=notice_win)
+        # ========== [받는 사람 카드 - 개인 메시지일 때만] ==========
+        receiver_combo = None
+        if not is_all:
+            recv_card = tk.Frame(notice_win, bg="white",
+                                   highlightthickness=1,
+                                   highlightbackground="#E5E7EB")
+            recv_card.pack(fill="x", padx=22, pady=(0, 8))
+            tk.Frame(recv_card, bg=theme_color, width=4).pack(side="left", fill="y")
+            recv_inner = tk.Frame(recv_card, bg="white", padx=14, pady=10)
+            recv_inner.pack(side="left", fill="both", expand=True)
+
+            tk.Label(recv_inner, text="👤 받는 사람",
+                     bg="white", fg="#9CA3AF",
+                     font=("맑은 고딕", 8, "bold")).pack(anchor="w")
+
+            # 작업자 목록 콤보박스
+            worker_list = self.get_worker_list()
+            receiver_combo = ttk.Combobox(recv_inner,
+                                            values=worker_list,
+                                            font=("맑은 고딕", 11))
+            receiver_combo.pack(fill="x", ipady=3, pady=(2, 0))
+            if worker_list:
+                placeholder = "이름 선택 또는 직접 입력"
+            else:
+                placeholder = "받는 사람 이름 입력"
+            tk.Label(recv_inner,
+                     text=f"💡 {placeholder} ({len(worker_list)}명 등록)" if worker_list
+                          else f"⚠️ 등록된 작업자가 없어 직접 입력하세요",
+                     bg="white", fg="#9CA3AF",
+                     font=("맑은 고딕", 8)).pack(anchor="w", pady=(2, 0))
+
+        # ========== [메시지 본문 카드] ==========
+        msg_card = tk.Frame(notice_win, bg="white",
+                              highlightthickness=1,
+                              highlightbackground="#E5E7EB")
+        msg_card.pack(fill="both", expand=True, padx=22, pady=(0, 8))
+        tk.Frame(msg_card, bg=theme_color, width=4).pack(side="left", fill="y")
+        msg_inner = tk.Frame(msg_card, bg="white", padx=14, pady=10)
+        msg_inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(msg_inner, text="💬 메시지 내용",
+                 bg="white", fg="#9CA3AF",
+                 font=("맑은 고딕", 8, "bold")).pack(anchor="w")
+
+        # 텍스트 영역 + 스크롤
+        text_outer = tk.Frame(msg_inner, bg="white",
+                                highlightthickness=1, highlightbackground="#E5E7EB")
+        text_outer.pack(fill="both", expand=True, pady=(4, 0))
+        notice_text = tk.Text(text_outer, font=("맑은 고딕", 11),
+                                bd=0, relief="flat",
+                                wrap="word", padx=8, pady=6,
+                                height=10)
+        notice_text.pack(side="left", fill="both", expand=True)
+        text_scroll = tk.Scrollbar(text_outer, command=notice_text.yview)
+        text_scroll.pack(side="right", fill="y")
+        notice_text.config(yscrollcommand=text_scroll.set)
+
+        # ========== [사진 첨부 섹션] ==========
+        # 첨부 상태 표시 영역 (사진 골랐을 때만 보임)
+        photo_status_frame = tk.Frame(notice_win, bg="#FFF9E6",
+                                        highlightthickness=1,
+                                        highlightbackground="#FFD966")
+        # 평소엔 숨김
+        photo_status_frame.pack_forget()
+
+        thumb_label = tk.Label(photo_status_frame, bg="#FFF9E6")
+        thumb_label.pack(side="left", padx=8, pady=8)
+        photo_info_label = tk.Label(photo_status_frame, text="",
+                                       bg="#FFF9E6", fg="#444",
+                                       font=("맑은 고딕", 10, "bold"))
+        photo_info_label.pack(side="left", padx=(0, 10))
+
+        # 첨부 상태 변수
+        notice_pending = {"path": None, "thumb_img": None}
+
+        def clear_pending_photo():
+            notice_pending["path"] = None
+            notice_pending["thumb_img"] = None
+            thumb_label.config(image="")
+            photo_info_label.config(text="")
+            photo_status_frame.pack_forget()
+
+        cancel_photo_btn = tk.Button(photo_status_frame, text="✕ 취소",
+                                       command=clear_pending_photo,
+                                       bg="#FF6B6B", fg="white",
+                                       font=("맑은 고딕", 9, "bold"),
+                                       relief="flat", padx=10, pady=5,
+                                       cursor="hand2")
+        cancel_photo_btn.pack(side="right", padx=8, pady=8)
+
+        def show_thumb(image_source):
+            """사진 첨부 시 썸네일 표시"""
+            try:
+                from PIL import Image, ImageTk
+                if isinstance(image_source, str):
+                    pil_img = Image.open(image_source)
+                else:
+                    pil_img = image_source
+                pil_thumb = pil_img.copy()
+                pil_thumb.thumbnail((60, 60), Image.LANCZOS)
+                tk_thumb = ImageTk.PhotoImage(pil_thumb)
+                notice_pending["thumb_img"] = tk_thumb  # 가비지 콜렉션 방지
+                thumb_label.config(image=tk_thumb)
+                photo_info_label.config(text="📷 사진 1장 첨부됨")
+                # 메시지 입력칸 위에 첨부 표시 끼워넣기
+                photo_status_frame.pack(fill="x", padx=22, pady=(0, 8),
+                                          before=action_bar_frame)
+            except Exception as e:
+                messagebox.showerror("오류", f"사진 미리보기 실패: {e}", parent=notice_win)
+
+        def attach_photo_from_file():
+            """파일에서 사진 선택"""
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(
+                title="사진 선택",
+                filetypes=[("이미지 파일", "*.png *.jpg *.jpeg *.gif *.bmp *.webp")],
+                parent=notice_win)
+            if path:
+                notice_pending["path"] = path
+                show_thumb(path)
+
+        def paste_photo_from_clipboard(event=None):
+            """클립보드에서 사진 붙여넣기 (Ctrl+V)"""
+            try:
+                from PIL import ImageGrab
+                img = ImageGrab.grabclipboard()
+                if img is None:
                     return
-                if not content:
-                    messagebox.showwarning("경고", "내용을 입력해주세요.", parent=notice_win)
-                    return
-                
-                if messagebox.askyesno("확인", "메시지를 전송하시겠습니까?", parent=notice_win):
-                    try:
-                        # [수정] 작성자에 self.current_user 사용
-                        my_name = getattr(self, 'current_user', '관리자')
-                        # 데이터 구성
-                        post_data = {
-                            'user': receiver_name if target == "individual" else my_name, 
-                            'real_sender': my_name, # 실제 보낸 사람 (내 이름)
-                            'category': "공지" if target == "all" else "요청",
-                            'receiver': receiver_name if target == "individual" else "all",
-                            'text': content,
-                            'status': "📢 공지" if target == "all" else "🆕 지시", # 리스트에 뜰 상태
-                            'timestamp': firestore.SERVER_TIMESTAMP
-                        }
-                        
-                        self.db.collection('board_posts').add(post_data)
-                        # [추가] 푸시 알림 발송
-                        if target == "all":
-                            preview = content[:60] + ('...' if len(content) > 60 else '')
-                            self.send_fcm_push("all",
-                                                f"📢 공지: {preview}",
-                                                f"- {my_name}")
-                        else:
-                            preview = content[:60] + ('...' if len(content) > 60 else '')
-                            self.send_fcm_push(receiver_name,
-                                                f"🔒 {my_name}님의 지시",
-                                                preview)
-                        messagebox.showinfo("완료", "전송되었습니다.", parent=notice_win)
-                        notice_win.destroy()
-                        self.update_board_view()
-                    except Exception as e:
-                        messagebox.showerror("오류", f"실패: {e}", parent=notice_win)
+                # 단일 이미지/리스트 처리
+                if isinstance(img, list):
+                    if not img:
+                        return
+                    # 파일 리스트면 첫 번째
+                    p = img[0]
+                    if isinstance(p, str) and os.path.exists(p):
+                        notice_pending["path"] = p
+                        show_thumb(p)
+                else:
+                    # PIL Image - 임시 파일로 저장
+                    import tempfile
+                    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                    img.save(tmp.name, "PNG")
+                    tmp.close()
+                    notice_pending["path"] = tmp.name
+                    show_thumb(img)
+                return "break"
+            except Exception as e:
+                print(f"⚠️ 붙여넣기 실패: {e}")
 
-            tk.Button(notice_win, text="🚀 메시지 보내기", bg="#1a73e8", fg="white", 
-                    font=("맑은 고딕", 12, "bold"), command=submit_notice, height=2).pack(fill='x', padx=20, pady=20)
+        # 텍스트 위젯에 Ctrl+V 바인딩
+        notice_text.bind("<Control-v>", paste_photo_from_clipboard)
+        notice_text.bind("<Control-V>", paste_photo_from_clipboard)
+
+        # ========== [액션 바: 사진 첨부 + 보내기] ==========
+        action_bar_frame = tk.Frame(notice_win, bg="#F5F6F8")
+        action_bar_frame.pack(fill="x", padx=22, pady=(0, 16))
+
+        # 좌측: 사진 첨부
+        tk.Button(action_bar_frame, text="📷 사진 첨부",
+                   command=attach_photo_from_file,
+                   bg="white", fg="#374151",
+                   font=("맑은 고딕", 10, "bold"),
+                   relief="flat", padx=14, pady=8,
+                   cursor="hand2",
+                   highlightthickness=1, highlightbackground="#E5E7EB"
+                   ).pack(side="left")
+
+        tk.Label(action_bar_frame, text="  📋 Ctrl+V로 붙여넣기 가능",
+                 bg="#F5F6F8", fg="#9CA3AF",
+                 font=("맑은 고딕", 8)).pack(side="left")
+
+        # ========== [전송 함수] ==========
+        def submit_notice():
+            content = notice_text.get("1.0", tk.END).strip()
+            receiver_name = receiver_combo.get().strip() if receiver_combo else ""
+
+            # 검증
+            if not is_all and not receiver_name:
+                messagebox.showwarning("받는 사람 필요",
+                    "개인 메시지는 받는 사람 이름을 입력하세요.",
+                    parent=notice_win)
+                return
+            if not content and not notice_pending["path"]:
+                messagebox.showwarning("내용 없음",
+                    "메시지 내용 또는 사진을 첨부하세요.",
+                    parent=notice_win)
+                return
+
+            # 확인 메시지
+            if is_all:
+                confirm_msg = "전체 작업자에게 공지를 발송하시겠습니까?"
+            else:
+                confirm_msg = f"'{receiver_name}'님에게 메시지를 발송하시겠습니까?"
+            if not messagebox.askyesno("발송 확인", confirm_msg, parent=notice_win):
+                return
+
+            try:
+                my_name = getattr(self, 'current_user', '관리자')
+
+                # 사진이 있으면 imgbb 업로드
+                image_url = ""
+                if notice_pending["path"]:
+                    image_url = self._upload_image_to_imgbb(
+                        notice_pending["path"], notice_win) or ""
+
+                # 데이터 구성
+                post_data = {
+                    'user': receiver_name if not is_all else my_name,
+                    'real_sender': my_name,
+                    'category': "공지" if is_all else "요청",
+                    'receiver': receiver_name if not is_all else "all",
+                    'text': content,
+                    'imageUrl': image_url,  # [추가]
+                    'status': "📢 공지" if is_all else "🆕 지시",
+                    'timestamp': firestore.SERVER_TIMESTAMP
+                }
+                self.db.collection('board_posts').add(post_data)
+
+                # 푸시 알림
+                preview = content[:60] + ('...' if len(content) > 60 else '')
+                if not preview and image_url:
+                    preview = "📷 사진"
+                if is_all:
+                    self.send_fcm_push("all",
+                                        f"📢 공지: {preview}",
+                                        f"- {my_name}")
+                else:
+                    self.send_fcm_push(receiver_name,
+                                        f"🔒 {my_name}님의 지시",
+                                        preview)
+
+                messagebox.showinfo("발송 완료",
+                    "✅ 메시지가 전송되었습니다.",
+                    parent=notice_win)
+                notice_win.destroy()
+                self.update_board_view()
+            except Exception as e:
+                messagebox.showerror("발송 실패",
+                    f"전송 중 오류가 발생했습니다.\n{e}",
+                    parent=notice_win)
+
+        # 우측: 전송 버튼
+        send_btn_text = "📢 전체 발송" if is_all else "📤 메시지 보내기"
+        tk.Button(action_bar_frame, text=send_btn_text,
+                   command=submit_notice,
+                   bg=theme_color, fg="white",
+                   font=("맑은 고딕", 11, "bold"),
+                   relief="flat", padx=20, pady=8,
+                   cursor="hand2").pack(side="right")
 
     # --- [기능 1: 소통 글 더블클릭 - 공지는 열람, 개인/문의는 대화 스레드] ---
     def on_board_double_click(self, event):
@@ -6418,6 +6665,61 @@ class LogiPanApp:
                                                   anchor="s",
                                                   padx=(4, 0) if not is_admin_origin else (0, 4),
                                                   pady=(0, 4))
+
+        # ========== [본문 첨부 사진 표시 (있을 때만)] ==========
+        body_img_url = post_data.get('imageUrl', '')
+        if body_img_url and body_img_url.strip():
+            if not hasattr(self, '_board_detail_img_cache'):
+                self._board_detail_img_cache = []
+            self._board_detail_img_cache.clear()
+
+            body_photo_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
+            body_photo_frame.pack(fill="x", padx=15, pady=(0, 5))
+
+            def _load_body_image():
+                try:
+                    if not detail_win.winfo_exists(): return
+                    response = requests.get(body_img_url.strip(), timeout=10)
+                    img_raw = Image.open(BytesIO(response.content))
+                    img_raw.thumbnail((420, 500))
+                    photo = ImageTk.PhotoImage(img_raw)
+                    self._board_detail_img_cache.append(photo)
+                    if detail_win.winfo_exists():
+                        align_anchor = "e" if is_admin_origin else "w"
+                        pf = tk.Frame(body_photo_frame, bg="#B2C7DA")
+                        pf.pack(fill="x", anchor=align_anchor, pady=4)
+                        img_holder = tk.Frame(pf, bg="white", padx=2, pady=2)
+                        img_holder.pack(side="right" if is_admin_origin else "left",
+                                          anchor=align_anchor)
+                        lbl = tk.Label(img_holder, image=photo, bg="white",
+                                         cursor="hand2")
+                        lbl.pack()
+                        lbl.bind("<Button-1>",
+                                  lambda e, u=body_img_url: __import__('webbrowser').open(u))
+                        # 우클릭 - 원본/저장
+                        def _save_body_img():
+                            try:
+                                res = requests.get(body_img_url.strip())
+                                desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+                                path = os.path.join(desktop, f"공지_{item_id[:5]}.jpg")
+                                with open(path, "wb") as f: f.write(res.content)
+                                messagebox.showinfo("완료", f"바탕화면에 저장됨:\n{path}", parent=detail_win)
+                            except Exception as ex:
+                                messagebox.showerror("실패", f"저장 실패: {ex}", parent=detail_win)
+                        save_menu = tk.Menu(detail_win, tearoff=0, font=("맑은 고딕", 9))
+                        save_menu.add_command(label="🔍 원본 크기로 보기",
+                                                command=lambda u=body_img_url: __import__('webbrowser').open(u))
+                        save_menu.add_command(label="💾 바탕화면에 저장",
+                                                command=_save_body_img)
+                        lbl.bind("<Button-3>",
+                                  lambda e, m=save_menu: m.post(e.x_root, e.y_root))
+                except Exception as ex:
+                    if detail_win.winfo_exists():
+                        tk.Label(body_photo_frame, text=f"❌ 사진 로드 실패: {ex}",
+                                 fg="#c00", bg="#B2C7DA",
+                                 font=("맑은 고딕", 9)).pack(anchor="w", pady=2)
+
+            threading.Thread(target=_load_body_image, daemon=True).start()
 
         # ========== [댓글(messages) 영역] ==========
         divider_frame = tk.Frame(scrollable_frame, bg="#B2C7DA")
