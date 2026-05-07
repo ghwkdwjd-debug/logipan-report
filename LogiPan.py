@@ -6380,7 +6380,7 @@ class LogiPanApp:
                     'receiver': receiver_name if not is_all else "all",
                     'text': content,
                     'imageUrl': image_url,  # [추가]
-                    'status': "📢 공지" if is_all else "🆕 지시",
+                    'status': "📢 공지" if is_all else "🆕 요청",
                     'timestamp': firestore.SERVER_TIMESTAMP
                 }
                 self.db.collection('board_posts').add(post_data)
@@ -6395,7 +6395,7 @@ class LogiPanApp:
                                         f"- {my_name}")
                 else:
                     self.send_fcm_push(receiver_name,
-                                        f"🔒 {my_name}님의 지시",
+                                        f"🔒 {my_name}님의 요청",
                                         preview)
 
                 messagebox.showinfo("발송 완료",
@@ -6678,8 +6678,11 @@ class LogiPanApp:
 
             def _load_body_image():
                 try:
+                    import requests as _rq
+                    from io import BytesIO
+                    from PIL import Image, ImageTk
                     if not detail_win.winfo_exists(): return
-                    response = requests.get(body_img_url.strip(), timeout=10)
+                    response = _rq.get(body_img_url.strip(), timeout=10)
                     img_raw = Image.open(BytesIO(response.content))
                     img_raw.thumbnail((420, 500))
                     photo = ImageTk.PhotoImage(img_raw)
@@ -6699,7 +6702,7 @@ class LogiPanApp:
                         # 우클릭 - 원본/저장
                         def _save_body_img():
                             try:
-                                res = requests.get(body_img_url.strip())
+                                res = _rq.get(body_img_url.strip())
                                 desktop = os.path.join(os.path.expanduser("~"), "Desktop")
                                 path = os.path.join(desktop, f"공지_{item_id[:5]}.jpg")
                                 with open(path, "wb") as f: f.write(res.content)
