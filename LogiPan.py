@@ -797,6 +797,7 @@ class LogiPanApp:
             win.geometry("460x280")
         win.transient(parent_win)
         win.grab_set()
+        self._bind_esc_close(win)
 
         sheets = list(self.load_sheet_list())
         existing = sheets[edit_index] if is_edit and 0 <= edit_index < len(sheets) else {}
@@ -1246,6 +1247,7 @@ class LogiPanApp:
             win.geometry("460x280")
         win.transient(parent_win)
         win.grab_set()
+        self._bind_esc_close(win)
 
         mapping = dict(self.load_md_mapping())
         existing_id = mapping.get(edit_name, '') if is_edit else ''
@@ -1351,6 +1353,7 @@ class LogiPanApp:
             win.geometry("600x480")
         win.transient(self.root)
         win.grab_set()
+        self._bind_esc_close(win)
 
         # 헤더
         head = tk.Frame(win, bg="#F5F6F8")
@@ -1459,6 +1462,7 @@ class LogiPanApp:
             win.geometry("560x740")
         win.transient(self.root)
         win.grab_set()
+        self._bind_esc_close(win)
 
         # ===== 스크롤 컨테이너 =====
         # 외부: 스크롤바 + 캔버스
@@ -1789,6 +1793,7 @@ class LogiPanApp:
                 progress.geometry("360x100")
             progress.transient(win)
             progress.grab_set()
+            self._bind_esc_close(progress)
             tk.Label(progress, text=f"🔍 '{brand}' 검색 중...",
                      bg="#F5F6F8", font=("맑은 고딕", 10, "bold")).pack(pady=(20, 4))
             progress_lbl = tk.Label(progress, text="시작",
@@ -2017,6 +2022,7 @@ class LogiPanApp:
             win.geometry("480x620")
         win.transient(self.root)
         win.grab_set()
+        self._bind_esc_close(win)
 
         # ===== 스크롤 컨테이너 =====
         scroll_outer = tk.Frame(win, bg="#F5F6F8")
@@ -2626,6 +2632,29 @@ class LogiPanApp:
                 win.geometry(f"{width}x{height}")
             except Exception:
                 pass
+
+    def _bind_esc_close(self, win, on_close=None):
+        """[추가] 팝업창에 ESC 키로 닫기 바인딩.
+        Args:
+            win: Toplevel 윈도우
+            on_close: 닫기 전에 실행할 콜백 (선택)
+        """
+        def _close(event=None):
+            try:
+                if on_close:
+                    on_close()
+            except Exception:
+                pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        try:
+            win.bind("<Escape>", _close)
+            # ESC 키 받으려면 포커스가 win 또는 그 자식에 있어야 함
+            # focus_set은 position_popup에서 focus_force로 처리하니 OK
+        except Exception as e:
+            print(f"⚠️ ESC 바인딩 실패: {e}")
 
     def clean_code_strictly(self, series):
         return series.astype(str).str.strip().str.replace(r'\.0$', '', regex=True).str.upper()
@@ -3237,6 +3266,7 @@ class LogiPanApp:
         win.configure(bg="white")
         win.transient(self.root)
         win.grab_set()
+        self._bind_esc_close(win)
         try:
             self.position_popup(win, 380, 220)
         except Exception:
@@ -4245,6 +4275,7 @@ class LogiPanApp:
             self.position_popup(win, 480, 600)
         except Exception:
             win.geometry("480x600")
+        self._bind_esc_close(win)
 
         # 헤더
         head = tk.Frame(win, bg="#F5F6F8")
@@ -5518,6 +5549,7 @@ class LogiPanApp:
             self.position_popup(win, 380, 360)
         except Exception:
             win.geometry("380x360")
+        self._bind_esc_close(win)
 
         # 헤더
         head = tk.Frame(win, bg="#F5F6F8")
@@ -6051,6 +6083,7 @@ class LogiPanApp:
             notice_win.title("📢 메시지 전송")
             notice_win.configure(bg="#f8f9fa")
             self.position_popup(notice_win, 500, 650)
+            self._bind_esc_close(notice_win)
 
             # 1. 대상 선택
             target_var = tk.StringVar(value="all")
@@ -6164,6 +6197,7 @@ class LogiPanApp:
         win.title("📢 공지 상세")
         win.configure(bg="white")
         self.position_popup(win, 500, 450)
+        self._bind_esc_close(win)
 
         header = tk.Frame(win, bg="#FFF9C4", pady=15)
         header.pack(fill="x")
@@ -6225,6 +6259,7 @@ class LogiPanApp:
         win_h = min(900, int(screen_h * 0.85))
         self.position_popup(detail_win, 580, win_h)
         detail_win.configure(bg="#B2C7DA")
+        self._bind_esc_close(detail_win)
 
         # ========== [상단 헤더] ==========
         header = tk.Frame(detail_win, bg="white", height=70,
@@ -8156,6 +8191,7 @@ class LogiPanApp:
         win_h = min(900, int(screen_h * 0.85))
         self.position_popup(detail_win, 580, win_h)
         detail_win.configure(bg="#B2C7DA")  # 카톡 배경 푸르스름
+        self._bind_esc_close(detail_win)
 
         # ========== [카톡 스타일 상단 헤더 - 고정] ==========
         header = tk.Frame(detail_win, bg="white", height=70,
