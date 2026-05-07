@@ -6129,6 +6129,125 @@ class LogiPanApp:
             else:
                 chip.config(bg="#F0F2F5", fg="#666")
 
+    # ========== [추가] 응답자(대응자) 관리 시스템 ==========
+    def _claim_main_responder(self, collection_name, doc_id, my_name):
+        """[추가] 메인 대응자로 등록 (동시 클릭 방지: 트랜잭션).
+        Returns: (success: bool, current_main: str)
+        """
+        if not (self.db and my_name and doc_id):
+            return False, ""
+        try:
+            doc_ref = self.db.collection(collection_name).document(doc_id)
+
+            @firestore.transactional
+            def _try_claim(transaction):
+                snap = doc_ref.get(transaction=transaction)
+                if not snap.exists:
+                    return False, ""
+                data = snap.to_dict() or {}
+                current = data.get('responder_main', '') or ''
+                if current and current != my_name:
+                    # 이미 다른 사람이 메인
+                    return False, current
+                # 비어있거나 나 자신이면 OK (trans-update)
+                transaction.update(doc_ref, {
+                    'responder_main': my_name,
+                    'responder_main_at': firestore.SERVER_TIMESTAMP,
+                })
+                return True, my_name
+
+            transaction = self.db.transaction()
+            return _try_claim(transaction)
+        except Exception as e:
+            print(f"⚠️ 메인 대응자 등록 실패: {e}")
+            return False, ""
+
+    def _join_extra_responder(self, collection_name, doc_id, my_name):
+        """[추가] 추가 참여자로 등록 (메인이 아닌 경우)."""
+        if not (self.db and my_name and doc_id):
+            return False
+        try:
+            doc_ref = self.db.collection(collection_name).document(doc_id)
+
+            @firestore.transactional
+            def _try_join(transaction):
+                snap = doc_ref.get(transaction=transaction)
+                if not snap.exists:
+                    return False
+                data = snap.to_dict() or {}
+                main = data.get('responder_main', '') or ''
+                if main == my_name:
+                    return True  # 메인이면 굳이 참여자 추가 X
+                extra = data.get('responders_extra', []) or []
+                if my_name in extra:
+                    return True  # 이미 참여자
+                extra.append(my_name)
+                transaction.update(doc_ref, {
+                    'responders_extra': extra,
+                })
+                return True
+
+            transaction = self.db.transaction()
+            return _try_join(transaction)
+        except Exception as e:
+            print(f"⚠️ 참여자 등록 실패: {e}")
+            return False
+
+    def _leave_response(self, collection_name, doc_id, my_name):
+        """[추가] 대응에서 빠지기.
+        - 메인이면 → 다음 참여자에게 자동 승계 (없으면 메인 = '')
+        - 참여자면 → 그냥 리스트에서 빠짐
+        """
+        if not (self.db and my_name and doc_id):
+            return False
+        try:
+            doc_ref = self.db.collection(collection_name).document(doc_id)
+
+            @firestore.transactional
+            def _try_leave(transaction):
+                snap = doc_ref.get(transaction=transaction)
+                if not snap.exists:
+                    return False
+                data = snap.to_dict() or {}
+                main = data.get('responder_main', '') or ''
+                extra = list(data.get('responders_extra', []) or [])
+
+                update_data = {}
+                if main == my_name:
+                    # 메인 사퇴 → 자동 승계
+                    if extra:
+                        new_main = extra.pop(0)
+                        update_data['responder_main'] = new_main
+                        update_data['responder_main_at'] = firestore.SERVER_TIMESTAMP
+                        update_data['responders_extra'] = extra
+                    else:
+                        update_data['responder_main'] = ''
+                        update_data['responder_main_at'] = None
+                elif my_name in extra:
+                    extra.remove(my_name)
+                    update_data['responders_extra'] = extra
+                else:
+                    return True  # 등록 안 되어 있으면 그냥 무시
+
+                if update_data:
+                    transaction.update(doc_ref, update_data)
+                return True
+
+            transaction = self.db.transaction()
+            return _try_leave(transaction)
+        except Exception as e:
+            print(f"⚠️ 대응 빠지기 실패: {e}")
+            return False
+
+    def _format_responder_label(self, main, extra):
+        """[추가] 대응자 라벨 생성: '👤 김관리자' or '👤 김관리자 (외 1명)'"""
+        if not main:
+            return ""
+        extra_count = len(extra) if extra else 0
+        if extra_count > 0:
+            return f"👤 {main} (외 {extra_count}명) 대응 중"
+        return f"👤 {main} 대응 중"
+
     def get_worker_list(self):
         """fcm_tokens 컬렉션에서 등록된 작업자 이름 목록"""
         try:
@@ -6516,7 +6635,11 @@ class LogiPanApp:
                 self.db.collection('board_posts').document(item_id).update({
                     'status': '✅ 확인완료',
                     'closed_time': firestore.SERVER_TIMESTAMP,
-                    'closed_by': getattr(self, 'current_user', '관리자')
+                    'closed_by': getattr(self, 'current_user', '관리자'),
+                    # [추가] 대응자 자동 해제
+                    'responder_main': '',
+                    'responder_main_at': None,
+                    'responders_extra': [],
                 })
                 win.destroy()
                 self.update_board_view()
@@ -6603,6 +6726,91 @@ class LogiPanApp:
 
         # 헤더 아래 구분선
         tk.Frame(detail_win, bg="#E1E4E8", height=1).pack(side="top", fill="x")
+
+        # ========== [추가] 대응자 표시 바 (공지/소통, 헤더 아래 고정) ==========
+        # 완료 카드는 표시 X, 본인이 보낸 메시지(메인 대응자가 자기) 케이스도 대응 의미 있음
+        is_done_b = '완료' in str(post_data.get('status', '')) or '확인완료' in str(post_data.get('status', ''))
+        # 공지(전체 발송)는 대응 시스템 의미 없음
+        is_notice_only = (category == '공지' and post_data.get('receiver') == 'all')
+        if not is_done_b and not is_notice_only:
+            b_resp_bar = tk.Frame(detail_win, bg="#F5F3FF", height=46)
+            b_resp_bar.pack(side="top", fill="x")
+            b_resp_bar.pack_propagate(False)
+
+            b_resp_label = tk.Label(b_resp_bar, text="",
+                                      bg="#F5F3FF", fg="#7C3AED",
+                                      font=("맑은 고딕", 10, "bold"),
+                                      anchor="w")
+            b_resp_label.pack(side="left", padx=(15, 0), pady=10)
+
+            b_resp_btn = tk.Button(b_resp_bar, text="",
+                                     bg="#7C3AED", fg="white",
+                                     font=("맑은 고딕", 9, "bold"),
+                                     relief="flat", padx=12, pady=5,
+                                     cursor="hand2")
+            b_resp_btn.pack(side="right", padx=(0, 15), pady=8)
+
+            def _b_refresh_responder_ui(snap_data):
+                if not b_resp_bar.winfo_exists():
+                    return
+                main = snap_data.get('responder_main', '') or ''
+                extra = snap_data.get('responders_extra', []) or []
+                my_name = getattr(self, 'current_user', '관리자')
+                if main:
+                    b_resp_label.config(text=self._format_responder_label(main, extra))
+                else:
+                    b_resp_label.config(text="🆓 아직 대응자 없음")
+                if main == my_name:
+                    b_resp_btn.config(text="✋ 대응 종료", bg="#DC2626",
+                                        command=lambda: _b_do_leave())
+                elif my_name in extra:
+                    b_resp_btn.config(text="✋ 참여 취소", bg="#DC2626",
+                                        command=lambda: _b_do_leave())
+                elif main:
+                    b_resp_btn.config(text="➕ 나도 참여", bg="#10B981",
+                                        command=lambda: _b_do_join())
+                else:
+                    b_resp_btn.config(text="🙋 내가 대응", bg="#7C3AED",
+                                        command=lambda: _b_do_claim())
+
+            def _b_do_claim():
+                my_name = getattr(self, 'current_user', '관리자')
+                ok, who = self._claim_main_responder('board_posts', item_id, my_name)
+                if not ok and who:
+                    messagebox.showinfo("알림",
+                        f"이미 {who}님이 대응 중입니다.",
+                        parent=detail_win)
+
+            def _b_do_join():
+                my_name = getattr(self, 'current_user', '관리자')
+                self._join_extra_responder('board_posts', item_id, my_name)
+
+            def _b_do_leave():
+                my_name = getattr(self, 'current_user', '관리자')
+                self._leave_response('board_posts', item_id, my_name)
+
+            _b_refresh_responder_ui(post_data)
+
+            try:
+                def _b_on_doc_change(snapshots, changes, read_time):
+                    for snap in snapshots:
+                        if not snap.exists:
+                            continue
+                        snap_data = snap.to_dict()
+                        try:
+                            detail_win.after(0, lambda d=snap_data: _b_refresh_responder_ui(d))
+                        except Exception:
+                            pass
+                b_doc_ref = self.db.collection('board_posts').document(item_id)
+                b_listener_unsub = b_doc_ref.on_snapshot(_b_on_doc_change)
+                def _b_cleanup_listener(e=None):
+                    try:
+                        b_listener_unsub.unsubscribe()
+                    except Exception:
+                        pass
+                detail_win.bind("<Destroy>", _b_cleanup_listener, add="+")
+            except Exception as e:
+                print(f"⚠️ 응답자 리스너 등록 실패(board): {e}")
 
         # ========== [메인 스크롤 영역] ==========
         main_container = tk.Frame(detail_win, bg="#B2C7DA")
@@ -7137,7 +7345,11 @@ class LogiPanApp:
                 doc_ref.update({
                     'status': '✅ 확인완료',
                     'closed_time': firestore.SERVER_TIMESTAMP,
-                    'closed_by': getattr(self, 'current_user', '관리자')
+                    'closed_by': getattr(self, 'current_user', '관리자'),
+                    # [추가] 대응자 자동 해제
+                    'responder_main': '',
+                    'responder_main_at': None,
+                    'responders_extra': [],
                 })
                 detail_win.destroy()
                 self.update_board_view()
@@ -7384,6 +7596,20 @@ class LogiPanApp:
                  anchor="w", justify="left",
                  wraplength=600).pack(fill="x", anchor="w", pady=(6, 0))
 
+        # [추가] 대응자 표시 (완료 카드 + 공지(전체)는 표시 X)
+        is_done_b = is_done or '완료' in str(status)
+        is_notice_only_b = (category == '공지' and receiver == 'all')
+        if not is_done_b and not is_notice_only_b:
+            responder_main = data.get('responder_main', '') or ''
+            responders_extra = data.get('responders_extra', []) or []
+            if responder_main:
+                resp_label = self._format_responder_label(responder_main, responders_extra)
+                tk.Label(content,
+                         text=resp_label,
+                         bg=card_bg, fg="#7C3AED",
+                         font=("맑은 고딕", 9, "bold"),
+                         anchor="w", justify="left").pack(fill="x", anchor="w", pady=(2, 0))
+
         # 클릭/우클릭 이벤트
         def on_click(e):
             self._direct_board_id = doc_id
@@ -7433,7 +7659,11 @@ class LogiPanApp:
             self.db.collection('board_posts').document(doc_id).update({
                 'status': '✅ 완료',
                 'completed_at': firestore.SERVER_TIMESTAMP,
-                'closed_by': getattr(self, 'current_user', '관리자')
+                'closed_by': getattr(self, 'current_user', '관리자'),
+                # [추가] 대응자 자동 해제
+                'responder_main': '',
+                'responder_main_at': None,
+                'responders_extra': [],
             })
             self._selected_board_id = None
             self.update_board_view()
@@ -8681,6 +8911,99 @@ class LogiPanApp:
         # 헤더 아래 구분선
         tk.Frame(detail_win, bg="#E1E4E8", height=1).pack(side="top", fill="x")
 
+        # ========== [추가] 대응자 표시 바 (헤더 아래 고정) ==========
+        # 완료 카드는 표시 X
+        is_done_card = data.get('status') == '✅ 완료' or '확인완료' in str(data.get('status', ''))
+        current_doc_id = selected_id  # 클로저용
+        if not is_done_card:
+            responder_bar = tk.Frame(detail_win, bg="#F5F3FF", height=46)
+            responder_bar.pack(side="top", fill="x")
+            responder_bar.pack_propagate(False)
+
+            responder_label_widget = tk.Label(responder_bar, text="",
+                                                bg="#F5F3FF", fg="#7C3AED",
+                                                font=("맑은 고딕", 10, "bold"),
+                                                anchor="w")
+            responder_label_widget.pack(side="left", padx=(15, 0), pady=10)
+
+            responder_btn = tk.Button(responder_bar, text="",
+                                        bg="#7C3AED", fg="white",
+                                        font=("맑은 고딕", 9, "bold"),
+                                        relief="flat", padx=12, pady=5,
+                                        cursor="hand2")
+            responder_btn.pack(side="right", padx=(0, 15), pady=8)
+
+            # 갱신 함수 (Firestore 리스너에서 호출)
+            def _refresh_responder_ui(snap_data):
+                if not responder_bar.winfo_exists():
+                    return
+                main = snap_data.get('responder_main', '') or ''
+                extra = snap_data.get('responders_extra', []) or []
+                my_name = getattr(self, 'current_user', '관리자')
+
+                # 라벨
+                if main:
+                    label_text = self._format_responder_label(main, extra)
+                else:
+                    label_text = "🆓 아직 대응자 없음"
+                responder_label_widget.config(text=label_text)
+
+                # 버튼 상태
+                if main == my_name:
+                    responder_btn.config(text="✋ 대응 종료", bg="#DC2626",
+                                          command=lambda: _do_leave())
+                elif my_name in extra:
+                    responder_btn.config(text="✋ 참여 취소", bg="#DC2626",
+                                          command=lambda: _do_leave())
+                elif main:
+                    responder_btn.config(text="➕ 나도 참여", bg="#10B981",
+                                          command=lambda: _do_join())
+                else:
+                    responder_btn.config(text="🙋 내가 대응", bg="#7C3AED",
+                                          command=lambda: _do_claim())
+
+            def _do_claim():
+                my_name = getattr(self, 'current_user', '관리자')
+                ok, who = self._claim_main_responder('field_reports', current_doc_id, my_name)
+                if not ok and who:
+                    messagebox.showinfo("알림",
+                        f"이미 {who}님이 대응 중입니다.",
+                        parent=detail_win)
+
+            def _do_join():
+                my_name = getattr(self, 'current_user', '관리자')
+                self._join_extra_responder('field_reports', current_doc_id, my_name)
+
+            def _do_leave():
+                my_name = getattr(self, 'current_user', '관리자')
+                self._leave_response('field_reports', current_doc_id, my_name)
+
+            # 초기 렌더링
+            _refresh_responder_ui(data)
+
+            # Firestore 실시간 리스너
+            try:
+                def _on_doc_change(snapshots, changes, read_time):
+                    for snap in snapshots:
+                        if not snap.exists:
+                            continue
+                        snap_data = snap.to_dict()
+                        try:
+                            detail_win.after(0, lambda d=snap_data: _refresh_responder_ui(d))
+                        except Exception:
+                            pass
+
+                doc_ref_for_listener = self.db.collection('field_reports').document(current_doc_id)
+                listener_unsub = doc_ref_for_listener.on_snapshot(_on_doc_change)
+                def _cleanup_listener(e=None):
+                    try:
+                        listener_unsub.unsubscribe()
+                    except Exception:
+                        pass
+                detail_win.bind("<Destroy>", _cleanup_listener, add="+")
+            except Exception as e:
+                print(f"⚠️ 응답자 리스너 등록 실패: {e}")
+
         # ========== [메인 스크롤 영역] ==========
         main_container = tk.Frame(detail_win, bg="#B2C7DA")
         main_container.pack(side="top", fill="both", expand=True)
@@ -9418,6 +9741,10 @@ class LogiPanApp:
             if "완료" in str(status):
                 update_data['closed_by'] = getattr(self, 'current_user', '관리자')
                 update_data['closed_time'] = firestore.SERVER_TIMESTAMP
+                # [추가] 대응자 자동 해제
+                update_data['responder_main'] = ''
+                update_data['responder_main_at'] = None
+                update_data['responders_extra'] = []
             self.db.collection('field_reports').document(doc_id).update(update_data)
             messagebox.showinfo("성공", f"상태가 {status}로 변경되었습니다.")
             window.destroy() # 상세 팝업창 닫기
@@ -9684,6 +10011,18 @@ class LogiPanApp:
                      bg=card_bg, fg="#FF4757" if is_worker_reply else "#6B7280",
                      font=("맑은 고딕", 9),
                      anchor="w", justify="left").pack(fill="x", anchor="w")
+
+        # [추가] 대응자 표시 (완료 카드는 표시 X)
+        if status != "✅ 완료":
+            responder_main = data.get('responder_main', '') or ''
+            responders_extra = data.get('responders_extra', []) or []
+            if responder_main:
+                resp_label = self._format_responder_label(responder_main, responders_extra)
+                tk.Label(content,
+                         text=resp_label,
+                         bg=card_bg, fg="#7C3AED",  # 보라
+                         font=("맑은 고딕", 9, "bold"),
+                         anchor="w", justify="left").pack(fill="x", anchor="w", pady=(2, 0))
 
         # 클릭/우클릭 이벤트 (카드 + 모든 자식 위젯에 바인딩)
         def on_click(e):
