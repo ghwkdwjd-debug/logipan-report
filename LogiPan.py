@@ -2883,6 +2883,17 @@ class LogiPanApp:
         self.ent_note_in.bind("<FocusIn>", _note_focus_in)
         self.ent_note_in.bind("<FocusOut>", _note_focus_out)
 
+        # [추가] 불량 모드 토글 버튼 (브랜드명 카드 우측에)
+        self.defect_mode_var = tk.BooleanVar(value=False)
+        self.defect_mode_btn = tk.Button(brand_inner,
+                                            text="🟢 정상 입고",
+                                            command=self._toggle_defect_mode,
+                                            bg="#16A34A", fg="white",
+                                            font=("맑은 고딕", 9, "bold"),
+                                            relief="flat", padx=10, pady=5,
+                                            cursor="hand2")
+        self.defect_mode_btn.pack(side="left", padx=(12, 0))
+
         # ========== [📦 브랜드 수량 + 📡 스캔 수량 - 2분할] ==========
         cols_outer = tk.Frame(container, bg="#F5F6F8")
         cols_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
@@ -4631,6 +4642,7 @@ class LogiPanApp:
             '옵션': 'size',
             '사이즈': 'size',
             '수량': 'qty',
+            '위탁': 'consignment',  # [추가] 위탁 컬럼
         }
 
         for i, line in enumerate(lines[:5]):
@@ -4654,15 +4666,27 @@ class LogiPanApp:
                 break
 
         if header_idx == -1:
-            # 헤더 못 찾음 → 위치 기반으로 추정 (스샷 형식 기준)
-            # 상품명 | 바코드번호 | 상품메모1 | 상품메모2 | 대표판매가 | 옵션내용 | 수량
+            # 헤더 못 찾음 → 위치 기반으로 추정
+            # 7개: 상품명 | 바코드번호 | 상품메모1 | 상품메모2 | 대표판매가 | 옵션내용 | 수량
+            # 8개: + 위탁 (있으면 8번째 = 인덱스 7)
+            # 첫 데이터 행으로 컬럼 수 판단
+            sample_tokens = []
+            for line in lines:
+                if line.strip():
+                    sample_tokens = re.split(r'\t', line)
+                    break
             col_map = {
                 'product_name': 0, 'barcode': 1, 'memo1': 2, 'memo2': 3,
                 'price': 4, 'size': 5, 'qty': 6
             }
+            if len(sample_tokens) >= 8:
+                col_map['consignment'] = 7
             data_lines = lines
         else:
             data_lines = lines[header_idx + 1:]
+
+        # [추가] 위탁 컬럼 존재 여부 (run_master_conversion에서 활용)
+        self._master_has_consignment = ('consignment' in col_map)
 
         # 데이터 파싱
         for line in data_lines:
@@ -4693,6 +4717,7 @@ class LogiPanApp:
                 '대표판매가': get_col('price'),
                 '옵션내용': get_col('size'),
                 '수량': get_col('qty'),
+                '위탁_원본': get_col('consignment'),  # [추가] 위탁 원본 값 (있으면)
             })
 
         return rows if rows else None
@@ -4735,6 +4760,9 @@ class LogiPanApp:
 
         # ========== [출력 1: 마스터 등록 양식] ==========
         # 같은 품번끼리 합치기 (한 행으로)
+        # [추가] 위탁 컬럼 여부 확인 (입력 시 8컬럼이면 True)
+        has_consignment = getattr(self, '_master_has_consignment', False)
+
         seen_품번 = set()
         master_rows = []
         for r in rows:
@@ -4751,7 +4779,7 @@ class LogiPanApp:
             except:
                 가격 = 0
 
-            master_rows.append({
+            row_dict = {
                 '품번': 품번,
                 '대표코드': 품번,
                 '상품명': 상품명,
@@ -4765,7 +4793,11 @@ class LogiPanApp:
                 '정상가': 가격,
                 '판가': 0,
                 '원가': 0,
-            })
+            }
+            # [추가] 위탁 컬럼이 있으면 'E' 박기
+            if has_consignment:
+                row_dict['위탁'] = 'E'
+            master_rows.append(row_dict)
 
         # ========== [출력 2: 옵션 등록 양식] ==========
         # 행 단위 = 바코드 단위
@@ -7562,6 +7594,22 @@ class LogiPanApp:
             self.txt_in_report.insert(tk.END, "⚠️ 브랜드/스캔 양쪽 모두 입력해주세요.\n", "warn")
             return
 
+        # [추가] 불량 모드면 last_scan_detail의 정상↔불량 자리 바꿈
+        is_defect_mode = getattr(self, 'defect_mode_var', None)
+        is_defect_mode = is_defect_mode.get() if is_defect_mode else False
+        if is_defect_mode and self.last_scan_detail:
+            for r in self.last_scan_detail:
+                # 정상수 ↔ 불량수
+                normal_q = r.get('정상수', 0)
+                defect_q = r.get('불량수', 0)
+                r['정상수'] = defect_q
+                r['불량수'] = normal_q
+                # 정상로케 ↔ 불량로케
+                normal_loc = r.get('정상로케', '')
+                defect_loc = r.get('불량로케', '')
+                r['정상로케'] = defect_loc
+                r['불량로케'] = normal_loc
+
         merged = pd.merge(df_m, df_s, on='바코드', how='outer', suffixes=('_브랜드', '_스캔')).fillna(0)
         # [수정] 차이 = 스캔 - 브랜드 (스캔 기준): 양수면 스캔이 많음, 음수면 부족
         merged['차이'] = merged['수량_스캔'] - merged['수량_브랜드']
@@ -7570,11 +7618,14 @@ class LogiPanApp:
         # [추가] 5열 상세에서 정상/불량 합계 산출
         normal_sum = sum(r.get('정상수', 0) for r in (self.last_scan_detail or []))
         defect_sum = sum(r.get('불량수', 0) for r in (self.last_scan_detail or []))
-        has_5col = bool(self.last_scan_detail) and any(r.get('정상로케') for r in self.last_scan_detail)
+        has_5col = bool(self.last_scan_detail) and any(r.get('정상로케') or r.get('불량로케') for r in self.last_scan_detail)
 
         # === [헤더] ===
         self.txt_in_report.insert(tk.END, "═" * 50 + "\n", "info")
         self.txt_in_report.insert(tk.END, "📊 [ 대조 결과 요약 ]\n", "title")
+        # [추가] 불량 모드일 때 경고 표시
+        if is_defect_mode:
+            self.txt_in_report.insert(tk.END, "🔴 [ 불량 입고 모드 - 정상/불량 자리 변환됨 ]\n", "error")
         self.txt_in_report.insert(tk.END, "═" * 50 + "\n", "info")
         self.txt_in_report.insert(tk.END, f"  • 브랜드 수량 : {t_b:>4}개\n", "info")
         self.txt_in_report.insert(tk.END, f"  • 스캔 수량   : {t_s:>4}개\n", "info")
@@ -8278,6 +8329,30 @@ class LogiPanApp:
         self.txt_in_scan.tag_remove("mismatch", "1.0", tk.END)
         self.txt_in_master.delete("1.0", tk.END); self.txt_in_scan.delete("1.0", tk.END); self.ent_brand_in.delete(0, tk.END); self.is_matched = False; self.lbl_in_m.config(text="브랜드 수량 (0개)"); self.lbl_in_s.config(text="스캔 수량 (0개)")
 
+    def _toggle_defect_mode(self):
+        """[추가] 불량 모드 토글 (정상↔불량)"""
+        if not hasattr(self, 'defect_mode_var'):
+            return
+        new_val = not self.defect_mode_var.get()
+        self.defect_mode_var.set(new_val)
+        self._update_defect_btn_ui()
+
+    def _update_defect_btn_ui(self):
+        """[추가] 불량 모드 토글 버튼 UI 갱신"""
+        if not hasattr(self, 'defect_mode_btn'):
+            return
+        is_defect = self.defect_mode_var.get()
+        if is_defect:
+            self.defect_mode_btn.config(
+                text="🔴 불량 입고",
+                bg="#DC2626",
+                activebackground="#B91C1C")
+        else:
+            self.defect_mode_btn.config(
+                text="🟢 정상 입고",
+                bg="#16A34A",
+                activebackground="#15803D")
+
     def reset_inbound_all(self):
         """[추가] 입고 탭 전체 초기화 - 브랜드명 + 양쪽 입력창 + 리포트.
         확인 다이얼로그 후 실행."""
@@ -8308,6 +8383,10 @@ class LogiPanApp:
             self.ent_note_in.delete(0, tk.END)
             self.ent_note_in.insert(0, getattr(self, '_note_placeholder', ''))
             self.ent_note_in.config(fg="#9CA3AF")
+        # [추가] 불량 모드 초기화 (정상으로)
+        if hasattr(self, 'defect_mode_var'):
+            self.defect_mode_var.set(False)
+            self._update_defect_btn_ui()
         self.is_matched = False
         self.lbl_in_m.config(text="브랜드 수량 (0개)")
         self.lbl_in_s.config(text="스캔 수량 (0개)")
