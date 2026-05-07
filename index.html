@@ -62,6 +62,28 @@
         #lightbox-close { position: absolute; top: 20px; right: 25px; background: rgba(255,255,255,0.15); color: white; border: none; width: 44px; height: 44px; border-radius: 50%; font-size: 22px; cursor: pointer; }
         .draft-notice { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; border-radius: 6px; padding: 8px 12px; margin-top: 10px; font-size: 13px; display: none; }
         .draft-notice button { background: none; border: none; color: #1a73e8; font-weight: bold; cursor: pointer; margin-left: 8px; text-decoration: underline; font-size: 13px; }
+
+        /* [추가] 작업 종류 버튼 */
+        .category-row { display: flex; gap: 6px; margin-top: 6px; }
+        .category-btn {
+            flex: 1;
+            padding: 11px 6px;
+            border: 1px solid #e0e0e0;
+            background: #f5f6f8;
+            color: #666;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .category-btn:hover { background: #ebebeb; }
+        .category-btn.active {
+            background: #222;
+            color: white;
+            border-color: #222;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        }
     </style>
 </head>
 <body>
@@ -102,6 +124,16 @@
 
     <div id="section-report">
         <h2>👷 현장 작업 보고</h2>
+
+        <!-- [추가] 작업 종류 선택 (필수) -->
+        <label>🏷️ 작업 종류 <span style="color:#ff4d4f;">*</span></label>
+        <div class="category-row">
+            <button type="button" class="category-btn" data-cat="매입" onclick="selectCategory('매입')">매입</button>
+            <button type="button" class="category-btn" data-cat="위탁" onclick="selectCategory('위탁')">위탁</button>
+            <button type="button" class="category-btn" data-cat="이관" onclick="selectCategory('이관')">이관</button>
+            <button type="button" class="category-btn" data-cat="기타" onclick="selectCategory('기타')">기타</button>
+        </div>
+
         <label>📌 제목</label>
         <input type="text" id="reportTitle" placeholder="예: 브랜드 입고 완료했습니다">
         <label>📸 사진 촬영 / 첨부</label>
@@ -176,6 +208,22 @@
     // [추가] 푸시 알림용 VAPID 키
     const VAPID_KEY = "BJNykZMVNq1d0i8fd0bnHd1dsJgYXOuNDVz9DeneNk9okRbJ7UgJCQeWiOSwWw7CVaJaeaBKaWqFEGM4cX42ZBg";
 
+    // [추가] 작업 종류 (현장보고 작성 시 필수 선택)
+    let selectedCategory = null;
+
+    function selectCategory(cat) {
+        selectedCategory = cat;
+        // 모든 버튼 초기화
+        document.querySelectorAll('.category-btn').forEach(btn => {
+            if (btn.dataset.cat === cat) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
+        autosaveReport(); // 선택도 임시저장
+    }
+
     // [추가] 로컬 알림 테스트 - Firebase 안 거치고 폰 자체에서 알림 띄우기
     // 알림이 안 올 때 본인 폰 시스템이 정상인지 확인용
     async function testLocalNotification() {
@@ -241,7 +289,7 @@
     }
 
     window.onload = function() {
-        console.log("%c🚀 로지판 v2.3 로드됨 (푸시 알림 - 버튼 방식)", "color: #1a73e8; font-size: 14px; font-weight: bold;");
+        console.log("%c🚀 로지판 v2.4 로드됨 (작업 종류 분류 추가)", "color: #1a73e8; font-size: 14px; font-weight: bold;");
         const name = localStorage.getItem("logipan_user_name");
         if (!name) askName();
         else {
@@ -364,8 +412,12 @@
     }
 
     function autosaveReport() {
-        const data = { title: document.getElementById('reportTitle').value, text: document.getElementById('reportText').value };
-        if (!data.title && !data.text) { localStorage.removeItem(DRAFT_REPORT_KEY); return; }
+        const data = {
+            title: document.getElementById('reportTitle').value,
+            text: document.getElementById('reportText').value,
+            category: selectedCategory  // [추가]
+        };
+        if (!data.title && !data.text && !data.category) { localStorage.removeItem(DRAFT_REPORT_KEY); return; }
         localStorage.setItem(DRAFT_REPORT_KEY, JSON.stringify(data));
     }
     function autosaveBoard() {
@@ -375,14 +427,23 @@
     }
     function checkDrafts() {
         const r = localStorage.getItem(DRAFT_REPORT_KEY);
-        if (r) { try { const parsed = JSON.parse(r); if (parsed.title || parsed.text) document.getElementById('reportDraftNotice').style.display = 'block'; } catch(e) {} }
+        if (r) { try { const parsed = JSON.parse(r); if (parsed.title || parsed.text || parsed.category) document.getElementById('reportDraftNotice').style.display = 'block'; } catch(e) {} }
         const b = localStorage.getItem(DRAFT_BOARD_KEY);
         if (b) document.getElementById('boardDraftNotice').style.display = 'block';
     }
     function restoreReportDraft() {
         const r = localStorage.getItem(DRAFT_REPORT_KEY);
         if (!r) return;
-        try { const parsed = JSON.parse(r); document.getElementById('reportTitle').value = parsed.title || ''; document.getElementById('reportText').value = parsed.text || ''; document.getElementById('reportDraftNotice').style.display = 'none'; } catch(e) {}
+        try {
+            const parsed = JSON.parse(r);
+            document.getElementById('reportTitle').value = parsed.title || '';
+            document.getElementById('reportText').value = parsed.text || '';
+            // [추가] 작업 종류도 복원
+            if (parsed.category) {
+                selectCategory(parsed.category);
+            }
+            document.getElementById('reportDraftNotice').style.display = 'none';
+        } catch(e) {}
     }
     function restoreBoardDraft() {
         const b = localStorage.getItem(DRAFT_BOARD_KEY);
@@ -857,7 +918,20 @@
         const name = document.getElementById('userName').value;
         const title = document.getElementById('reportTitle').value.trim();
         const text = document.getElementById('reportText').value.trim();
+
+        // [추가] 작업 종류 필수 검증
+        if (!selectedCategory) {
+            alert("⚠️ 작업 종류를 선택해주세요!\n(매입 / 위탁 / 이관 / 기타)");
+            return;
+        }
         if (!title || !text) return alert("제목과 내용을 입력해주세요!");
+
+        // [추가] 제목 앞에 [매입] 같은 prefix 자동 추가 (이미 있으면 중복 안 붙임)
+        let finalTitle = title;
+        if (!finalTitle.startsWith(`[${selectedCategory}]`)) {
+            finalTitle = `[${selectedCategory}] ${finalTitle}`;
+        }
+
         const loading = document.getElementById('loading');
         const progressBox = document.getElementById('loading-progress');
         const progressBar = document.getElementById('loading-progress-bar');
@@ -880,14 +954,22 @@
             if (total > 0) progressBar.style.width = '100%';
             msg.innerText = "전송 중...";
             await db.collection("field_reports").add({
-                user: name, title: title, text: text, date: getFormattedDate(),
-                imageUrl: imageUrls.join(","), status: "⏳ 처리중",
-                comment_count: 0,  // [추가] 캐싱 초기값
-                has_attached_image: imageUrls.length > 0,  // [추가] 본문 사진 여부
+                user: name,
+                title: finalTitle,  // [수정] prefix 붙은 제목
+                work_category: selectedCategory,  // [추가] 작업 종류 별도 필드 (필터링/통계용)
+                text: text,
+                date: getFormattedDate(),
+                imageUrl: imageUrls.join(","),
+                status: "⏳ 처리중",
+                comment_count: 0,
+                has_attached_image: imageUrls.length > 0,
                 timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             document.getElementById('reportTitle').value = '';
             document.getElementById('reportText').value = '';
+            // [추가] 작업 종류 초기화
+            selectedCategory = null;
+            document.querySelectorAll('.category-btn').forEach(btn => btn.classList.remove('active'));
             selectedFiles = [];
             renderPhotoPreview();
             clearReportDraft(true);
