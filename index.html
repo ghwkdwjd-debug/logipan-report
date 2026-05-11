@@ -84,6 +84,61 @@
             border-color: #222;
             box-shadow: 0 2px 6px rgba(0,0,0,0.15);
         }
+
+        /* [추가] 새 메시지 알림 카드 (현장보고 탭에서 표시) */
+        .new-msg-card {
+            background: linear-gradient(135deg, #1877F2 0%, #4285F4 100%);
+            color: white;
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            display: none;
+            align-items: center;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(24, 119, 242, 0.25);
+            animation: slideDown 0.3s ease-out;
+        }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .new-msg-card .icon {
+            font-size: 22px;
+            margin-right: 12px;
+            animation: bell-shake 1.2s ease-in-out infinite;
+        }
+        @keyframes bell-shake {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(-10deg); }
+            75% { transform: rotate(10deg); }
+        }
+        .new-msg-card .text { flex: 1; font-size: 14px; font-weight: bold; }
+        .new-msg-card .arrow { font-size: 18px; }
+
+        /* [추가] 새 메시지 토스트 (화면 하단 잠깐 표시) */
+        .msg-toast {
+            position: fixed;
+            left: 50%;
+            top: 20px;
+            transform: translateX(-50%);
+            background: rgba(24, 119, 242, 0.95);
+            color: white;
+            padding: 14px 20px;
+            border-radius: 12px;
+            font-size: 14px;
+            z-index: 3000;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            min-width: 250px;
+            max-width: 90%;
+            cursor: pointer;
+            animation: toastSlide 0.3s ease-out;
+        }
+        @keyframes toastSlide {
+            from { opacity: 0; transform: translate(-50%, -20px); }
+            to { opacity: 1; transform: translate(-50%, 0); }
+        }
+        .msg-toast .title { font-weight: bold; margin-bottom: 4px; font-size: 13px; }
+        .msg-toast .preview { font-size: 13px; opacity: 0.95; }
     </style>
 </head>
 <body>
@@ -124,6 +179,16 @@
 
     <div id="section-report">
         <h2>👷 현장 작업 보고</h2>
+
+        <!-- [추가] 새 공지/메시지 알림 카드 -->
+        <div id="newMsgCard" class="new-msg-card" onclick="goToBoardFromCard()">
+            <span class="icon">🔔</span>
+            <div class="text">
+                <div id="newMsgCardTitle">새 메시지가 도착했어요</div>
+                <div id="newMsgCardCount" style="font-size:11px; font-weight:normal; opacity:0.9;"></div>
+            </div>
+            <span class="arrow">→</span>
+        </div>
 
         <!-- [추가] 작업 종류 선택 (필수) -->
         <label>🏷️ 작업 종류 <span style="color:#ff4d4f;">*</span></label>
@@ -275,6 +340,9 @@
         if (type === 'board') {
             localStorage.setItem(LAST_SEEN_BOARD_KEY, Date.now().toString());
             document.getElementById('dot-board').style.display = 'none';
+            // [추가] 공지/소통 탭 가면 새 메시지 카운트 리셋
+            newMsgCount = 0;
+            updateNewMsgCard();
             loadNotice();
             loadMyBoardPosts();
         } else {
@@ -495,6 +563,25 @@
         .onSnapshot(snap => {
             const box = document.getElementById("notice-content");
             let shown = false;
+
+            // [추가] 새 메시지 감지 (공지 + 개인 메시지)
+            snap.forEach(doc => {
+                const d = doc.data();
+                // 완료된 거는 알림 X
+                if (d.status && (d.status.includes("완료") || d.status.includes("확인완료"))) return;
+                // 카테고리: 공지 또는 요청만 알림
+                if (d.category !== "공지" && d.category !== "요청") return;
+                const sender = d.real_sender || d.user || "관리자";
+                const preview = d.text || '';
+                triggerNewMsgAlert(sender, preview, doc.id);
+            });
+
+            // 첫 로드 완료 마킹 (이후부터 알림 발동)
+            if (firstBoardLoad) {
+                snap.forEach(doc => knownBoardIds.add(doc.id));
+                firstBoardLoad = false;
+            }
+
             snap.forEach(doc => {
                 if (shown) return;
                 const d = doc.data();
@@ -743,6 +830,90 @@
         div.style.cssText = `position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: #323232; color: white; padding: 12px 24px; border-radius: 25px; font-size: 14px; z-index: 3000; box-shadow: 0 4px 20px rgba(0,0,0,0.3);`;
         document.body.appendChild(div);
         setTimeout(() => div.remove(), 2500);
+    }
+
+    // [추가] 새 메시지 카드 + 토스트 + 진동 시스템
+    let knownBoardIds = new Set();  // 이미 본 게시글 ID 캐시
+    let firstBoardLoad = true;       // 첫 로드 플래그 (처음엔 알림 X)
+    let newMsgCount = 0;             // 현장보고 탭에 있을 때 누적된 개수
+
+    function showMsgToast(senderName, preview, onClickFn) {
+        // 같은 토스트 중복 방지 - 기존 있으면 제거
+        const existing = document.querySelector('.msg-toast');
+        if (existing) existing.remove();
+
+        const toast = document.createElement('div');
+        toast.className = 'msg-toast';
+        const cleanPreview = (preview || '').replace(/\n/g, ' ').slice(0, 50);
+        toast.innerHTML = `
+            <div class="title">🔔 ${escapeHtml(senderName)}님의 메시지</div>
+            <div class="preview">${escapeHtml(cleanPreview)}${cleanPreview.length >= 50 ? '...' : ''}</div>
+        `;
+        toast.onclick = () => {
+            toast.remove();
+            if (onClickFn) onClickFn();
+        };
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.style.transition = 'opacity 0.3s';
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }
+        }, 4000);
+    }
+
+    function vibrateDevice() {
+        // 짧은 진동 (200ms)
+        try {
+            if ('vibrate' in navigator) {
+                navigator.vibrate(200);
+            }
+        } catch (e) { /* 미지원 무시 */ }
+    }
+
+    function updateNewMsgCard() {
+        const card = document.getElementById('newMsgCard');
+        const cardTitle = document.getElementById('newMsgCardTitle');
+        const cardCount = document.getElementById('newMsgCardCount');
+        if (!card) return;
+        if (newMsgCount > 0) {
+            card.style.display = 'flex';
+            cardTitle.innerText = `🔔 새 메시지 ${newMsgCount}건이 있어요`;
+            cardCount.innerText = '눌러서 확인하기';
+        } else {
+            card.style.display = 'none';
+        }
+    }
+
+    function goToBoardFromCard() {
+        newMsgCount = 0;
+        updateNewMsgCard();
+        switchTab('board');
+    }
+
+    // 새 메시지 알림 트리거 (loadNotice / loadMyBoardPosts에서 호출)
+    function triggerNewMsgAlert(senderName, preview, docId) {
+        // 첫 로드는 알림 X (이미 있던 거 다 새 거로 처리되니까)
+        if (firstBoardLoad) return;
+        // 이미 본 거면 skip
+        if (knownBoardIds.has(docId)) return;
+        knownBoardIds.add(docId);
+
+        // 공지/소통 탭 보고 있으면 알림 X
+        const boardVisible = document.getElementById('section-board').style.display !== 'none';
+        if (boardVisible) return;
+
+        // 빨간 점 (이미 다른 로직에서 처리되지만 강제 ON)
+        document.getElementById('dot-board').style.display = 'block';
+
+        // 현장보고 탭에 알림 카드
+        newMsgCount++;
+        updateNewMsgCard();
+
+        // 토스트 + 진동
+        showMsgToast(senderName, preview, () => switchTab('board'));
+        vibrateDevice();
     }
 
     let noticeStep = 0;
