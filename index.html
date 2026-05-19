@@ -12,7 +12,7 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
-    <!-- [추가] 카메라 바코드 스캔 라이브러리 (ZXing - 1D 바코드 강력) -->
+    <!-- [추가] 카메라 바코드 스캔 - 네이티브 BarcodeDetector 우선, ZXing fallback -->
     <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
@@ -232,10 +232,11 @@
             position: relative;
             background: #000; margin: 0 14px;
             border-radius: 10px; overflow: hidden;
-            min-height: 260px;
+            min-height: 280px;
             display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
         }
-        #scan-reader { width: 100%; }
+        #scan-reader { width: 100%; height: 100%; }
         #scan-reader video {
             width: 100% !important;
             height: 100% !important;
@@ -247,10 +248,62 @@
             top: 50%; left: 50%;
             width: 80%; height: 30%;
             transform: translate(-50%, -50%);
-            border: 3px solid rgba(255,255,255,0.6);
+            border: 3px solid rgba(255,255,255,0.7);
             border-radius: 8px;
             pointer-events: none;
             box-shadow: 0 0 0 9999px rgba(0,0,0,0.2);
+        }
+        .focus-hint {
+            position: absolute; bottom: 10px; left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.6); color: white;
+            padding: 4px 12px; border-radius: 12px;
+            font-size: 11px; pointer-events: none;
+            opacity: 0.8;
+        }
+        .focus-ring {
+            position: absolute;
+            width: 60px; height: 60px;
+            border: 2px solid #ffeb3b;
+            border-radius: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            animation: focusPulse 0.5s ease-out forwards;
+        }
+        @keyframes focusPulse {
+            0% { transform: translate(-50%, -50%) scale(1.5); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+        }
+
+        .camera-engine-info {
+            text-align: center;
+            font-size: 11px; color: #999;
+            padding: 4px;
+        }
+
+        .focus-btn {
+            background: #fff3e0; color: #e65100;
+            border: 1px solid #ffcc80; border-radius: 14px;
+            padding: 6px 12px; font-size: 13px; cursor: pointer;
+            font-weight: bold;
+        }
+        .focus-btn:active { background: #ffcc80; }
+
+        .manual-input-row {
+            display: flex; gap: 6px;
+            padding: 8px 16px 4px;
+        }
+        .manual-input-row input {
+            flex: 1; padding: 10px 12px;
+            border: 1px solid #ddd; border-radius: 8px;
+            font-size: 14px; outline: none;
+            font-family: monospace;
+        }
+        .manual-input-btn {
+            background: #1877F2; color: white;
+            border: none; border-radius: 8px;
+            padding: 0 16px; font-weight: bold;
+            cursor: pointer; font-size: 14px;
         }
         .camera-modal-footer {
             display: flex; align-items: center; gap: 8px;
@@ -492,14 +545,22 @@
         <div class="camera-modal-info" id="camera-modal-info">
             바코드를 카메라에 비추세요
         </div>
-        <div class="camera-modal-viewport">
+        <div class="camera-modal-viewport" id="camera-viewport">
             <div id="scan-reader"></div>
             <div class="camera-guide-box"></div>
+            <div class="focus-hint">탭하면 초점</div>
         </div>
+        <div class="camera-engine-info" id="camera-engine-info">엔진: 확인 중...</div>
         <div class="camera-modal-footer">
             <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊</span>
             <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳</span>
+            <button class="focus-btn" onclick="triggerFocus()" title="초점 다시">🎯 초점</button>
             <span id="camera-modal-status" style="margin-left:auto; font-size:12px; color:#666;"></span>
+        </div>
+        <!-- 수동 입력 fallback -->
+        <div class="manual-input-row">
+            <input type="text" id="manual-barcode-input" placeholder="안 잡히면 직접 입력" autocomplete="off">
+            <button class="manual-input-btn" onclick="submitManualBarcode()">입력</button>
         </div>
         <!-- 피드백 메시지 (모달 내부) -->
         <div class="scan-feedback" id="scan-feedback"></div>
@@ -1583,7 +1644,6 @@
         items: []               // [{barcode, qty, location, fromLoc, toLoc, ts}, ...]
     };
 
-    let scanner = null;          // Html5Qrcode 인스턴스
     let scannerRunning = false;
     let lastScanText = '';       // 직전 스캔 (디바운스용)
     let lastScanAt = 0;
@@ -1766,8 +1826,15 @@
     // scanCameraMode: 'product' (연속 스캔) | 'location' (1회 스캔 후 자동 닫힘)
     let scanCameraMode = 'product';
 
+    // 카메라 자원
+    let cameraStream = null;        // MediaStream
+    let videoEl = null;             // <video>
+    let barcodeDetector = null;     // 네이티브 BarcodeDetector (지원 시)
+    let detectLoopId = null;        // requestAnimationFrame ID
+    let zxingScanner = null;        // ZXing fallback
+    let usingEngine = '';           // 'native' | 'zxing'
+
     async function openCameraModal(mode) {
-        // 작업명 체크 (상품 모드만 필수)
         if (mode === 'product') {
             const label = (document.getElementById('scan-label').value || '').trim();
             if (!label) {
@@ -1778,20 +1845,17 @@
             scanState.label = label;
             saveScanDraft();
 
-            // 로케 체크
-            if (!scanState.currentLoc && !document.getElementById('scan-loc-input').value.trim()) {
-                feedbackError("먼저 로케이션을 입력하거나 스캔하세요");
-                return;
-            }
-            // 입력칸에 직접 입력한 로케 반영
             const inputLoc = document.getElementById('scan-loc-input').value.trim();
             if (inputLoc && inputLoc !== scanState.currentLoc) {
                 scanState.currentLoc = inputLoc.toUpperCase();
                 saveScanDraft();
             }
+            if (!scanState.currentLoc) {
+                feedbackError("먼저 로케이션을 입력하거나 스캔하세요");
+                return;
+            }
         }
 
-        // HTTPS 체크
         if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
             feedbackError("HTTPS 환경에서만 카메라 사용 가능");
             return;
@@ -1814,10 +1878,12 @@
         }
 
         modal.classList.add('open');
-        // AudioContext 활성화
         try { getAudioCtx()?.resume?.(); } catch(e) {}
 
-        // 카메라 시작
+        // 수동 입력칸 초기화
+        const manual = document.getElementById('manual-barcode-input');
+        if (manual) manual.value = '';
+
         await startCameraInModal();
     }
 
@@ -1825,14 +1891,105 @@
         const modal = document.getElementById('camera-modal');
         modal.classList.remove('open');
         stopCamera();
-        // 피드백 숨김
         const fb = document.getElementById('scan-feedback');
         if (fb) fb.style.display = 'none';
     }
 
     async function startCameraInModal() {
+        const engineInfo = document.getElementById('camera-engine-info');
         try {
-            if (!scanner) {
+            // <video> 생성 (없으면)
+            videoEl = document.getElementById('scan-video');
+            if (!videoEl) {
+                videoEl = document.createElement('video');
+                videoEl.id = 'scan-video';
+                videoEl.setAttribute('playsinline', 'true');
+                videoEl.setAttribute('autoplay', 'true');
+                videoEl.muted = true;
+                videoEl.style.width = '100%';
+                videoEl.style.height = '100%';
+                videoEl.style.objectFit = 'cover';
+                document.getElementById('scan-reader').appendChild(videoEl);
+            }
+
+            // 카메라 권한 + 스트림 획득
+            const constraints = {
+                video: {
+                    facingMode: { ideal: "environment" },
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 },
+                    focusMode: "continuous",
+                    advanced: [
+                        { focusMode: "continuous" },
+                        { zoom: 2 }  // 살짝 줌인 → 바코드 디테일 ↑ (대응되는 폰만)
+                    ]
+                },
+                audio: false
+            };
+
+            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+            videoEl.srcObject = cameraStream;
+            await videoEl.play();
+
+            // 엔진 선택: 네이티브 BarcodeDetector 우선
+            if ('BarcodeDetector' in window) {
+                try {
+                    // 지원 포맷 조회
+                    const supported = await window.BarcodeDetector.getSupportedFormats();
+                    // 우리가 쓰고 싶은 거 필터
+                    const wanted = ['code_128','code_39','code_93','ean_13','ean_8','upc_a','upc_e','codabar','itf','qr_code','data_matrix'];
+                    const useFormats = wanted.filter(f => supported.includes(f));
+                    barcodeDetector = new window.BarcodeDetector({ formats: useFormats });
+                    usingEngine = 'native';
+                    engineInfo.innerText = `엔진: 네이티브 (${useFormats.length}개 포맷)`;
+                    startNativeDetectLoop();
+                } catch (e) {
+                    console.warn("BarcodeDetector 초기화 실패, ZXing fallback", e);
+                    await startZxingFallback();
+                }
+            } else {
+                // 폴리필 시도 없이 바로 ZXing
+                await startZxingFallback();
+            }
+
+            // 탭해서 초점 (iOS는 pointsOfInterest 지원)
+            const viewport = document.getElementById('camera-viewport');
+            viewport.onclick = handleViewportTap;
+
+            scannerRunning = true;
+        } catch(e) {
+            console.error("카메라 시작 실패:", e);
+            feedbackError("카메라 접근 실패: " + (e.message || e));
+            engineInfo.innerText = "❌ 카메라 실패";
+        }
+    }
+
+    // ─── 네이티브 BarcodeDetector 루프 ─────────────────────────
+    function startNativeDetectLoop() {
+        const tick = async () => {
+            if (!scannerRunning || !videoEl || !barcodeDetector) return;
+            try {
+                if (videoEl.readyState >= 2) {
+                    const codes = await barcodeDetector.detect(videoEl);
+                    if (codes && codes.length > 0) {
+                        // 첫 번째 결과 사용
+                        onBarcodeScanned(codes[0].rawValue || '');
+                    }
+                }
+            } catch (e) {
+                // detect 실패는 무시 (계속 시도)
+            }
+            // 다음 프레임 (50ms 간격 = ~20fps)
+            detectLoopId = setTimeout(tick, 50);
+        };
+        tick();
+    }
+
+    // ─── ZXing fallback ─────────────────────────
+    async function startZxingFallback() {
+        const engineInfo = document.getElementById('camera-engine-info');
+        try {
+            if (!zxingScanner) {
                 const hints = new Map();
                 const formats = [
                     ZXing.BarcodeFormat.CODE_128,
@@ -1849,51 +2006,46 @@
                 ];
                 hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
                 hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-                scanner = new ZXing.BrowserMultiFormatReader(hints, 200);
+                zxingScanner = new ZXing.BrowserMultiFormatReader(hints, 150);
             }
-
-            const devices = await scanner.listVideoInputDevices();
-            let deviceId = null;
-            if (devices && devices.length > 0) {
-                const rear = devices.find(d => /back|rear|environment/i.test(d.label));
-                deviceId = rear ? rear.deviceId : devices[devices.length - 1].deviceId;
-            }
-
-            // <video> 요소 (모달 내부)
-            let videoEl = document.getElementById('scan-video');
-            if (!videoEl) {
-                videoEl = document.createElement('video');
-                videoEl.id = 'scan-video';
-                videoEl.setAttribute('playsinline', 'true');
-                videoEl.setAttribute('autoplay', 'true');
-                videoEl.style.width = '100%';
-                videoEl.style.height = '100%';
-                videoEl.style.objectFit = 'cover';
-                document.getElementById('scan-reader').appendChild(videoEl);
-            }
-
-            scanner.decodeFromVideoDevice(deviceId, videoEl, (result, err) => {
+            // 우리가 만든 video를 ZXing에 연결
+            zxingScanner.decodeFromVideoElement(videoEl, (result, err) => {
                 if (result) {
                     onBarcodeScanned(result.getText());
                 }
             });
-
-            scannerRunning = true;
-        } catch(e) {
-            console.error("카메라 시작 실패:", e);
-            feedbackError("카메라 접근 실패: " + (e.message || e));
+            usingEngine = 'zxing';
+            engineInfo.innerText = "엔진: ZXing (fallback)";
+        } catch (e) {
+            console.error("ZXing fallback 실패:", e);
+            engineInfo.innerText = "❌ 엔진 실패";
         }
     }
 
     function stopCamera() {
-        if (!scanner || !scannerRunning) return;
-        try {
-            scanner.reset();
-        } catch(e) {}
         scannerRunning = false;
+        // 네이티브 루프 정지
+        if (detectLoopId) {
+            clearTimeout(detectLoopId);
+            detectLoopId = null;
+        }
+        barcodeDetector = null;
+        // ZXing 정지
+        if (zxingScanner) {
+            try { zxingScanner.reset(); } catch(e) {}
+        }
+        // 카메라 스트림 정지
+        if (cameraStream) {
+            try {
+                cameraStream.getTracks().forEach(t => t.stop());
+            } catch(e) {}
+            cameraStream = null;
+        }
+        if (videoEl) {
+            try { videoEl.srcObject = null; } catch(e) {}
+        }
     }
 
-    // 다른 탭으로 이동 시 카메라 자동 정리용 (switchTab에서 호출)
     function stopScanner() {
         const modal = document.getElementById('camera-modal');
         if (modal && modal.classList.contains('open')) {
@@ -1902,41 +2054,115 @@
         stopCamera();
     }
 
+    // ─── 탭해서 초점 ─────────────────────────
+    async function handleViewportTap(e) {
+        if (!cameraStream) return;
+        try {
+            const track = cameraStream.getVideoTracks()[0];
+            if (!track) return;
+            const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+            const settings = track.getSettings ? track.getSettings() : {};
+
+            // 시각적 피드백 - 노란 원
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const ring = document.createElement('div');
+            ring.className = 'focus-ring';
+            ring.style.left = x + 'px';
+            ring.style.top = y + 'px';
+            e.currentTarget.appendChild(ring);
+            setTimeout(() => ring.remove(), 500);
+
+            // 초점 강제 트리거
+            const advanced = [];
+            if (capabilities.focusMode && capabilities.focusMode.includes('manual')) {
+                advanced.push({ focusMode: 'manual' });
+                setTimeout(async () => {
+                    try {
+                        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                    } catch(e) {}
+                }, 300);
+            } else if (capabilities.focusMode && capabilities.focusMode.includes('single-shot')) {
+                advanced.push({ focusMode: 'single-shot' });
+            } else {
+                advanced.push({ focusMode: 'continuous' });
+            }
+            // pointsOfInterest 지원하면 그 지점 초점
+            if (capabilities.pointsOfInterest) {
+                const px = x / rect.width;
+                const py = y / rect.height;
+                advanced.push({ pointsOfInterest: [{ x: px, y: py }] });
+            }
+            try {
+                await track.applyConstraints({ advanced });
+            } catch(e) {
+                // 초점 명령 실패 (대부분 폰이 자동 모드)
+            }
+        } catch (e) {
+            console.warn("초점 트리거 실패:", e);
+        }
+    }
+
+    // ─── 수동 초점 버튼 (🎯) ─────────────────────────
+    async function triggerFocus() {
+        if (!cameraStream) return;
+        try {
+            const track = cameraStream.getVideoTracks()[0];
+            if (!track) return;
+            await track.applyConstraints({
+                advanced: [{ focusMode: 'continuous' }]
+            });
+            // 짧은 진동으로 피드백
+            vibrate(30);
+            beep(800, 60);
+        } catch(e) {}
+    }
+
+    // ─── 수동 입력 (키보드로 직접) ─────────────────────────
+    function submitManualBarcode() {
+        const input = document.getElementById('manual-barcode-input');
+        const val = (input.value || '').trim();
+        if (!val) {
+            feedbackError("바코드를 입력하세요");
+            return;
+        }
+        onBarcodeScanned(val);
+        input.value = '';
+        // 상품 모드면 계속 입력 가능하게 포커스 유지
+        if (scanCameraMode === 'product') {
+            input.focus();
+        }
+    }
+
     // ─── 바코드 인식 콜백 ─────────────────────────
     function onBarcodeScanned(decodedText, decodedResult) {
         const code = (decodedText || '').trim();
         if (!code) return;
 
-        // 디바운스: 같은 코드 1초 내 무시
         const now = Date.now();
         if (code === lastScanText && (now - lastScanAt) < 1000) return;
         lastScanText = code;
         lastScanAt = now;
 
-        // 카메라 모드별 처리
         if (scanCameraMode === 'location') {
-            // 로케 모드: 무조건 로케로 인식 + 1회 후 자동 닫기
             const locValue = code.toUpperCase();
             scanState.currentLoc = locValue;
             updateLocUI(locValue);
             saveScanDraft();
             feedbackLocChanged(locValue);
-            // 0.6초 뒤 모달 자동 닫기 (사용자가 피드백 인지할 시간)
             setTimeout(() => {
                 closeCameraModal();
             }, 600);
             return;
         }
 
-        // 상품 모드: 로케 바코드면 로케 변경, 아니면 상품으로 추가
         if (isLocationBarcode(code)) {
-            // 상품 스캔 중에 로케 바코드 찍힘 → 로케 변경
             const locValue = code.toUpperCase();
             scanState.currentLoc = locValue;
             updateLocUI(locValue);
             saveScanDraft();
             feedbackLocChanged(locValue);
-            // 정보 라인도 업데이트
             const info = document.getElementById('camera-modal-info');
             if (info) info.innerText = `📍 ${locValue} · 연속 스캔`;
         } else {
@@ -1950,7 +2176,6 @@
             return;
         }
 
-        // 무조건 1pcs씩 별도 행 (안전 우선)
         const item = {
             barcode: barcode,
             qty: 1,
@@ -1962,7 +2187,6 @@
         saveScanDraft();
         feedbackScanSuccess();
 
-        // 모달 상태 라벨 갱신
         const status = document.getElementById('camera-modal-status');
         if (status) status.innerText = `${scanState.items.length}건`;
     }
