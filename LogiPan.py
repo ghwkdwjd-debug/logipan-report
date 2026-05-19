@@ -10,6 +10,36 @@ import urllib.request
 import urllib.error
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
+
+# [부트스트랩] slack_integration.py 모듈 자동 다운로드
+# 구버전 updater.py가 이 파일을 못 받았을 때를 대비한 안전장치.
+# 파일이 없으면 GitHub에서 직접 받아옴.
+def _bootstrap_module(filename):
+    """필수 모듈 파일이 없으면 GitHub에서 받아옴.
+    부트스트랩 단계라 다른 함수에 의존하지 않게 self-contained하게 작성.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    local_path = os.path.join(script_dir, filename)
+    if os.path.exists(local_path):
+        return True  # 이미 있음
+    try:
+        url = f"https://raw.githubusercontent.com/ghwkdwjd-debug/logipan-report/main/{filename}"
+        tmp_path = local_path + ".tmp"
+        urllib.request.urlretrieve(url, tmp_path)
+        # 빈 파일 방어 (네트워크 끊김 등)
+        if os.path.getsize(tmp_path) < 100:
+            os.remove(tmp_path)
+            return False
+        os.rename(tmp_path, local_path)
+        print(f"✅ {filename} 자동 다운로드 완료")
+        return True
+    except Exception as e:
+        print(f"⚠️ {filename} 다운로드 실패: {e}")
+        return False
+
+# 필수 모듈 자동 다운로드 (구 updater에서 받지 못한 경우 자가 복구)
+_bootstrap_module("slack_integration.py")
+
 from slack_integration import SlackIntegrationMixin
 
 class LogiPanApp(SlackIntegrationMixin):
@@ -468,43 +498,58 @@ class LogiPanApp(SlackIntegrationMixin):
                 except Exception as e:
                     print(f"⚠️ oauth_client.json 다운로드 실패 (무시): {e}")
 
-            # 2. updater.py 새 버전 체크 (한 번만)
-            # 마커 파일로 한 번 했는지 표시 - 다음 실행부터 스킵
-            updater_marker = os.path.join(script_dir, ".updater_v2_done")
+            # 2. updater.py 자동 갱신 (해시 비교 방식)
+            # GitHub의 updater.py가 로컬과 다르면 항상 갱신.
+            # 마커 시스템 폐기 → 앞으로 updater.py 바꿀 때마다 자동 적용됨.
             updater_path = os.path.join(script_dir, "updater.py")
-            if not os.path.exists(updater_marker) and os.path.exists(updater_path):
-                try:
-                    updater_url = f"{base_url}/updater.py"
-                    tmp_path = updater_path + ".new"
-                    urllib.request.urlretrieve(updater_url, tmp_path)
+            try:
+                import hashlib
+                updater_url = f"{base_url}/updater.py"
+                tmp_path = updater_path + ".new"
+                urllib.request.urlretrieve(updater_url, tmp_path)
 
-                    # 다운받은 파일이 새 버전인지 확인 (ICON_URL 키워드 있으면 신버전)
-                    with open(tmp_path, 'r', encoding='utf-8') as f:
-                        new_content = f.read()
-                    if 'ICON_URL' in new_content and 'ensure_desktop_shortcut' in new_content:
-                        # 안전하게 .bak으로 백업 후 교체
+                # 빈 파일 방어 (네트워크 끊김 등)
+                if os.path.getsize(tmp_path) < 100:
+                    try: os.remove(tmp_path)
+                    except: pass
+                else:
+                    # 해시 비교: 로컬과 다를 때만 교체
+                    def _file_hash(p):
+                        h = hashlib.md5()
+                        with open(p, 'rb') as f:
+                            h.update(f.read())
+                        return h.hexdigest()
+
+                    need_replace = True
+                    if os.path.exists(updater_path):
+                        try:
+                            if _file_hash(updater_path) == _file_hash(tmp_path):
+                                need_replace = False  # 동일 - 갱신 불필요
+                        except Exception:
+                            pass
+
+                    if need_replace:
+                        # .bak으로 백업 후 교체
                         bak_path = updater_path + ".bak"
                         try:
                             if os.path.exists(bak_path):
                                 os.remove(bak_path)
-                            os.rename(updater_path, bak_path)
+                            if os.path.exists(updater_path):
+                                os.rename(updater_path, bak_path)
                             os.rename(tmp_path, updater_path)
-                            # 마커 파일 생성
-                            with open(updater_marker, 'w', encoding='utf-8') as f:
-                                f.write("done")
-                            print("✅ updater.py 새 버전으로 교체됨")
+                            print("✅ updater.py 자동 갱신됨 (다음 실행부터 적용)")
                         except Exception as e:
                             print(f"⚠️ updater.py 교체 실패 (무시): {e}")
-                            # 교체 실패시 .new 파일 삭제
+                            # 교체 실패시 .new 파일 정리
                             if os.path.exists(tmp_path):
                                 try: os.remove(tmp_path)
                                 except: pass
                     else:
-                        # 새 버전 아니면 그냥 삭제
+                        # 동일 - .new 삭제
                         try: os.remove(tmp_path)
                         except: pass
-                except Exception as e:
-                    print(f"⚠️ updater.py 다운로드 실패 (무시): {e}")
+            except Exception as e:
+                print(f"⚠️ updater.py 다운로드 실패 (무시): {e}")
 
             # 3. 바탕화면 바로가기 생성 (없을 때만)
             try:
