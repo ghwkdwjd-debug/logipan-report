@@ -12,8 +12,9 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
-    <!-- [추가] 카메라 바코드 스캔 - 네이티브 BarcodeDetector 우선, ZXing fallback -->
+    <!-- [추가] 바코드 디코더 두 개 - ZXing(QR/2D 강함) + Quagga2(1D 바코드 강함) -->
     <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
@@ -1898,7 +1899,7 @@
     async function startCameraInModal() {
         const engineInfo = document.getElementById('camera-engine-info');
         try {
-            // <video> 생성 (없으면)
+            // <video> 생성
             videoEl = document.getElementById('scan-video');
             if (!videoEl) {
                 videoEl = document.createElement('video');
@@ -1912,17 +1913,13 @@
                 document.getElementById('scan-reader').appendChild(videoEl);
             }
 
-            // 카메라 권한 + 스트림 획득
+            // 카메라 권한 + 스트림 - 최대 해상도 요청
             const constraints = {
                 video: {
                     facingMode: { ideal: "environment" },
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 },
-                    focusMode: "continuous",
-                    advanced: [
-                        { focusMode: "continuous" },
-                        { zoom: 2 }  // 살짝 줌인 → 바코드 디테일 ↑ (대응되는 폰만)
-                    ]
+                    width: { ideal: 1920, min: 1280 },
+                    height: { ideal: 1080, min: 720 },
+                    frameRate: { ideal: 30 }
                 },
                 audio: false
             };
@@ -1931,28 +1928,42 @@
             videoEl.srcObject = cameraStream;
             await videoEl.play();
 
-            // 엔진 선택: 네이티브 BarcodeDetector 우선
-            if ('BarcodeDetector' in window) {
-                try {
-                    // 지원 포맷 조회
-                    const supported = await window.BarcodeDetector.getSupportedFormats();
-                    // 우리가 쓰고 싶은 거 필터
-                    const wanted = ['code_128','code_39','code_93','ean_13','ean_8','upc_a','upc_e','codabar','itf','qr_code','data_matrix'];
-                    const useFormats = wanted.filter(f => supported.includes(f));
-                    barcodeDetector = new window.BarcodeDetector({ formats: useFormats });
-                    usingEngine = 'native';
-                    engineInfo.innerText = `엔진: 네이티브 (${useFormats.length}개 포맷)`;
-                    startNativeDetectLoop();
-                } catch (e) {
-                    console.warn("BarcodeDetector 초기화 실패, ZXing fallback", e);
-                    await startZxingFallback();
+            // 비디오 트랙 정보 + 줌 적용 시도
+            const track = cameraStream.getVideoTracks()[0];
+            let zoomApplied = '';
+            try {
+                if (track.getCapabilities) {
+                    const caps = track.getCapabilities();
+                    const advanced = [];
+                    // 연속 자동 초점
+                    if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                        advanced.push({ focusMode: 'continuous' });
+                    }
+                    // 줌 적용 - 너무 멀면 안 잡힘, 살짝 줌인이 도움 됨
+                    if (caps.zoom) {
+                        const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.5));
+                        advanced.push({ zoom: targetZoom });
+                        zoomApplied = ` z${targetZoom}x`;
+                    }
+                    if (advanced.length > 0) {
+                        await track.applyConstraints({ advanced });
+                    }
                 }
-            } else {
-                // 폴리필 시도 없이 바로 ZXing
-                await startZxingFallback();
+            } catch (e) {
+                console.warn("카메라 capability 적용 일부 실패:", e);
             }
 
-            // 탭해서 초점 (iOS는 pointsOfInterest 지원)
+            // 비디오 실제 해상도
+            const settings = track.getSettings ? track.getSettings() : {};
+            const realW = settings.width || 'unknown';
+            const realH = settings.height || 'unknown';
+
+            // ─── 메인 디코더: Quagga2 (1D 바코드 강력) ─────────────
+            // ZXing은 백업으로 동시 가동
+            startQuaggaDetector(videoEl, realW, realH, zoomApplied);
+            startZxingBackupDetector(videoEl);
+
+            // 탭 초점
             const viewport = document.getElementById('camera-viewport');
             viewport.onclick = handleViewportTap;
 
@@ -1964,30 +1975,99 @@
         }
     }
 
-    // ─── 네이티브 BarcodeDetector 루프 ─────────────────────────
-    function startNativeDetectLoop() {
-        const tick = async () => {
-            if (!scannerRunning || !videoEl || !barcodeDetector) return;
-            try {
-                if (videoEl.readyState >= 2) {
-                    const codes = await barcodeDetector.detect(videoEl);
-                    if (codes && codes.length > 0) {
-                        // 첫 번째 결과 사용
-                        onBarcodeScanned(codes[0].rawValue || '');
-                    }
-                }
-            } catch (e) {
-                // detect 실패는 무시 (계속 시도)
+    // ─── Quagga2 디코더 (1D 바코드 강력) ─────────────────────────
+    function startQuaggaDetector(videoElement, w, h, zoomInfo) {
+        const engineInfo = document.getElementById('camera-engine-info');
+        try {
+            if (typeof Quagga === 'undefined') {
+                engineInfo.innerText = `엔진: ZXing only (${w}x${h}${zoomInfo})`;
+                return;
             }
-            // 다음 프레임 (50ms 간격 = ~20fps)
-            detectLoopId = setTimeout(tick, 50);
-        };
-        tick();
+            Quagga.init({
+                inputStream: {
+                    name: "Live",
+                    type: "LiveStream",
+                    target: videoElement,
+                    constraints: {
+                        // 이미 우리가 video 연결했으니 Quagga 자체 카메라는 안 씀
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 },
+                        facingMode: "environment"
+                    },
+                    area: {
+                        // 화면 중앙 영역만 분석 - 성능 ↑
+                        top: "20%", right: "10%",
+                        left: "10%", bottom: "20%"
+                    }
+                },
+                locator: {
+                    patchSize: "medium",
+                    halfSample: true
+                },
+                numOfWorkers: 4,  // 멀티스레드
+                frequency: 10,    // 1초에 10번 시도
+                decoder: {
+                    readers: [
+                        "code_128_reader",
+                        "ean_reader",
+                        "ean_8_reader",
+                        "code_39_reader",
+                        "code_39_vin_reader",
+                        "codabar_reader",
+                        "upc_reader",
+                        "upc_e_reader",
+                        "i2of5_reader",
+                        "2of5_reader",
+                        "code_93_reader"
+                    ]
+                },
+                locate: true
+            }, (err) => {
+                if (err) {
+                    console.error("Quagga 초기화 실패:", err);
+                    engineInfo.innerText = `엔진: ZXing only (${w}x${h}${zoomInfo})`;
+                    return;
+                }
+                Quagga.start();
+                engineInfo.innerText = `엔진: Quagga+ZXing (${w}x${h}${zoomInfo})`;
+                usingEngine = 'quagga';
+            });
+
+            Quagga.onDetected(handleQuaggaDetection);
+        } catch (e) {
+            console.error("Quagga 시작 오류:", e);
+            engineInfo.innerText = `엔진: ZXing only (${w}x${h}${zoomInfo})`;
+        }
     }
 
-    // ─── ZXing fallback ─────────────────────────
-    async function startZxingFallback() {
-        const engineInfo = document.getElementById('camera-engine-info');
+    // Quagga가 인식할 때마다 호출 - 신뢰도 확인 후 처리
+    function handleQuaggaDetection(result) {
+        if (!result || !result.codeResult) return;
+        const code = result.codeResult.code;
+        if (!code) return;
+
+        // 신뢰도 체크 - Quagga는 가끔 오인식하므로 strict하게
+        // result.codeResult.decodedCodes의 error 평균이 낮아야 OK
+        const decoded = result.codeResult.decodedCodes || [];
+        let totalErr = 0;
+        let validCount = 0;
+        for (const d of decoded) {
+            if (d.error !== undefined) {
+                totalErr += d.error;
+                validCount++;
+            }
+        }
+        const avgErr = validCount > 0 ? totalErr / validCount : 1;
+        // 평균 에러 0.15 이하만 신뢰 (이게 너무 빡빡하면 0.25로 풀어도 됨)
+        if (avgErr > 0.15) {
+            return;  // 오인식 의심 - 무시
+        }
+
+        onBarcodeScanned(code);
+    }
+
+    // ─── ZXing 백업 디코더 ─────────────────────────
+    function startZxingBackupDetector(videoElement) {
         try {
             if (!zxingScanner) {
                 const hints = new Map();
@@ -2006,24 +2086,27 @@
                 ];
                 hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
                 hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-                zxingScanner = new ZXing.BrowserMultiFormatReader(hints, 150);
+                zxingScanner = new ZXing.BrowserMultiFormatReader(hints, 200);
             }
-            // 우리가 만든 video를 ZXing에 연결
-            zxingScanner.decodeFromVideoElement(videoEl, (result, err) => {
+            zxingScanner.decodeFromVideoElement(videoElement, (result, err) => {
                 if (result) {
                     onBarcodeScanned(result.getText());
                 }
             });
-            usingEngine = 'zxing';
-            engineInfo.innerText = "엔진: ZXing (fallback)";
         } catch (e) {
-            console.error("ZXing fallback 실패:", e);
-            engineInfo.innerText = "❌ 엔진 실패";
+            console.error("ZXing 백업 시작 실패:", e);
         }
     }
 
     function stopCamera() {
         scannerRunning = false;
+        // Quagga 정지
+        try {
+            if (typeof Quagga !== 'undefined') {
+                Quagga.offDetected(handleQuaggaDetection);
+                Quagga.stop();
+            }
+        } catch(e) {}
         // 네이티브 루프 정지
         if (detectLoopId) {
             clearTimeout(detectLoopId);
