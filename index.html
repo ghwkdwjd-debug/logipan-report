@@ -276,6 +276,50 @@
             100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
         }
 
+        /* [추가] 스캔 성공 시 화면 전체 플래시 + 값 표시 */
+        .scan-flash {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(76, 175, 80, 0.85);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 100;
+            pointer-events: none;
+            animation: flashFade 0.7s ease-out forwards;
+            border-radius: 10px;
+        }
+        .scan-flash.loc { background: rgba(251, 192, 45, 0.9); }
+        .scan-flash.error { background: rgba(220, 38, 38, 0.85); }
+        @keyframes flashFade {
+            0% { opacity: 0; }
+            15% { opacity: 1; }
+            70% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        .scan-flash .flash-content {
+            color: white; text-align: center; padding: 12px;
+            max-width: 90%;
+        }
+        .scan-flash .flash-icon {
+            font-size: 36px; margin-bottom: 4px;
+            animation: flashIconPop 0.4s ease-out;
+        }
+        @keyframes flashIconPop {
+            0% { transform: scale(0.3); opacity: 0; }
+            70% { transform: scale(1.15); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .scan-flash .flash-label {
+            font-size: 13px; font-weight: bold; opacity: 0.95;
+            margin-bottom: 4px;
+        }
+        .scan-flash .flash-value {
+            font-size: 16px; font-family: monospace;
+            background: rgba(0,0,0,0.25);
+            padding: 4px 10px; border-radius: 6px;
+            display: inline-block;
+            word-break: break-all;
+        }
+
         .camera-engine-info {
             text-align: center;
             font-size: 11px; color: #999;
@@ -1762,9 +1806,10 @@
     }
 
     // 피드백 프리셋
-    function feedbackScanSuccess() {
+    function feedbackScanSuccess(value) {
         beep(1200, 80);               // 짧고 높은 띡
         vibrate(50);
+        showScanFlash('product', value);
     }
     function feedbackLocChanged(loc) {
         beep(800, 120);
@@ -1772,6 +1817,7 @@
         vibrate([0, 80, 50, 80]);
         speak("로케 변경");
         showFeedback(`📍 로케 변경: ${loc}`, 'loc');
+        showScanFlash('loc', loc);
     }
     function feedbackError(msg) {
         beep(300, 250);
@@ -1780,11 +1826,40 @@
         vibrate([0, 200, 100, 200]);
         speak("오류");
         showFeedback(`⚠️ ${msg}`, 'error');
+        showScanFlash('error', msg);
     }
     function feedbackSent() {
         beep(1000, 100);
         setTimeout(() => beep(1400, 200), 110);
         speak("전송 완료");
+    }
+
+    // [추가] 화면 플래시 - 무음모드에서도 시각으로 인지
+    function showScanFlash(kind, value) {
+        const viewport = document.getElementById('camera-viewport');
+        if (!viewport || !viewport.offsetParent) return;  // 모달 안 열려있으면 skip
+
+        // 기존 플래시 있으면 제거 (연속 스캔 시 깔끔하게)
+        viewport.querySelectorAll('.scan-flash').forEach(el => el.remove());
+
+        const flash = document.createElement('div');
+        flash.className = 'scan-flash ' + (kind === 'loc' ? 'loc' : kind === 'error' ? 'error' : '');
+
+        let icon = '✓', label = '스캔';
+        if (kind === 'loc') { icon = '📍'; label = '로케 변경'; }
+        else if (kind === 'error') { icon = '⚠️'; label = '오류'; }
+
+        const safeValue = (value || '').toString().slice(0, 30);
+        flash.innerHTML = `
+            <div class="flash-content">
+                <div class="flash-icon">${icon}</div>
+                <div class="flash-label">${escapeHtml(label)}</div>
+                <div class="flash-value">${escapeHtml(safeValue)}</div>
+            </div>
+        `;
+        viewport.appendChild(flash);
+        // 0.7초 후 자동 제거
+        setTimeout(() => flash.remove(), 700);
     }
     // ─── 모드 전환 ─────────────────────────
     function selectScanMode(mode) {
@@ -2057,8 +2132,8 @@
         const code = result.codeResult.code;
         if (!code) return;
 
-        // 신뢰도 체크 - Quagga는 가끔 오인식하므로 strict하게
-        // result.codeResult.decodedCodes의 error 평균이 낮아야 OK
+        // [패치] 신뢰도 강화 - 오인식 방지
+        // Quagga의 decodedCodes 평균 에러로 신뢰도 판단
         const decoded = result.codeResult.decodedCodes || [];
         let totalErr = 0;
         let validCount = 0;
@@ -2069,9 +2144,17 @@
             }
         }
         const avgErr = validCount > 0 ? totalErr / validCount : 1;
-        // 평균 에러 0.15 이하만 신뢰 (이게 너무 빡빡하면 0.25로 풀어도 됨)
-        if (avgErr > 0.15) {
-            return;  // 오인식 의심 - 무시
+        // [강화] 0.15 → 0.08 (훨씬 엄격)
+        if (avgErr > 0.08) {
+            console.log(`🚫 Quagga 신뢰도 낮음 (err=${avgErr.toFixed(3)}): ${code}`);
+            return;
+        }
+
+        // [추가] 너무 짧은 바코드는 의심 (오인식 빈번)
+        // 무신사 바코드는 11~19자 정도. 8자리 미만 숫자만 나오면 거의 잘못 읽은 거
+        if (code.length < 8) {
+            console.log(`🚫 길이 너무 짧음: ${code}`);
+            return;
         }
 
         onBarcodeScanned(code);
@@ -2287,7 +2370,7 @@
         scanState.items.push(item);
         renderScanList();
         saveScanDraft();
-        feedbackScanSuccess();
+        feedbackScanSuccess(barcode);  // [수정] 바코드 값 전달 - 플래시에 표시
 
         const status = document.getElementById('camera-modal-status');
         if (status) status.innerText = `${scanState.items.length}건`;
