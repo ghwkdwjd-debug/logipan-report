@@ -12,8 +12,8 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
-    <!-- [추가] 카메라 바코드 스캔 라이브러리 -->
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <!-- [추가] 카메라 바코드 스캔 라이브러리 (ZXing - 1D 바코드 강력) -->
+    <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
@@ -143,7 +143,7 @@
         .msg-toast .preview { font-size: 13px; opacity: 0.95; }
 
         /* ===== [추가] 📦 스캔 탭 전용 스타일 ===== */
-        .scan-mode-row { display: flex; gap: 6px; margin: 10px 0; }
+        .scan-mode-row { display: flex; gap: 6px; margin: 10px 0 14px; }
         .scan-mode-btn {
             flex: 1; padding: 11px 6px;
             border: 1px solid #e0e0e0; background: #f5f6f8; color: #666;
@@ -158,57 +158,122 @@
             opacity: 0.4; cursor: not-allowed; background: #f0f0f0;
         }
 
-        .current-loc-box {
-            background: #fff3e0; border: 2px solid #fbc02d; border-radius: 10px;
-            padding: 12px; margin: 12px 0; text-align: center;
+        /* 로케 입력 + 카메라 버튼 */
+        .loc-input-row {
+            display: flex; gap: 8px; align-items: stretch;
         }
-        .current-loc-box .label { font-size: 11px; color: #f57c00; font-weight: bold; margin-bottom: 4px; }
-        .current-loc-box .value { font-size: 22px; font-weight: bold; color: #333; letter-spacing: 1px; }
-        .current-loc-box.empty .value { color: #999; font-size: 16px; }
-
-        /* [재고이동용] 출발/도착 로케 박스 */
-        .move-loc-row { display: flex; gap: 8px; margin: 12px 0; }
-        .move-loc-box {
-            flex: 1; padding: 10px; border-radius: 10px; text-align: center;
-            border: 2px solid #ddd; background: #fafafa;
+        .loc-input-row input {
+            flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 8px;
+            font-size: 15px; outline: none; box-sizing: border-box;
+            font-family: monospace; letter-spacing: 1px; font-weight: bold;
         }
-        .move-loc-box.active { border-color: #1877F2; background: #e7f3ff; }
-        .move-loc-box .label { font-size: 11px; font-weight: bold; margin-bottom: 4px; }
-        .move-loc-box.from .label { color: #1877F2; }
-        .move-loc-box.to .label { color: #16A34A; }
-        .move-loc-box .value { font-size: 16px; font-weight: bold; color: #333; }
-        .move-loc-box .value.empty { color: #999; font-size: 13px; font-weight: normal; }
-
-        #scan-camera-container {
-            position: relative;
-            background: #000; border-radius: 12px; overflow: hidden;
-            margin: 12px 0; min-height: 300px;
+        .loc-cam-btn {
+            width: 52px; flex-shrink: 0;
+            background: #fbc02d; color: #333; border: none; border-radius: 8px;
+            font-size: 22px; cursor: pointer;
+            box-shadow: 0 2px 6px rgba(251,192,45,0.3);
             display: flex; align-items: center; justify-content: center;
         }
-        #scan-camera-container.off { background: #f5f6f8; min-height: 200px; }
-        #scan-reader { width: 100%; }
-        #scan-reader video { width: 100% !important; height: auto !important; }
-        .scan-overlay-msg {
-            color: white; font-size: 14px; text-align: center; padding: 20px;
-        }
-        .scan-overlay-msg.dark { color: #999; }
+        .loc-cam-btn:active { transform: scale(0.96); background: #f9a825; }
 
-        .scan-start-btn {
-            background: #16A34A; color: white; border: none; border-radius: 10px;
-            padding: 14px 24px; font-size: 16px; font-weight: bold; cursor: pointer;
-            display: block; margin: 0 auto;
+        /* 큰 상품 스캔 버튼 */
+        .product-scan-btn {
+            width: 100%; margin-top: 18px;
+            background: linear-gradient(135deg, #1877F2 0%, #4285F4 100%);
+            color: white; border: none; border-radius: 14px;
+            padding: 22px 18px; cursor: pointer;
+            display: flex; align-items: center; gap: 14px;
+            box-shadow: 0 4px 14px rgba(24,119,242,0.3);
+            transition: transform 0.1s;
         }
-        .scan-start-btn.stop { background: #DC2626; }
+        .product-scan-btn:active { transform: scale(0.98); }
+        .product-scan-btn .icon { font-size: 32px; }
+        .product-scan-btn .text { display: flex; flex-direction: column; align-items: flex-start; flex:1; }
+        .product-scan-btn .title { font-size: 17px; font-weight: bold; margin-bottom: 2px; }
+        .product-scan-btn .sub { font-size: 12px; opacity: 0.9; }
+
+        /* 카메라 모달 (작은 영역) */
+        .camera-modal {
+            display: none;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); z-index: 2000;
+            justify-content: center; align-items: center; padding: 16px;
+            box-sizing: border-box;
+        }
+        .camera-modal.open { display: flex; }
+        .camera-modal-card {
+            background: white; border-radius: 16px;
+            width: 100%; max-width: 420px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+            overflow: hidden;
+            animation: modalIn 0.2s ease-out;
+        }
+        @keyframes modalIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .camera-modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 14px 16px; border-bottom: 1px solid #eee;
+        }
+        .camera-modal-title {
+            font-size: 16px; font-weight: bold; color: #333;
+        }
+        .camera-modal-close {
+            background: #f5f6f8; border: none; border-radius: 50%;
+            width: 32px; height: 32px; font-size: 16px; cursor: pointer;
+            color: #666;
+        }
+        .camera-modal-info {
+            text-align: center; padding: 8px 16px;
+            font-size: 12px; color: #999;
+        }
+        .camera-modal-viewport {
+            position: relative;
+            background: #000; margin: 0 14px;
+            border-radius: 10px; overflow: hidden;
+            min-height: 260px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #scan-reader { width: 100%; }
+        #scan-reader video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover;
+            display: block;
+        }
+        .camera-guide-box {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 80%; height: 30%;
+            transform: translate(-50%, -50%);
+            border: 3px solid rgba(255,255,255,0.6);
+            border-radius: 8px;
+            pointer-events: none;
+            box-shadow: 0 0 0 9999px rgba(0,0,0,0.2);
+        }
+        .camera-modal-footer {
+            display: flex; align-items: center; gap: 8px;
+            padding: 12px 16px;
+        }
+        .scan-toggle {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 6px 12px; background: #f5f6f8; border-radius: 14px;
+            cursor: pointer; user-select: none; font-size: 13px;
+        }
+        .scan-toggle.on { background: #e8f5e9; color: #2e7d32; }
+        .scan-toggle.off { background: #f5f6f8; color: #999; }
 
         .scan-feedback {
-            background: #e7f3ff; border-left: 4px solid #1877F2;
-            padding: 10px 14px; border-radius: 8px; margin: 10px 0;
-            font-size: 14px; display: none;
+            margin: 0 16px 12px;
+            padding: 10px 14px; border-radius: 8px;
+            font-size: 13px; display: none;
+            background: #e8f5e9; border-left: 4px solid #16A34A; color: #1b5e20;
         }
-        .scan-feedback.success { background: #e8f5e9; border-color: #16A34A; color: #1b5e20; }
-        .scan-feedback.error { background: #ffebee; border-color: #DC2626; color: #b71c1c; }
-        .scan-feedback.loc { background: #fff3e0; border-color: #fbc02d; color: #e65100; }
+        .scan-feedback.error { background: #ffebee; border-left-color: #DC2626; color: #b71c1c; }
+        .scan-feedback.loc { background: #fff3e0; border-left-color: #fbc02d; color: #e65100; }
 
+        /* 스캔 목록 */
         .scan-list-header {
             display: flex; justify-content: space-between; align-items: center;
             background: #f5f6f8; padding: 10px 12px; border-radius: 8px 8px 0 0;
@@ -233,21 +298,7 @@
             background: none; border: none; color: #DC2626; cursor: pointer;
             font-size: 16px; padding: 0 4px;
         }
-        .scan-item.from-row { background: #e7f3ff; }
-        .scan-item.to-row { background: #e8f5e9; }
         .scan-empty { text-align: center; padding: 40px 10px; color: #999; font-size: 13px; }
-
-        .scan-settings-row {
-            display: flex; gap: 8px; align-items: center; justify-content: flex-end;
-            font-size: 12px; color: #666; margin: 8px 0;
-        }
-        .scan-toggle {
-            display: inline-flex; align-items: center; gap: 4px;
-            padding: 4px 10px; background: #f5f6f8; border-radius: 12px;
-            cursor: pointer; user-select: none;
-        }
-        .scan-toggle.on { background: #e8f5e9; color: #2e7d32; }
-        .scan-toggle.off { background: #f5f6f8; color: #999; }
 
         .send-btn {
             width: 100%; padding: 16px; background: #1877F2; color: white;
@@ -389,56 +440,26 @@
             <button class="scan-mode-btn" data-mode="move" onclick="selectScanMode('move')" disabled title="준비 중">🔄 재고이동</button>
             <button class="scan-mode-btn" data-mode="audit" onclick="selectScanMode('audit')" disabled title="준비 중">📋 재고조사</button>
         </div>
-        <div style="font-size:11px; color:#999; text-align:center; margin-bottom:8px;">
-            * 이번 버전에선 <b>입고</b>만 사용 가능. 다른 모드는 차차 추가됩니다.
-        </div>
 
         <!-- 작업명 -->
-        <label>📌 작업명 (브랜드 또는 라벨)</label>
+        <label>📌 작업명</label>
         <input type="text" id="scan-label" placeholder="예: ADIDAS26_3월1주차">
 
-        <!-- 현재 로케 (입고/조사용) -->
-        <div id="scan-loc-single">
-            <div class="current-loc-box empty" id="scan-loc-box">
-                <div class="label">📍 현재 로케이션</div>
-                <div class="value" id="scan-loc-value">로케 바코드를 찍으세요</div>
-            </div>
+        <!-- 현재 로케이션 (📷 버튼 포함) -->
+        <label>📍 현재 로케이션</label>
+        <div class="loc-input-row">
+            <input type="text" id="scan-loc-input" placeholder="로케 바코드 또는 직접 입력" autocomplete="off">
+            <button class="loc-cam-btn" onclick="openCameraModal('location')" title="로케 카메라 스캔">📷</button>
         </div>
 
-        <!-- 출발/도착 로케 (재고이동용 - 일단 숨김) -->
-        <div id="scan-loc-move" style="display:none;">
-            <div class="move-loc-row">
-                <div class="move-loc-box from" id="scan-loc-from">
-                    <div class="label">📤 출발</div>
-                    <div class="value empty" id="scan-loc-from-value">로케 스캔</div>
-                </div>
-                <div class="move-loc-box to" id="scan-loc-to">
-                    <div class="label">📥 도착</div>
-                    <div class="value empty" id="scan-loc-to-value">로케 스캔</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 카메라 -->
-        <div id="scan-camera-container" class="off">
-            <div class="scan-overlay-msg dark" id="scan-camera-msg">
-                📷 카메라를 켜서 바코드를 찍으세요
-            </div>
-            <div id="scan-reader"></div>
-        </div>
-
-        <button class="scan-start-btn" id="scan-start-btn" onclick="toggleScanner()">
-            🎥 카메라 켜기
+        <!-- 상품 스캔 큰 버튼 -->
+        <button class="product-scan-btn" onclick="openCameraModal('product')">
+            <span class="icon">📷</span>
+            <span class="text">
+                <span class="title">상품 바코드 스캔</span>
+                <span class="sub">탭하면 카메라가 켜집니다</span>
+            </span>
         </button>
-
-        <!-- 설정 토글 -->
-        <div class="scan-settings-row">
-            <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊 소리 ON</span>
-            <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳 진동 ON</span>
-        </div>
-
-        <!-- 피드백 메시지 -->
-        <div class="scan-feedback" id="scan-feedback"></div>
 
         <!-- 스캔 목록 -->
         <div style="margin-top:14px;">
@@ -458,6 +479,30 @@
         <button class="clear-btn" onclick="clearAllScans()">
             🗑️ 전체 초기화
         </button>
+    </div>
+</div>
+
+<!-- ===== [추가] 카메라 모달 (작은 영역, 풀스크린 X) ===== -->
+<div id="camera-modal" class="camera-modal">
+    <div class="camera-modal-card">
+        <div class="camera-modal-header">
+            <div class="camera-modal-title" id="camera-modal-title">📷 스캔</div>
+            <button class="camera-modal-close" onclick="closeCameraModal()" aria-label="닫기">✕</button>
+        </div>
+        <div class="camera-modal-info" id="camera-modal-info">
+            바코드를 카메라에 비추세요
+        </div>
+        <div class="camera-modal-viewport">
+            <div id="scan-reader"></div>
+            <div class="camera-guide-box"></div>
+        </div>
+        <div class="camera-modal-footer">
+            <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊</span>
+            <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳</span>
+            <span id="camera-modal-status" style="margin-left:auto; font-size:12px; color:#666;"></span>
+        </div>
+        <!-- 피드백 메시지 (모달 내부) -->
+        <div class="scan-feedback" id="scan-feedback"></div>
     </div>
 </div>
 
@@ -1678,9 +1723,6 @@
         document.querySelectorAll('.scan-mode-btn').forEach(b => {
             b.classList.toggle('active', b.dataset.mode === mode);
         });
-        // UI 토글
-        document.getElementById('scan-loc-single').style.display = (mode === 'move') ? 'none' : 'block';
-        document.getElementById('scan-loc-move').style.display = (mode === 'move') ? 'block' : 'none';
         saveScanDraft();
     }
 
@@ -1712,98 +1754,152 @@
         try { localStorage.removeItem(SCAN_DRAFT_KEY); } catch(e) {}
     }
 
-    // ─── 로케 UI 갱신 ─────────────────────────
+    // ─── 로케 UI 갱신 (입력 칸으로 변경됨) ─────────────────────────
     function updateLocUI(loc) {
-        const box = document.getElementById('scan-loc-box');
-        const val = document.getElementById('scan-loc-value');
-        if (loc) {
-            box.classList.remove('empty');
-            val.innerText = loc;
-        } else {
-            box.classList.add('empty');
-            val.innerText = '로케 바코드를 찍으세요';
+        const input = document.getElementById('scan-loc-input');
+        if (input) {
+            input.value = loc || '';
         }
     }
 
-    // ─── 카메라 켜기/끄기 ─────────────────────────
-    async function toggleScanner() {
-        if (scannerRunning) {
-            await stopScanner();
-        } else {
-            await startScanner();
-        }
-    }
+    // ─── 카메라 모달 (작은 영역) ─────────────────────────
+    // scanCameraMode: 'product' (연속 스캔) | 'location' (1회 스캔 후 자동 닫힘)
+    let scanCameraMode = 'product';
 
-    async function startScanner() {
-        const label = (document.getElementById('scan-label').value || '').trim();
-        if (!label) {
-            feedbackError("작업명을 먼저 입력하세요");
-            document.getElementById('scan-label').focus();
+    async function openCameraModal(mode) {
+        // 작업명 체크 (상품 모드만 필수)
+        if (mode === 'product') {
+            const label = (document.getElementById('scan-label').value || '').trim();
+            if (!label) {
+                feedbackError("작업명을 먼저 입력하세요");
+                document.getElementById('scan-label').focus();
+                return;
+            }
+            scanState.label = label;
+            saveScanDraft();
+
+            // 로케 체크
+            if (!scanState.currentLoc && !document.getElementById('scan-loc-input').value.trim()) {
+                feedbackError("먼저 로케이션을 입력하거나 스캔하세요");
+                return;
+            }
+            // 입력칸에 직접 입력한 로케 반영
+            const inputLoc = document.getElementById('scan-loc-input').value.trim();
+            if (inputLoc && inputLoc !== scanState.currentLoc) {
+                scanState.currentLoc = inputLoc.toUpperCase();
+                saveScanDraft();
+            }
+        }
+
+        // HTTPS 체크
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+            feedbackError("HTTPS 환경에서만 카메라 사용 가능");
             return;
         }
-        scanState.label = label;
-        saveScanDraft();
 
-        const container = document.getElementById('scan-camera-container');
-        const msgEl = document.getElementById('scan-camera-msg');
-        const btn = document.getElementById('scan-start-btn');
+        scanCameraMode = mode;
+        const modal = document.getElementById('camera-modal');
+        const title = document.getElementById('camera-modal-title');
+        const info = document.getElementById('camera-modal-info');
+        const status = document.getElementById('camera-modal-status');
 
+        if (mode === 'location') {
+            title.innerText = '📍 로케 스캔';
+            info.innerText = '로케 바코드를 비추세요 (1회 스캔)';
+            status.innerText = '';
+        } else {
+            title.innerText = '📦 상품 스캔';
+            info.innerText = `📍 ${scanState.currentLoc} · 연속 스캔`;
+            status.innerText = `${scanState.items.length}건`;
+        }
+
+        modal.classList.add('open');
+        // AudioContext 활성화
+        try { getAudioCtx()?.resume?.(); } catch(e) {}
+
+        // 카메라 시작
+        await startCameraInModal();
+    }
+
+    function closeCameraModal() {
+        const modal = document.getElementById('camera-modal');
+        modal.classList.remove('open');
+        stopCamera();
+        // 피드백 숨김
+        const fb = document.getElementById('scan-feedback');
+        if (fb) fb.style.display = 'none';
+    }
+
+    async function startCameraInModal() {
         try {
             if (!scanner) {
-                scanner = new Html5Qrcode("scan-reader");
+                const hints = new Map();
+                const formats = [
+                    ZXing.BarcodeFormat.CODE_128,
+                    ZXing.BarcodeFormat.CODE_39,
+                    ZXing.BarcodeFormat.CODE_93,
+                    ZXing.BarcodeFormat.EAN_13,
+                    ZXing.BarcodeFormat.EAN_8,
+                    ZXing.BarcodeFormat.UPC_A,
+                    ZXing.BarcodeFormat.UPC_E,
+                    ZXing.BarcodeFormat.CODABAR,
+                    ZXing.BarcodeFormat.ITF,
+                    ZXing.BarcodeFormat.QR_CODE,
+                    ZXing.BarcodeFormat.DATA_MATRIX,
+                ];
+                hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+                hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+                scanner = new ZXing.BrowserMultiFormatReader(hints, 200);
             }
-            // 후면 카메라 우선
-            const config = {
-                fps: 10,
-                qrbox: { width: 250, height: 150 },
-                aspectRatio: 1.7,
-                formatsToSupport: [
-                    Html5QrcodeSupportedFormats.CODE_128,
-                    Html5QrcodeSupportedFormats.CODE_39,
-                    Html5QrcodeSupportedFormats.EAN_13,
-                    Html5QrcodeSupportedFormats.EAN_8,
-                    Html5QrcodeSupportedFormats.UPC_A,
-                    Html5QrcodeSupportedFormats.UPC_E,
-                    Html5QrcodeSupportedFormats.CODABAR,
-                    Html5QrcodeSupportedFormats.ITF,
-                    Html5QrcodeSupportedFormats.QR_CODE,
-                ]
-            };
-            await scanner.start(
-                { facingMode: "environment" },
-                config,
-                onBarcodeScanned,
-                () => {} // 인식 실패 콜백 (무시)
-            );
+
+            const devices = await scanner.listVideoInputDevices();
+            let deviceId = null;
+            if (devices && devices.length > 0) {
+                const rear = devices.find(d => /back|rear|environment/i.test(d.label));
+                deviceId = rear ? rear.deviceId : devices[devices.length - 1].deviceId;
+            }
+
+            // <video> 요소 (모달 내부)
+            let videoEl = document.getElementById('scan-video');
+            if (!videoEl) {
+                videoEl = document.createElement('video');
+                videoEl.id = 'scan-video';
+                videoEl.setAttribute('playsinline', 'true');
+                videoEl.setAttribute('autoplay', 'true');
+                videoEl.style.width = '100%';
+                videoEl.style.height = '100%';
+                videoEl.style.objectFit = 'cover';
+                document.getElementById('scan-reader').appendChild(videoEl);
+            }
+
+            scanner.decodeFromVideoDevice(deviceId, videoEl, (result, err) => {
+                if (result) {
+                    onBarcodeScanned(result.getText());
+                }
+            });
+
             scannerRunning = true;
-            container.classList.remove('off');
-            msgEl.style.display = 'none';
-            btn.innerText = '🛑 카메라 끄기';
-            btn.classList.add('stop');
-            // AudioContext 활성화 (브라우저는 사용자 액션 시점에만 허용)
-            try { getAudioCtx()?.resume?.(); } catch(e) {}
         } catch(e) {
             console.error("카메라 시작 실패:", e);
-            feedbackError("카메라 접근 실패. 권한 확인");
+            feedbackError("카메라 접근 실패: " + (e.message || e));
         }
     }
 
-    async function stopScanner() {
+    function stopCamera() {
         if (!scanner || !scannerRunning) return;
         try {
-            await scanner.stop();
-            scanner.clear();
+            scanner.reset();
         } catch(e) {}
         scannerRunning = false;
-        const container = document.getElementById('scan-camera-container');
-        const msgEl = document.getElementById('scan-camera-msg');
-        const btn = document.getElementById('scan-start-btn');
-        if (container) container.classList.add('off');
-        if (msgEl) msgEl.style.display = 'block';
-        if (btn) {
-            btn.innerText = '🎥 카메라 켜기';
-            btn.classList.remove('stop');
+    }
+
+    // 다른 탭으로 이동 시 카메라 자동 정리용 (switchTab에서 호출)
+    function stopScanner() {
+        const modal = document.getElementById('camera-modal');
+        if (modal && modal.classList.contains('open')) {
+            modal.classList.remove('open');
         }
+        stopCamera();
     }
 
     // ─── 바코드 인식 콜백 ─────────────────────────
@@ -1817,30 +1913,40 @@
         lastScanText = code;
         lastScanAt = now;
 
-        // 로케 vs 상품 자동 판별
+        // 카메라 모드별 처리
+        if (scanCameraMode === 'location') {
+            // 로케 모드: 무조건 로케로 인식 + 1회 후 자동 닫기
+            const locValue = code.toUpperCase();
+            scanState.currentLoc = locValue;
+            updateLocUI(locValue);
+            saveScanDraft();
+            feedbackLocChanged(locValue);
+            // 0.6초 뒤 모달 자동 닫기 (사용자가 피드백 인지할 시간)
+            setTimeout(() => {
+                closeCameraModal();
+            }, 600);
+            return;
+        }
+
+        // 상품 모드: 로케 바코드면 로케 변경, 아니면 상품으로 추가
         if (isLocationBarcode(code)) {
-            handleLocationScan(code.toUpperCase());
+            // 상품 스캔 중에 로케 바코드 찍힘 → 로케 변경
+            const locValue = code.toUpperCase();
+            scanState.currentLoc = locValue;
+            updateLocUI(locValue);
+            saveScanDraft();
+            feedbackLocChanged(locValue);
+            // 정보 라인도 업데이트
+            const info = document.getElementById('camera-modal-info');
+            if (info) info.innerText = `📍 ${locValue} · 연속 스캔`;
         } else {
             handleProductScan(code);
         }
     }
 
-    function handleLocationScan(loc) {
-        if (scanState.mode === 'move') {
-            // 출발/도착 자동 전환 (일단 구현 안 함 - 추후)
-            return;
-        }
-        // 입고/조사 모드: 그냥 현재 로케 변경
-        scanState.currentLoc = loc;
-        updateLocUI(loc);
-        saveScanDraft();
-        feedbackLocChanged(loc);
-    }
-
     function handleProductScan(barcode) {
-        // 로케 없으면 거부
-        if (scanState.mode !== 'move' && !scanState.currentLoc) {
-            feedbackError("먼저 로케 바코드를 찍으세요");
+        if (!scanState.currentLoc) {
+            feedbackError("로케이션이 없어요");
             return;
         }
 
@@ -1855,6 +1961,10 @@
         renderScanList();
         saveScanDraft();
         feedbackScanSuccess();
+
+        // 모달 상태 라벨 갱신
+        const status = document.getElementById('camera-modal-status');
+        if (status) status.innerText = `${scanState.items.length}건`;
     }
 
     // ─── 스캔 목록 렌더링 ─────────────────────────
@@ -1998,11 +2108,26 @@
         initScanSettingsUI();
         loadScanDraft();
         renderScanList();
-        // 작업명/로케 변경 시 자동 저장
+        // 작업명 변경 시 자동 저장
         const labelInput = document.getElementById('scan-label');
         if (labelInput) {
             labelInput.addEventListener('input', () => {
                 scanState.label = labelInput.value;
+                saveScanDraft();
+            });
+        }
+        // 로케 입력칸 직접 편집 시 저장
+        const locInput = document.getElementById('scan-loc-input');
+        if (locInput) {
+            locInput.addEventListener('input', () => {
+                scanState.currentLoc = locInput.value.toUpperCase();
+                saveScanDraft();
+            });
+            // 포커스 빠질 때 대문자 변환
+            locInput.addEventListener('blur', () => {
+                const v = locInput.value.trim().toUpperCase();
+                locInput.value = v;
+                scanState.currentLoc = v;
                 saveScanDraft();
             });
         }
