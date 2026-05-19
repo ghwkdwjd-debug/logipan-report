@@ -12,7 +12,23 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
-    <!-- [추가] 바코드 디코더 - Quagga(1D 메인) + ZXing(QR/2D 백업) -->
+    <!-- [추가] 바코드 디코더
+         메인: zxing-wasm (ZXing C++ 원본 WASM, 진짜 강함)
+         백업: ZXing JS, Quagga -->
+    <script type="module">
+        // zxing-wasm은 ES module - 글로벌로 노출
+        import { readBarcodes, prepareZXingModule } from "https://cdn.jsdelivr.net/npm/zxing-wasm@2.1.5/+esm";
+        // WASM 미리 로드
+        try {
+            await prepareZXingModule();
+            window.zxingWasmReady = true;
+            window.zxingReadBarcodes = readBarcodes;
+            console.log("✅ zxing-wasm 준비 완료");
+        } catch (e) {
+            console.error("zxing-wasm 로드 실패:", e);
+            window.zxingWasmReady = false;
+        }
+    </script>
     <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
     <style>
@@ -320,6 +336,72 @@
             word-break: break-all;
         }
 
+        /* [추가] PDA 확인 오버레이 - 스캔 후 사용자가 ✓ 누르기 전까지 멈춤 */
+        .scan-confirm {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(10, 30, 10, 0.92);
+            display: none;
+            flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 200;
+            border-radius: 10px;
+            padding: 16px;
+        }
+        .scan-confirm.open { display: flex; animation: confirmIn 0.15s ease-out; }
+        .scan-confirm.kind-loc { background: rgba(40, 30, 0, 0.92); }
+        .scan-confirm.kind-error { background: rgba(50, 10, 10, 0.92); }
+        @keyframes confirmIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .scan-confirm .confirm-banner {
+            background: #16A34A; color: white;
+            padding: 8px 22px; border-radius: 20px;
+            font-size: 14px; font-weight: bold;
+            margin-bottom: 14px;
+        }
+        .scan-confirm.kind-loc .confirm-banner { background: #fbc02d; color: #333; }
+        .scan-confirm.kind-error .confirm-banner { background: #DC2626; color: white; }
+        .scan-confirm .confirm-value-box {
+            background: rgba(255,255,255,0.12);
+            border-radius: 10px;
+            padding: 14px 16px;
+            text-align: center;
+            margin-bottom: 18px;
+            max-width: 90%;
+        }
+        .scan-confirm .confirm-label {
+            font-size: 11px; color: rgba(255,255,255,0.7);
+            margin-bottom: 6px;
+        }
+        .scan-confirm .confirm-value {
+            font-family: monospace; color: white;
+            font-size: 18px; font-weight: bold;
+            word-break: break-all;
+            letter-spacing: 1px;
+        }
+        .scan-confirm .confirm-btns {
+            display: flex; gap: 10px;
+            width: 100%; max-width: 320px;
+        }
+        .scan-confirm .confirm-btn {
+            flex: 1; padding: 14px 8px;
+            border: none; border-radius: 10px;
+            font-size: 15px; font-weight: bold;
+            cursor: pointer;
+        }
+        .scan-confirm .confirm-btn.ok {
+            background: #16A34A; color: white;
+            box-shadow: 0 2px 8px rgba(22,163,74,0.4);
+        }
+        .scan-confirm .confirm-btn.ok:active { background: #15803D; }
+        .scan-confirm .confirm-btn.cancel {
+            background: rgba(255,255,255,0.15); color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .scan-confirm .confirm-btn.cancel:active { background: rgba(255,255,255,0.25); }
+
         .camera-engine-info {
             text-align: center;
             font-size: 11px; color: #999;
@@ -594,6 +676,18 @@
             <div id="scan-reader"></div>
             <div class="camera-guide-box"></div>
             <div class="focus-hint">탭하면 초점</div>
+            <!-- [추가] PDA 확인 오버레이 - 스캔 후 사용자가 ✓ 누르기 전까지 멈춤 -->
+            <div class="scan-confirm" id="scan-confirm">
+                <div class="confirm-banner" id="scan-confirm-banner">✓ 스캔 완료</div>
+                <div class="confirm-value-box">
+                    <div class="confirm-label" id="scan-confirm-label">바코드</div>
+                    <div class="confirm-value" id="scan-confirm-value">-</div>
+                </div>
+                <div class="confirm-btns">
+                    <button class="confirm-btn cancel" onclick="cancelPendingScan()">✗ 다시</button>
+                    <button class="confirm-btn ok" onclick="acceptPendingScan()">✓ 추가하고 계속</button>
+                </div>
+            </div>
         </div>
         <div class="camera-engine-info" id="camera-engine-info">엔진: 확인 중...</div>
         <div class="camera-modal-footer">
@@ -1690,6 +1784,8 @@
     };
 
     let scannerRunning = false;
+    let scanPaused = false;        // [추가] PDA 확인 모드 - true면 디코더 일시정지
+    let pendingScan = null;        // [추가] 확인 대기 중인 스캔 결과
     let lastScanText = '';       // 직전 스캔 (디바운스용)
     let lastScanAt = 0;
 
@@ -1978,6 +2074,11 @@
     function closeCameraModal() {
         const modal = document.getElementById('camera-modal');
         modal.classList.remove('open');
+        // 확인 오버레이도 정리
+        const confirm = document.getElementById('scan-confirm');
+        if (confirm) confirm.classList.remove('open');
+        pendingScan = null;
+        scanPaused = false;
         stopCamera();
         const fb = document.getElementById('scan-feedback');
         if (fb) fb.style.display = 'none';
@@ -2045,7 +2146,10 @@
             const realW = settings.width || 'unknown';
             const realH = settings.height || 'unknown';
 
-            // ─── 메인 디코더: Quagga2 (1D 바코드 강력) + ZXing 백업 ─────────────
+            // ─── 디코더 동시 가동 ─────────────
+            // 메인: zxing-wasm (C++ 네이티브) - 가장 정확
+            // 백업: Quagga (1D 보조), ZXing JS (QR/2D 보조)
+            startZxingWasmDetector(videoEl, realW, realH, zoomApplied);
             startQuaggaDetector(videoEl, realW, realH, zoomApplied);
             startZxingBackupDetector(videoEl);
 
@@ -2058,6 +2162,75 @@
             console.error("카메라 시작 실패:", e);
             feedbackError("카메라 접근 실패: " + (e.message || e));
             engineInfo.innerText = "❌ 카메라 실패";
+        }
+    }
+
+    // ─── zxing-wasm 디코더 (C++ 네이티브, 가장 강력) ─────────────────────────
+    let zxingWasmCanvas = null;
+    let zxingWasmCtx = null;
+    let zxingWasmLoopId = null;
+
+    async function startZxingWasmDetector(videoElement, w, h, zoomInfo) {
+        const engineInfo = document.getElementById('camera-engine-info');
+        try {
+            if (!window.zxingWasmReady || !window.zxingReadBarcodes) {
+                console.warn("zxing-wasm 미준비 - 백업 디코더만 사용");
+                engineInfo.innerText = `엔진: Quagga+ZXing (${w}x${h}${zoomInfo})`;
+                return;
+            }
+
+            zxingWasmCanvas = document.createElement('canvas');
+            zxingWasmCtx = zxingWasmCanvas.getContext('2d', { willReadFrequently: true });
+
+            const tick = async () => {
+                if (!scannerRunning || !videoElement || scanPaused) {
+                    zxingWasmLoopId = setTimeout(tick, 100);
+                    return;
+                }
+                try {
+                    if (videoElement.readyState >= 2) {
+                        const vw = videoElement.videoWidth;
+                        const vh = videoElement.videoHeight;
+                        if (vw > 0 && vh > 0) {
+                            // 중앙 영역 크롭 (속도 ↑ + 노이즈 ↓)
+                            const cropW = Math.floor(vw * 0.9);
+                            const cropH = Math.floor(vh * 0.6);
+                            const cropX = Math.floor((vw - cropW) / 2);
+                            const cropY = Math.floor((vh - cropH) / 2);
+                            zxingWasmCanvas.width = cropW;
+                            zxingWasmCanvas.height = cropH;
+                            zxingWasmCtx.drawImage(videoElement,
+                                cropX, cropY, cropW, cropH,
+                                0, 0, cropW, cropH);
+                            const imageData = zxingWasmCtx.getImageData(0, 0, cropW, cropH);
+
+                            const results = await window.zxingReadBarcodes(imageData, {
+                                tryHarder: true,
+                                formats: [
+                                    'Code128', 'Code39', 'Code93',
+                                    'EAN-13', 'EAN-8',
+                                    'UPC-A', 'UPC-E',
+                                    'Codabar', 'ITF',
+                                    'QRCode', 'DataMatrix'
+                                ],
+                                maxNumberOfSymbols: 1
+                            });
+                            if (results && results.length > 0 && results[0].text) {
+                                onBarcodeScanned(results[0].text);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // 디코딩 실패는 무시
+                }
+                zxingWasmLoopId = setTimeout(tick, 80);
+            };
+            tick();
+            usingEngine = 'zxing-wasm';
+            engineInfo.innerText = `엔진: ZXing-WASM+Quagga (${w}x${h}${zoomInfo})`;
+        } catch (e) {
+            console.error("zxing-wasm 시작 실패:", e);
+            engineInfo.innerText = `엔진: Quagga+ZXing (${w}x${h}${zoomInfo})`;
         }
     }
 
@@ -2128,6 +2301,9 @@
 
     // Quagga가 인식할 때마다 호출 - 신뢰도 확인 후 처리
     function handleQuaggaDetection(result) {
+        // [추가] PDA 확인 대기 중이면 무시
+        if (scanPaused || pendingScan) return;
+
         if (!result || !result.codeResult) return;
         const code = result.codeResult.code;
         if (!code) return;
@@ -2194,6 +2370,14 @@
 
     function stopCamera() {
         scannerRunning = false;
+        scanPaused = false;
+        // zxing-wasm 루프 정지
+        if (zxingWasmLoopId) {
+            clearTimeout(zxingWasmLoopId);
+            zxingWasmLoopId = null;
+        }
+        zxingWasmCanvas = null;
+        zxingWasmCtx = null;
         // Quagga 정지
         try {
             if (typeof Quagga !== 'undefined') {
@@ -2313,46 +2497,157 @@
     }
 
     // ─── 바코드 인식 콜백 ─────────────────────────
-    // SCAN_COOLDOWN_MS: 모든 바코드 인식 후 이 시간 동안 다음 스캔 무시 (다다다닥 방지)
+    // SCAN_COOLDOWN_MS: 인식 후 이 시간 동안 다음 인식 무시 (디바운스)
     const SCAN_COOLDOWN_MS = 500;
 
     function onBarcodeScanned(decodedText, decodedResult) {
         const code = (decodedText || '').trim();
         if (!code) return;
 
+        // 확인 대기 중이면 추가 인식 무시
+        if (scanPaused || pendingScan) return;
+
         const now = Date.now();
-        // [패치] 글로벌 쿨다운: 0.5초 안에 어떤 바코드든 스캔 무시
-        // 이전엔 같은 바코드만 1초 막았는데, 다른 바코드라도 너무 빨리 찍히면
-        // 사용자가 따라가지 못해서 0.5초 일괄 쿨다운으로 변경
         if ((now - lastScanAt) < SCAN_COOLDOWN_MS) return;
         lastScanText = code;
         lastScanAt = now;
 
-        console.log("📷 스캔:", code, "(모드:", scanCameraMode, ")");
+        console.log("📷 인식:", code, "(모드:", scanCameraMode, ")");
 
-        if (scanCameraMode === 'location') {
-            const locValue = code.toUpperCase();
-            scanState.currentLoc = locValue;
-            updateLocUI(locValue);
-            saveScanDraft();
-            feedbackLocChanged(locValue);
-            setTimeout(() => {
-                closeCameraModal();
-            }, 600);
-            return;
+        // [PDA 확인 모드] 즉시 처리 X → 확인 오버레이 띄움
+        // 사용자가 ✓ 누르면 그때 진짜 처리
+        showScanConfirm(code);
+    }
+
+    // ─── PDA 확인 오버레이 표시 ─────────────────────────
+    function showScanConfirm(code) {
+        // 카메라/디코더 일시 정지
+        scanPaused = true;
+        try {
+            if (typeof Quagga !== 'undefined') {
+                Quagga.pause();
+            }
+        } catch(e) {}
+        // ZXing JS는 자체 정지 어려워서 그냥 pendingScan 플래그로 차단
+        // zxing-wasm 루프는 scanPaused 체크로 자동 일시정지
+
+        // 비디오도 멈춤 (시각적으로 정지된 느낌)
+        if (videoEl) {
+            try { videoEl.pause(); } catch(e) {}
         }
 
-        if (isLocationBarcode(code)) {
+        // 어떤 종류인지 판별
+        let kind = 'product';
+        let label = '바코드';
+        let banner = '✓ 스캔 완료';
+        if (scanCameraMode === 'location') {
+            kind = 'loc';
+            label = '로케이션';
+            banner = '📍 로케 인식';
+        } else if (isLocationBarcode(code)) {
+            kind = 'loc';
+            label = '로케이션 (자동 인식)';
+            banner = '📍 로케 변경';
+        }
+
+        // 너무 짧은 결과는 의심 - 경고 표시지만 추가는 가능
+        if (code.length < 5 && kind === 'product') {
+            kind = 'error';
+            banner = '⚠️ 너무 짧음 (오인식 의심)';
+        }
+
+        // pendingScan에 저장 + 오버레이 표시
+        pendingScan = { code, kind };
+
+        const confirm = document.getElementById('scan-confirm');
+        const bannerEl = document.getElementById('scan-confirm-banner');
+        const labelEl = document.getElementById('scan-confirm-label');
+        const valueEl = document.getElementById('scan-confirm-value');
+
+        confirm.className = 'scan-confirm open kind-' + kind;
+        bannerEl.innerText = banner;
+        labelEl.innerText = label;
+        valueEl.innerText = code;
+
+        // 피드백 (소리/진동)
+        beep(1200, 80);
+        vibrate(50);
+    }
+
+    // ─── ✓ 추가하고 계속 ─────────────────────────
+    function acceptPendingScan() {
+        if (!pendingScan) return;
+        const { code, kind } = pendingScan;
+
+        if (kind === 'loc' || scanCameraMode === 'location') {
+            // 로케 처리
             const locValue = code.toUpperCase();
             scanState.currentLoc = locValue;
             updateLocUI(locValue);
             saveScanDraft();
-            feedbackLocChanged(locValue);
+            // 로케 모드면 모달 닫기
+            if (scanCameraMode === 'location') {
+                hideScanConfirm();
+                closeCameraModal();
+                return;
+            }
+            // 상품 모드 중 로케 인식 - info 갱신
             const info = document.getElementById('camera-modal-info');
             if (info) info.innerText = `📍 ${locValue} · 연속 스캔`;
         } else {
-            handleProductScan(code);
+            // 상품 처리
+            if (!scanState.currentLoc) {
+                feedbackError("로케이션이 없어요");
+                hideScanConfirm();
+                return;
+            }
+            const item = {
+                barcode: code,
+                qty: 1,
+                location: scanState.currentLoc,
+                ts: Date.now()
+            };
+            scanState.items.push(item);
+            renderScanList();
+            saveScanDraft();
+            const status = document.getElementById('camera-modal-status');
+            if (status) status.innerText = `${scanState.items.length}건`;
         }
+
+        // 확인 닫고 카메라 재개
+        hideScanConfirm();
+    }
+
+    // ─── ✗ 다시 (잘못 찍음) ─────────────────────────
+    function cancelPendingScan() {
+        if (!pendingScan) return;
+        // 그냥 닫기만, 데이터 추가 X
+        beep(600, 80);
+        vibrate(30);
+        hideScanConfirm();
+    }
+
+    // 오버레이 숨기고 디코더 재개
+    function hideScanConfirm() {
+        const confirm = document.getElementById('scan-confirm');
+        if (confirm) confirm.classList.remove('open');
+        pendingScan = null;
+        // 비디오 재개
+        if (videoEl) {
+            try { videoEl.play(); } catch(e) {}
+        }
+        // Quagga 재개
+        try {
+            if (typeof Quagga !== 'undefined') {
+                Quagga.start();
+            }
+        } catch(e) {}
+        // 1초 후 디코더 재가동 (사용자가 카메라 다시 위치 잡을 시간)
+        setTimeout(() => {
+            scanPaused = false;
+            lastScanText = '';
+            lastScanAt = Date.now();  // 쿨다운 새로 시작
+        }, 800);
     }
 
     function handleProductScan(barcode) {
