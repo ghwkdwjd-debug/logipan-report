@@ -12,7 +12,7 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
-    <!-- [추가] 바코드 디코더 두 개 - ZXing(QR/2D 강함) + Quagga2(1D 바코드 강함) -->
+    <!-- [추가] 바코드 디코더 - Quagga(1D 메인) + ZXing(QR/2D 백업) -->
     <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
     <style>
@@ -1704,23 +1704,36 @@
         try {
             const ctx = getAudioCtx();
             if (!ctx) return;
+            // iOS는 컨텍스트가 자주 잠들어서 매번 resume 시도
+            if (ctx.state === 'suspended') {
+                ctx.resume().catch(()=>{});
+            }
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.frequency.value = freq;
             osc.type = 'sine';
-            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            gain.gain.setValueAtTime(0.3, ctx.currentTime);  // 볼륨 키움 (0.15 → 0.3)
             gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs/1000);
             osc.connect(gain);
             gain.connect(ctx.destination);
             osc.start();
             osc.stop(ctx.currentTime + durationMs/1000);
-        } catch(e) {}
+        } catch(e) {
+            console.warn("beep 실패:", e);
+        }
     }
     function vibrate(pattern) {
         if (!vibrateEnabled) return;
         try {
-            if ('vibrate' in navigator) navigator.vibrate(pattern);
-        } catch(e) {}
+            if ('vibrate' in navigator) {
+                const ok = navigator.vibrate(pattern);
+                if (!ok) console.warn("vibrate 호출 실패 (브라우저가 거부)");
+            } else {
+                console.warn("vibrate API 미지원");
+            }
+        } catch(e) {
+            console.warn("vibrate 예외:", e);
+        }
     }
     function speak(text) {
         // 음성은 항상 (소리 ON일 때만) - 특이 상황만 호출됨
@@ -1773,7 +1786,6 @@
         setTimeout(() => beep(1400, 200), 110);
         speak("전송 완료");
     }
-
     // ─── 모드 전환 ─────────────────────────
     function selectScanMode(mode) {
         if (mode !== 'inbound') {
@@ -1958,8 +1970,7 @@
             const realW = settings.width || 'unknown';
             const realH = settings.height || 'unknown';
 
-            // ─── 메인 디코더: Quagga2 (1D 바코드 강력) ─────────────
-            // ZXing은 백업으로 동시 가동
+            // ─── 메인 디코더: Quagga2 (1D 바코드 강력) + ZXing 백업 ─────────────
             startQuaggaDetector(videoEl, realW, realH, zoomApplied);
             startZxingBackupDetector(videoEl);
 
@@ -2219,14 +2230,22 @@
     }
 
     // ─── 바코드 인식 콜백 ─────────────────────────
+    // SCAN_COOLDOWN_MS: 모든 바코드 인식 후 이 시간 동안 다음 스캔 무시 (다다다닥 방지)
+    const SCAN_COOLDOWN_MS = 500;
+
     function onBarcodeScanned(decodedText, decodedResult) {
         const code = (decodedText || '').trim();
         if (!code) return;
 
         const now = Date.now();
-        if (code === lastScanText && (now - lastScanAt) < 1000) return;
+        // [패치] 글로벌 쿨다운: 0.5초 안에 어떤 바코드든 스캔 무시
+        // 이전엔 같은 바코드만 1초 막았는데, 다른 바코드라도 너무 빨리 찍히면
+        // 사용자가 따라가지 못해서 0.5초 일괄 쿨다운으로 변경
+        if ((now - lastScanAt) < SCAN_COOLDOWN_MS) return;
         lastScanText = code;
         lastScanAt = now;
+
+        console.log("📷 스캔:", code, "(모드:", scanCameraMode, ")");
 
         if (scanCameraMode === 'location') {
             const locValue = code.toUpperCase();
