@@ -39,6 +39,7 @@ MODULE_FILES = [
     "LogiPan.py",
     "slack_integration.py",
     "jira_integration.py",
+    "firebase_utils.py",
 ]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
