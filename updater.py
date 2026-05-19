@@ -38,6 +38,7 @@ REQUIREMENTS_URL = f"{BASE_URL}/requirements.txt"
 MODULE_FILES = [
     "LogiPan.py",
     "slack_integration.py",
+    "jira_integration.py",
 ]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
