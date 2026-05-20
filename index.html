@@ -2420,15 +2420,23 @@
         try {
             console.log("⏳ OCR 워커 초기화 중...");
             ocrWorker = await Tesseract.createWorker('eng', 1, {
-                // logger: m => console.log('[OCR]', m)  // 진행 로그 (필요 시)
+                // [추가] logger 활성화 - 진단용 (콘솔에 진행 상황 다 떠)
+                logger: m => {
+                    if (m.status === 'recognizing text') {
+                        console.log(`[OCR] ${m.status} (${Math.round(m.progress * 100)}%)`);
+                    } else if (m.status !== 'recognizing text') {
+                        console.log(`[OCR] ${m.status}`);
+                    }
+                }
             });
             // 영문 대문자 + 숫자 + 하이픈만 인식 (정확도 ↑)
             await ocrWorker.setParameters({
                 tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
-                // PSM 7 = 한 줄로 인식 (텍스트가 한 줄이라)
-                tessedit_pageseg_mode: '7',
+                // [패치] PSM 6 = 균일한 텍스트 블록 (가장 안전한 선택)
+                // 11 (희박 텍스트)이 효과 없었으니 6 시도
+                tessedit_pageseg_mode: '6',
             });
-            console.log("✅ OCR 워커 준비 완료");
+            console.log("✅ OCR 워커 준비 완료 (PSM 6, eng, whitelist 적용)");
             return ocrWorker;
         } catch (e) {
             console.error("OCR 워커 초기화 실패:", e);
@@ -2439,15 +2447,20 @@
     // 무신사 바코드 텍스트 패턴 검증
     function matchBarcodeTextPattern(text) {
         if (!text) return null;
-        const cleaned = text.replace(/\s+/g, '').toUpperCase();
+        // 모든 공백/특수문자 제거 (OCR이 가끔 공백 끼움)
+        const cleaned = text.replace(/[\s.,;:'"`]/g, '').toUpperCase();
 
-        // 패턴 1: TWJU261PAJW032SV000 - 영문+숫자 혼합, 15~20자
-        // 영문 3~5자 시작 + 숫자 + 영문 + 숫자 ... (CODE128 무신사)
-        if (/^[A-Z0-9]{15,22}$/.test(cleaned) && /[A-Z]/.test(cleaned) && /\d/.test(cleaned)) {
+        // 패턴 1: 영문+숫자 혼합, 12~22자 (15→12로 완화)
+        // TWJU261PAJW032SV000 같은 거. 끝이 0XL/00S/999 등 다양
+        if (/^[A-Z0-9]{12,22}$/.test(cleaned) && /[A-Z]/.test(cleaned) && /\d/.test(cleaned)) {
             return cleaned;
         }
-        // 패턴 2: 1-0127020002 - 숫자-숫자 형식
-        if (/^\d+-\d{8,12}$/.test(cleaned)) {
+        // 패턴 2: 숫자-숫자 형식 (예: 1-0127020002)
+        if (/^\d+-\d{6,12}$/.test(cleaned)) {
+            return cleaned;
+        }
+        // 패턴 3: 짧은 숫자 (10자 이상 순수 숫자) - EAN-13 등 가능
+        if (/^\d{10,14}$/.test(cleaned)) {
             return cleaned;
         }
         return null;
@@ -2479,17 +2492,28 @@
                         const vw = videoElement.videoWidth;
                         const vh = videoElement.videoHeight;
                         if (vw > 0 && vh > 0) {
-                            // 텍스트가 보통 바코드 아래 또는 위에 있음
-                            // ROI는 라이브 영상 중앙 영역 (텍스트 박힌 곳 추정)
-                            const cropW = Math.floor(vw * 0.9);
-                            const cropH = Math.floor(vh * 0.5);
+                            // [패치] ROI 더 좁게: 화면 가운데 가로 띠 영역만
+                            // 90% 가로 × 30% 세로 - 텍스트 영역 좁히면 OCR 정확도 ↑
+                            const cropW = Math.floor(vw * 0.95);
+                            const cropH = Math.floor(vh * 0.45);
                             const cropX = Math.floor((vw - cropW) / 2);
                             const cropY = Math.floor((vh - cropH) / 2);
-                            ocrCanvas.width = cropW;
-                            ocrCanvas.height = cropH;
+
+                            // [패치] OCR용 캔버스를 2배 확대 - 글자 디테일 ↑
+                            // Tesseract는 글자가 클수록 잘 인식함
+                            const scale = 2;
+                            ocrCanvas.width = cropW * scale;
+                            ocrCanvas.height = cropH * scale;
                             ocrCtx.drawImage(videoElement,
                                 cropX, cropY, cropW, cropH,
-                                0, 0, cropW, cropH);
+                                0, 0, cropW * scale, cropH * scale);
+
+                            // [패치] 전처리 적용 - 명암 강조 (빛 번짐 + 흐릿 대응)
+                            try {
+                                let imgData = ocrCtx.getImageData(0, 0, ocrCanvas.width, ocrCanvas.height);
+                                imgData = preprocessImageData(imgData);
+                                ocrCtx.putImageData(imgData, 0, 0);
+                            } catch(e) {}
 
                             // 텍스트 인식 시작 - 워커 초기화 lazy
                             ocrBusy = true;
@@ -2508,6 +2532,15 @@
                                 }
 
                                 const { data } = await worker.recognize(ocrCanvas);
+
+                                // [추가] 진단용 - confidence + 원본 텍스트 + words 다 콘솔에
+                                console.log("[OCR 결과]", {
+                                    text: data?.text || '(빈)',
+                                    confidence: data?.confidence,
+                                    words: data?.words?.length || 0,
+                                    lines: data?.lines?.length || 0
+                                });
+
                                 if (data && data.text) {
                                     // 한 줄씩 검사 - 패턴 맞으면 채택
                                     const lines = data.text.split('\n')
@@ -2537,11 +2570,20 @@
                                         if (debugText) debugText.innerText = `읽음: "${truncated}" (패턴 X)`;
                                         if (debugEl) debugEl.className = 'ocr-debug no-match';
                                     } else {
-                                        if (debugText) debugText.innerText = '읽힌 글자 없음';
-                                        if (debugEl) debugEl.className = 'ocr-debug';
+                                        // [패치] words 개수도 표시 - OCR이 글자 단편이라도 봤는지 확인
+                                        const wordsCount = data?.words?.length || 0;
+                                        const conf = Math.round(data?.confidence || 0);
+                                        if (wordsCount > 0) {
+                                            // 글자 단편은 봤는데 다 필터링됨
+                                            if (debugText) debugText.innerText = `짧은 글자 ${wordsCount}개 (conf ${conf}, 길이 부족)`;
+                                            if (debugEl) debugEl.className = 'ocr-debug no-match';
+                                        } else {
+                                            if (debugText) debugText.innerText = `읽힌 글자 없음 (conf ${conf})`;
+                                            if (debugEl) debugEl.className = 'ocr-debug';
+                                        }
                                     }
                                 } else {
-                                    if (debugText) debugText.innerText = '읽힌 글자 없음';
+                                    if (debugText) debugText.innerText = '결과 빈 응답';
                                 }
                             } catch (e) {
                                 if (debugText) debugText.innerText = '오류: ' + (e.message || e).slice(0, 30);
