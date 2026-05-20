@@ -2459,17 +2459,12 @@
                 numOfWorkers: 4,  // 멀티스레드
                 frequency: 10,    // 1초에 10번 시도
                 decoder: {
+                    // [패치] 영문+숫자 혼합 19자리(TWJU...)에 대응
+                    // EAN/UPC 같은 숫자 전용 reader 제거 - 오인식 큰 폭 감소
+                    // 너의 바코드 형식: CODE128 (영문+숫자) 또는 짧은 숫자 (1-0127020002 = CODE39 가능)
                     readers: [
                         "code_128_reader",
-                        "ean_reader",
-                        "ean_8_reader",
                         "code_39_reader",
-                        "code_39_vin_reader",
-                        "codabar_reader",
-                        "upc_reader",
-                        "upc_e_reader",
-                        "i2of5_reader",
-                        "2of5_reader",
                         "code_93_reader"
                     ]
                 },
@@ -2561,6 +2556,12 @@
     function stopCamera() {
         scannerRunning = false;
         scanPaused = false;
+        // [추가] consensus 상태 초기화
+        if (consensusTimer) {
+            clearTimeout(consensusTimer);
+            consensusTimer = null;
+        }
+        consensusVotes = {};
         // ZBar 루프 정지
         if (zbarLoopId) {
             clearTimeout(zbarLoopId);
@@ -2725,6 +2726,14 @@
     // ─── 바코드 인식 콜백 ─────────────────────────
     // SCAN_COOLDOWN_MS: 인식 후 이 시간 동안 다음 인식 무시 (디바운스)
     const SCAN_COOLDOWN_MS = 500;
+    // [추가] Consensus 모드 - 0.3초 모아서 가장 자주 나온 값 채택
+    // 디코더 4개가 동시에 도는데 한 번 받자마자 채택하면 가짜 결과(Quagga 오인식 등)도
+    // 즉시 통과돼버림. 0.3초 모아서 voting 하면 진짜 값만 살아남음.
+    const CONSENSUS_WINDOW_MS = 300;
+    const CONSENSUS_MIN_VOTES = 2;  // 최소 2번 같은 값 나와야 채택
+    let consensusVotes = {};  // {코드: 카운트}
+    let consensusTimer = null;
+    let consensusStartedAt = 0;
 
     function onBarcodeScanned(decodedText, decodedResult) {
         const code = (decodedText || '').trim();
@@ -2735,13 +2744,63 @@
 
         const now = Date.now();
         if ((now - lastScanAt) < SCAN_COOLDOWN_MS) return;
-        lastScanText = code;
-        lastScanAt = now;
 
-        console.log("📷 인식:", code, "(모드:", scanCameraMode, ")");
+        console.log("📷 후보:", code);
+
+        // [Consensus] voting에 추가
+        consensusVotes[code] = (consensusVotes[code] || 0) + 1;
+
+        // 첫 후보가 들어오면 타이머 시작
+        if (!consensusTimer) {
+            consensusStartedAt = now;
+            consensusTimer = setTimeout(finalizeConsensus, CONSENSUS_WINDOW_MS);
+        }
+
+        // 같은 값이 MIN_VOTES 도달하면 즉시 채택 (빠른 인식)
+        // - 디코더 2개가 같은 값 던지면 진짜일 확률 매우 높음
+        if (consensusVotes[code] >= CONSENSUS_MIN_VOTES) {
+            console.log(`✅ 즉시 채택 (${consensusVotes[code]}표): ${code}`);
+            clearTimeout(consensusTimer);
+            consensusTimer = null;
+            finalizeWithCode(code);
+        }
+    }
+
+    // Consensus 윈도우 종료 시 호출 - 가장 많이 나온 값 채택
+    function finalizeConsensus() {
+        consensusTimer = null;
+
+        // 가장 표 많은 거 선택
+        let bestCode = null;
+        let bestVotes = 0;
+        for (const [code, votes] of Object.entries(consensusVotes)) {
+            if (votes > bestVotes) {
+                bestVotes = votes;
+                bestCode = code;
+            }
+        }
+
+        if (!bestCode) {
+            consensusVotes = {};
+            return;
+        }
+
+        // 단독 1표면 신뢰도 낮음 - 채택은 하되 로그 남김
+        if (bestVotes < CONSENSUS_MIN_VOTES) {
+            console.warn(`⚠️ 단독 1표 채택: ${bestCode} (다른 후보: ${Object.keys(consensusVotes).filter(c => c !== bestCode).join(',') || '없음'})`);
+        } else {
+            console.log(`✅ Consensus 채택 (${bestVotes}표): ${bestCode}`);
+        }
+        finalizeWithCode(bestCode);
+    }
+
+    function finalizeWithCode(code) {
+        // voting 초기화
+        consensusVotes = {};
+        lastScanText = code;
+        lastScanAt = Date.now();
 
         // [PDA 확인 모드] 즉시 처리 X → 확인 오버레이 띄움
-        // 사용자가 ✓ 누르면 그때 진짜 처리
         showScanConfirm(code);
     }
 
@@ -2858,6 +2917,12 @@
         const confirm = document.getElementById('scan-confirm');
         if (confirm) confirm.classList.remove('open');
         pendingScan = null;
+        // [추가] consensus 정리 - 다음 스캔은 fresh 하게
+        if (consensusTimer) {
+            clearTimeout(consensusTimer);
+            consensusTimer = null;
+        }
+        consensusVotes = {};
         // 비디오 재개
         if (videoEl) {
             try { videoEl.play(); } catch(e) {}
