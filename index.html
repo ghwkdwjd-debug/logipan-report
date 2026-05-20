@@ -13,8 +13,21 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
     <!-- [추가] 바코드 디코더
-         메인: zxing-wasm (ZXing C++ 원본 WASM, 진짜 강함)
-         백업: ZXing JS, Quagga -->
+         메인: ZBar WASM (C 네이티브, 1D 바코드 강력) + zxing-wasm (C++ WASM)
+         백업: ZXing JS, Quagga
+         + 이미지 전처리로 빛 번짐 대응 -->
+    <script type="module">
+        // ZBar WASM은 ES module - 글로벌로 노출
+        try {
+            const zbar = await import("https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.10.1/+esm");
+            window.zbarScanImageData = zbar.scanImageData;
+            window.zbarReady = true;
+            console.log("✅ ZBar WASM 준비 완료");
+        } catch (e) {
+            console.error("ZBar WASM 로드 실패:", e);
+            window.zbarReady = false;
+        }
+    </script>
     <script type="module">
         // zxing-wasm은 ES module - 글로벌로 노출
         import { readBarcodes, prepareZXingModule } from "https://cdn.jsdelivr.net/npm/zxing-wasm@2.1.5/+esm";
@@ -2184,8 +2197,9 @@
             const realH = settings.height || 'unknown';
 
             // ─── 디코더 동시 가동 ─────────────
-            // 메인: zxing-wasm (C++ 네이티브) - 가장 정확
+            // 메인: ZBar WASM (1D 최강) + zxing-wasm (C++) - 둘 다 전처리 적용
             // 백업: Quagga (1D 보조), ZXing JS (QR/2D 보조)
+            startZbarDetector(videoEl, realW, realH, zoomApplied);
             startZxingWasmDetector(videoEl, realW, realH, zoomApplied);
             startQuaggaDetector(videoEl, realW, realH, zoomApplied);
             startZxingBackupDetector(videoEl);
@@ -2202,7 +2216,133 @@
         }
     }
 
-    // ─── zxing-wasm 디코더 (C++ 네이티브, 가장 강력) ─────────────────────────
+    // ─── 이미지 전처리 (빛 번짐 + 흐림 대응) ─────────────────────────
+    // 캔버스의 ImageData를 그레이스케일 + 명암 강조 + 샤프닝으로 처리
+    // 빛 번짐(글레어)이 있는 라벨도 디코더가 잘 잡게 보정
+    function preprocessImageData(imageData) {
+        const data = imageData.data;
+        const w = imageData.width;
+        const h = imageData.height;
+        const len = data.length;
+
+        // 1단계: 그레이스케일 + 명암 강조 (contrast +50%)
+        // 빛 번짐 부분(흰색)은 더 흰색으로, 어두운 부분은 더 어둡게
+        const contrast = 1.5;
+        const intercept = 128 * (1 - contrast);
+        for (let i = 0; i < len; i += 4) {
+            // 그레이스케일 (luminance 공식)
+            const gray = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+            // 명암 강조
+            let v = gray * contrast + intercept;
+            v = Math.max(0, Math.min(255, v));
+            data[i] = data[i+1] = data[i+2] = v;
+        }
+        return imageData;
+    }
+
+    // 더 강한 전처리 - 적응형 이진화 (threshold) 적용
+    // 빛 번짐 심한 경우용
+    function preprocessImageDataStrong(imageData) {
+        const data = imageData.data;
+        const w = imageData.width;
+        const h = imageData.height;
+        const len = data.length;
+
+        // 1단계: 그레이스케일로 변환
+        const gray = new Uint8Array(w * h);
+        for (let i = 0, j = 0; i < len; i += 4, j++) {
+            gray[j] = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
+        }
+
+        // 2단계: 평균값 계산 (전체 또는 영역별)
+        let sum = 0;
+        for (let i = 0; i < gray.length; i++) sum += gray[i];
+        const avg = sum / gray.length;
+        // threshold = 평균값 (이보다 어두우면 0, 밝으면 255)
+        const threshold = avg;
+
+        // 3단계: 이진화 + RGBA로 복원
+        for (let j = 0, i = 0; j < gray.length; j++, i += 4) {
+            const v = gray[j] > threshold ? 255 : 0;
+            data[i] = data[i+1] = data[i+2] = v;
+        }
+        return imageData;
+    }
+
+    // ─── ZBar WASM 디코더 (C 네이티브, 1D 바코드 최강) ─────────────────────────
+    let zbarCanvas = null;
+    let zbarCtx = null;
+    let zbarLoopId = null;
+
+    async function startZbarDetector(videoElement, w, h, zoomInfo) {
+        const engineInfo = document.getElementById('camera-engine-info');
+        try {
+            if (!window.zbarReady || !window.zbarScanImageData) {
+                console.warn("ZBar WASM 미준비 - 다른 디코더 사용");
+                return;
+            }
+
+            zbarCanvas = document.createElement('canvas');
+            zbarCtx = zbarCanvas.getContext('2d', { willReadFrequently: true });
+
+            // 프레임 카운터로 매 프레임마다 다른 전처리 시도
+            let frameCount = 0;
+
+            const tick = async () => {
+                if (!scannerRunning || !videoElement || scanPaused) {
+                    zbarLoopId = setTimeout(tick, 100);
+                    return;
+                }
+                try {
+                    if (videoElement.readyState >= 2) {
+                        const vw = videoElement.videoWidth;
+                        const vh = videoElement.videoHeight;
+                        if (vw > 0 && vh > 0) {
+                            // ROI 크게 (95% x 70%)
+                            const cropW = Math.floor(vw * 0.95);
+                            const cropH = Math.floor(vh * 0.7);
+                            const cropX = Math.floor((vw - cropW) / 2);
+                            const cropY = Math.floor((vh - cropH) / 2);
+                            zbarCanvas.width = cropW;
+                            zbarCanvas.height = cropH;
+                            zbarCtx.drawImage(videoElement,
+                                cropX, cropY, cropW, cropH,
+                                0, 0, cropW, cropH);
+
+                            // 프레임마다 다른 전처리 시도 (3가지 로테이션)
+                            let imageData = zbarCtx.getImageData(0, 0, cropW, cropH);
+                            const variant = frameCount % 3;
+                            if (variant === 1) {
+                                imageData = preprocessImageData(imageData);
+                            } else if (variant === 2) {
+                                imageData = preprocessImageDataStrong(imageData);
+                            }
+                            // variant === 0이면 원본 그대로
+                            frameCount++;
+
+                            // ZBar 디코딩
+                            const results = await window.zbarScanImageData(imageData);
+                            if (results && results.length > 0) {
+                                const code = results[0].decode();
+                                if (code) {
+                                    onBarcodeScanned(code);
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // 디코딩 실패는 무시
+                }
+                zbarLoopId = setTimeout(tick, 80);
+            };
+            tick();
+            console.log("✅ ZBar 디코더 가동");
+        } catch (e) {
+            console.error("ZBar 시작 실패:", e);
+        }
+    }
+
+    // ─── zxing-wasm 디코더 (C++ 네이티브) ─────────────────────────
     let zxingWasmCanvas = null;
     let zxingWasmCtx = null;
     let zxingWasmLoopId = null;
@@ -2212,12 +2352,17 @@
         try {
             if (!window.zxingWasmReady || !window.zxingReadBarcodes) {
                 console.warn("zxing-wasm 미준비 - 백업 디코더만 사용");
-                engineInfo.innerText = `엔진: Quagga+ZXing (${w}x${h}${zoomInfo})`;
+                // 엔진 표시 - ZBar 상태도 같이
+                const zbarOk = window.zbarReady ? "ZBar+" : "";
+                engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing (${w}x${h}${zoomInfo})`;
                 return;
             }
 
             zxingWasmCanvas = document.createElement('canvas');
             zxingWasmCtx = zxingWasmCanvas.getContext('2d', { willReadFrequently: true });
+
+            // 프레임마다 다른 전처리 시도
+            let frameCount = 0;
 
             const tick = async () => {
                 if (!scannerRunning || !videoElement || scanPaused) {
@@ -2229,7 +2374,7 @@
                         const vw = videoElement.videoWidth;
                         const vh = videoElement.videoHeight;
                         if (vw > 0 && vh > 0) {
-                            // [패치] ROI 확장: 60% → 95% (19자리 긴 바코드 다 들어가게)
+                            // [패치] ROI 확장: 95% x 70% (19자리 긴 바코드 다 들어가게)
                             const cropW = Math.floor(vw * 0.95);
                             const cropH = Math.floor(vh * 0.7);
                             const cropX = Math.floor((vw - cropW) / 2);
@@ -2239,7 +2384,16 @@
                             zxingWasmCtx.drawImage(videoElement,
                                 cropX, cropY, cropW, cropH,
                                 0, 0, cropW, cropH);
-                            const imageData = zxingWasmCtx.getImageData(0, 0, cropW, cropH);
+
+                            // 프레임마다 다른 전처리 시도 (ZBar와 다른 페이즈로)
+                            let imageData = zxingWasmCtx.getImageData(0, 0, cropW, cropH);
+                            const variant = (frameCount + 1) % 3;  // ZBar와 1프레임 offset
+                            if (variant === 1) {
+                                imageData = preprocessImageData(imageData);
+                            } else if (variant === 2) {
+                                imageData = preprocessImageDataStrong(imageData);
+                            }
+                            frameCount++;
 
                             const results = await window.zxingReadBarcodes(imageData, {
                                 tryHarder: true,
@@ -2264,10 +2418,13 @@
             };
             tick();
             usingEngine = 'zxing-wasm';
-            engineInfo.innerText = `엔진: ZXing-WASM+Quagga (${w}x${h}${zoomInfo})`;
+            // ZBar 상태도 포함해서 표시
+            const zbarOk = window.zbarReady ? "ZBar+" : "";
+            engineInfo.innerText = `엔진: ${zbarOk}ZXing-WASM+Quagga (${w}x${h}${zoomInfo})`;
         } catch (e) {
             console.error("zxing-wasm 시작 실패:", e);
-            engineInfo.innerText = `엔진: Quagga+ZXing (${w}x${h}${zoomInfo})`;
+            const zbarOk = window.zbarReady ? "ZBar+" : "";
+            engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing (${w}x${h}${zoomInfo})`;
         }
     }
 
@@ -2404,6 +2561,13 @@
     function stopCamera() {
         scannerRunning = false;
         scanPaused = false;
+        // ZBar 루프 정지
+        if (zbarLoopId) {
+            clearTimeout(zbarLoopId);
+            zbarLoopId = null;
+        }
+        zbarCanvas = null;
+        zbarCtx = null;
         // zxing-wasm 루프 정지
         if (zxingWasmLoopId) {
             clearTimeout(zxingWasmLoopId);
