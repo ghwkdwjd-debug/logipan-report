@@ -265,7 +265,8 @@
             position: relative;
             background: #000; margin: 0 14px;
             border-radius: 10px; overflow: hidden;
-            min-height: 280px;
+            min-height: 180px;
+            max-height: 220px;
             display: flex; align-items: center; justify-content: center;
             cursor: pointer;
         }
@@ -279,20 +280,40 @@
         .camera-guide-box {
             position: absolute;
             top: 50%; left: 50%;
-            width: 80%; height: 30%;
+            width: 90%; height: 50%;
             transform: translate(-50%, -50%);
-            border: 3px solid rgba(255,255,255,0.7);
-            border-radius: 8px;
+            border: 2px solid rgba(255,255,255,0.5);
+            border-radius: 4px;
             pointer-events: none;
-            box-shadow: 0 0 0 9999px rgba(0,0,0,0.2);
+            box-shadow: 0 0 0 9999px rgba(0,0,0,0.25);
+        }
+        /* [추가] 빨간 인식선 - PDA 레이저처럼 */
+        .scan-laser-line {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 86%; height: 2px;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(to right,
+                transparent,
+                rgba(255, 50, 50, 0.9) 10%,
+                rgba(255, 50, 50, 0.95) 50%,
+                rgba(255, 50, 50, 0.9) 90%,
+                transparent);
+            pointer-events: none;
+            box-shadow: 0 0 8px rgba(255, 50, 50, 0.6);
+            animation: laserPulse 2s ease-in-out infinite;
+        }
+        @keyframes laserPulse {
+            0%, 100% { opacity: 0.85; }
+            50% { opacity: 1; }
         }
         .focus-hint {
-            position: absolute; bottom: 10px; left: 50%;
+            position: absolute; bottom: 6px; left: 50%;
             transform: translateX(-50%);
             background: rgba(0,0,0,0.6); color: white;
-            padding: 4px 12px; border-radius: 12px;
-            font-size: 11px; pointer-events: none;
-            opacity: 0.8;
+            padding: 3px 10px; border-radius: 10px;
+            font-size: 10px; pointer-events: none;
+            opacity: 0.7;
         }
         .focus-ring {
             position: absolute;
@@ -423,6 +444,34 @@
             font-size: 11px; color: #999;
             padding: 4px;
         }
+        /* [추가] OCR 실시간 디버그 - OCR이 뭘 읽고 있는지 보여줌 */
+        .ocr-debug {
+            margin: 0 16px 6px;
+            padding: 6px 10px;
+            background: #f5f6f8;
+            border-radius: 6px;
+            font-size: 11px;
+            color: #666;
+            font-family: monospace;
+            min-height: 18px;
+            display: flex; align-items: center; gap: 6px;
+            transition: all 0.2s;
+        }
+        .ocr-debug.matched {
+            background: #e8f5e9;
+            color: #2e7d32;
+            border-left: 3px solid #16A34A;
+        }
+        .ocr-debug.no-match {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .ocr-debug .ocr-label {
+            font-weight: bold;
+            color: #555;
+        }
+        .ocr-debug.matched .ocr-label { color: #2e7d32; }
+        .ocr-debug.no-match .ocr-label { color: #e65100; }
 
         .focus-btn {
             background: #fff3e0; color: #e65100;
@@ -709,6 +758,8 @@
         <div class="camera-modal-viewport" id="camera-viewport">
             <div id="scan-reader"></div>
             <div class="camera-guide-box"></div>
+            <!-- [추가] 빨간 인식선 - 바코드 정조준 가이드 -->
+            <div class="scan-laser-line"></div>
             <div class="focus-hint">탭하면 초점</div>
             <!-- [추가] PDA 확인 오버레이 - 스캔 후 사용자가 ✓ 누르기 전까지 멈춤 -->
             <div class="scan-confirm" id="scan-confirm">
@@ -724,6 +775,11 @@
             </div>
         </div>
         <div class="camera-engine-info" id="camera-engine-info">엔진: 확인 중...</div>
+        <!-- [추가] OCR 디버그 영역 - OCR이 뭘 읽고 있는지 실시간 확인 -->
+        <div class="ocr-debug" id="ocr-debug">
+            <span class="ocr-label">📝 OCR</span>
+            <span id="ocr-debug-text">대기 중...</span>
+        </div>
         <div class="camera-modal-footer">
             <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊</span>
             <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳</span>
@@ -2437,9 +2493,15 @@
 
                             // 텍스트 인식 시작 - 워커 초기화 lazy
                             ocrBusy = true;
+                            const debugEl = document.getElementById('ocr-debug');
+                            const debugText = document.getElementById('ocr-debug-text');
                             try {
+                                if (debugText) debugText.innerText = '읽는 중...';
+                                if (debugEl) debugEl.className = 'ocr-debug';
+
                                 const worker = await initOcrWorker();
                                 if (!worker) {
+                                    if (debugText) debugText.innerText = '워커 초기화 실패';
                                     ocrBusy = false;
                                     ocrLoopId = setTimeout(tick, 1000);
                                     return;
@@ -2448,18 +2510,41 @@
                                 const { data } = await worker.recognize(ocrCanvas);
                                 if (data && data.text) {
                                     // 한 줄씩 검사 - 패턴 맞으면 채택
-                                    const lines = data.text.split('\n');
+                                    const lines = data.text.split('\n')
+                                        .map(l => l.trim())
+                                        .filter(l => l.length >= 3);
+
+                                    let matched = null;
+                                    let bestRaw = '';
                                     for (const line of lines) {
-                                        const matched = matchBarcodeTextPattern(line);
-                                        if (matched) {
-                                            console.log("📝 OCR 매칭:", matched, "(원본:", line.trim(), ")");
-                                            onBarcodeScanned(matched, 'ocr');
+                                        const m = matchBarcodeTextPattern(line);
+                                        if (m) {
+                                            matched = m;
+                                            bestRaw = line;
                                             break;
                                         }
+                                        if (line.length > bestRaw.length) bestRaw = line;
                                     }
+
+                                    if (matched) {
+                                        console.log("📝 OCR 매칭:", matched, "(원본:", bestRaw, ")");
+                                        if (debugText) debugText.innerText = `✓ ${matched}`;
+                                        if (debugEl) debugEl.className = 'ocr-debug matched';
+                                        onBarcodeScanned(matched, 'ocr');
+                                    } else if (bestRaw) {
+                                        // 패턴 매칭 실패 - 읽은 텍스트는 보여줌
+                                        const truncated = bestRaw.length > 30 ? bestRaw.slice(0, 30) + '...' : bestRaw;
+                                        if (debugText) debugText.innerText = `읽음: "${truncated}" (패턴 X)`;
+                                        if (debugEl) debugEl.className = 'ocr-debug no-match';
+                                    } else {
+                                        if (debugText) debugText.innerText = '읽힌 글자 없음';
+                                        if (debugEl) debugEl.className = 'ocr-debug';
+                                    }
+                                } else {
+                                    if (debugText) debugText.innerText = '읽힌 글자 없음';
                                 }
                             } catch (e) {
-                                // OCR 실패는 무시
+                                if (debugText) debugText.innerText = '오류: ' + (e.message || e).slice(0, 30);
                             }
                             ocrBusy = false;
                         }
