@@ -6217,13 +6217,18 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
                     # 본문: 담당자 + 특이사항 + 시트 링크 + Jira 링크
                     body_lines = []
-                    if mention_text:
-                        body_lines.append(f"*👤 담당:* {mention_text}")
-                    elif md_name:
-                        body_lines.append(f"*👤 담당:* {md_name}")
-                    # [추가] 추가 멘션 라인 - 담당자 다음 줄
-                    if extra_mentions_text:
-                        body_lines.append(f"*🔔 추가 멘션:* {extra_mentions_text}")
+                    # [수정] 담당 + 추가 멘션을 한 줄로 합침 (A 스타일)
+                    if mention_text or md_name:
+                        # 자동 매칭 멘션 (있으면)
+                        main_part = mention_text if mention_text else md_name
+                        # 추가 멘션 같이 박음
+                        if extra_mentions_text:
+                            body_lines.append(f"*👤 담당:* {main_part} {extra_mentions_text}")
+                        else:
+                            body_lines.append(f"*👤 담당:* {main_part}")
+                    elif extra_mentions_text:
+                        # 자동 매칭 실패 + 추가 멘션만 있는 경우
+                        body_lines.append(f"*👤 담당:* {extra_mentions_text}")
                     if note_text:
                         body_lines.append(f"*📝 특이사항:* {note_text}")
                     if sheet_url:
