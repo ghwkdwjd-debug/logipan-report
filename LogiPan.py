@@ -941,38 +941,88 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         brand_inner = tk.Frame(brand_card, bg="white", padx=14, pady=10)
         brand_inner.pack(side="left", fill="both", expand=True)
 
-        # 한 줄에 [브랜드명] [담당 MD] 함께
-        tk.Label(brand_inner, text="🔖",
+        # ─── 1줄: 브랜드명 + 특이사항 + 정상입고 버튼 ───
+        row1 = tk.Frame(brand_inner, bg="white")
+        row1.pack(fill="x")
+
+        tk.Label(row1, text="🔖",
                  bg="white", font=("맑은 고딕", 12)).pack(side="left", padx=(0, 6))
-        tk.Label(brand_inner, text="브랜드명",
+        tk.Label(row1, text="브랜드명",
                  bg="white", fg="#374151",
                  font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(0, 8))
-        self.ent_brand_in = tk.Entry(brand_inner, font=("맑은 고딕", 11),
+        self.ent_brand_in = tk.Entry(row1, font=("맑은 고딕", 11),
                                        bd=1, relief="solid",
                                        highlightthickness=0)
         self.ent_brand_in.pack(side="left", fill="x", expand=True, ipady=5)
 
-        # [추가] 담당 MD 입력
-        tk.Label(brand_inner, text="  👤 담당MD",
-                 bg="white", fg="#374151",
-                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(12, 6))
-        self.ent_md_in = tk.Entry(brand_inner, font=("맑은 고딕", 11),
-                                    bd=1, relief="solid",
-                                    highlightthickness=0,
-                                    width=10)
-        self.ent_md_in.pack(side="left", ipady=5)
-
         # [추가] 특이사항 입력 (Slack 알림 전용)
-        tk.Label(brand_inner, text="  📝 특이사항",
+        tk.Label(row1, text="  📝 특이사항",
                  bg="white", fg="#374151",
                  font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(12, 6))
-        self.ent_note_in = tk.Entry(brand_inner, font=("맑은 고딕", 11),
+        self.ent_note_in = tk.Entry(row1, font=("맑은 고딕", 11),
                                       bd=1, relief="solid",
                                       highlightthickness=0,
                                       fg="#9CA3AF")
         self.ent_note_in.pack(side="left", fill="x", expand=True, ipady=5)
 
-        # placeholder 처리
+        # [추가] 불량 모드 토글 버튼 (1줄 우측 끝)
+        self.defect_mode_var = tk.BooleanVar(value=False)
+        self.defect_mode_btn = tk.Button(row1,
+                                            text="🟢 정상 입고",
+                                            command=self._toggle_defect_mode,
+                                            bg="#16A34A", fg="white",
+                                            font=("맑은 고딕", 9, "bold"),
+                                            relief="flat", padx=10, pady=5,
+                                            cursor="hand2")
+        self.defect_mode_btn.pack(side="left", padx=(12, 0))
+
+        # ─── 2줄: 담당MD + 추가 멘션 ───
+        row2 = tk.Frame(brand_inner, bg="white")
+        row2.pack(fill="x", pady=(8, 0))
+
+        # [추가] 담당 MD 입력
+        tk.Label(row2, text="👤 담당MD",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(0, 6))
+        self.ent_md_in = tk.Entry(row2, font=("맑은 고딕", 11),
+                                    bd=1, relief="solid",
+                                    highlightthickness=0,
+                                    width=10)
+        self.ent_md_in.pack(side="left", ipady=5)
+
+        # [추가] 추가 멘션 입력 (자동완성)
+        tk.Label(row2, text="  🔔 추가 멘션",
+                 bg="white", fg="#374151",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(12, 6))
+        self.ent_extra_mention_in = tk.Entry(row2, font=("맑은 고딕", 11),
+                                                bd=1, relief="solid",
+                                                highlightthickness=0,
+                                                fg="#9CA3AF")
+        self.ent_extra_mention_in.pack(side="left", fill="x", expand=True, ipady=5)
+
+        # 추가 멘션 placeholder
+        self._extra_mention_placeholder = "이름 입력 (예: 홍, ㅎ) - 콤마로 여러 명"
+        self.ent_extra_mention_in.insert(0, self._extra_mention_placeholder)
+
+        def _extra_focus_in(event):
+            if self.ent_extra_mention_in.get() == self._extra_mention_placeholder:
+                self.ent_extra_mention_in.delete(0, tk.END)
+                self.ent_extra_mention_in.config(fg="#111827")
+
+        def _extra_focus_out(event):
+            if not self.ent_extra_mention_in.get().strip():
+                self.ent_extra_mention_in.delete(0, tk.END)
+                self.ent_extra_mention_in.insert(0, self._extra_mention_placeholder)
+                self.ent_extra_mention_in.config(fg="#9CA3AF")
+                self._hide_extra_mention_dropdown()
+
+        self.ent_extra_mention_in.bind("<FocusIn>", _extra_focus_in)
+        self.ent_extra_mention_in.bind("<FocusOut>",
+            lambda e: self.root.after(150, _extra_focus_out, e))  # 드롭다운 클릭 시간 확보
+        # 자동완성 - KeyRelease 시 실시간 갱신
+        self.ent_extra_mention_in.bind("<KeyRelease>", self._on_extra_mention_keyrelease)
+
+        # placeholder 처리 (특이사항)
         self._note_placeholder = "Slack 알림용 - 특이사항 간단하게 (선택)"
         self.ent_note_in.insert(0, self._note_placeholder)
 
@@ -989,17 +1039,6 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         self.ent_note_in.bind("<FocusIn>", _note_focus_in)
         self.ent_note_in.bind("<FocusOut>", _note_focus_out)
-
-        # [추가] 불량 모드 토글 버튼 (브랜드명 카드 우측에)
-        self.defect_mode_var = tk.BooleanVar(value=False)
-        self.defect_mode_btn = tk.Button(brand_inner,
-                                            text="🟢 정상 입고",
-                                            command=self._toggle_defect_mode,
-                                            bg="#16A34A", fg="white",
-                                            font=("맑은 고딕", 9, "bold"),
-                                            relief="flat", padx=10, pady=5,
-                                            cursor="hand2")
-        self.defect_mode_btn.pack(side="left", padx=(12, 0))
 
         # ========== [📦 브랜드 수량 + 📡 스캔 수량 - 2분할] ==========
         cols_outer = tk.Frame(container, bg="#F5F6F8")
@@ -6139,6 +6178,23 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     except Exception as e:
                         print(f"⚠️ 멘션 처리 오류: {e}")
 
+                    # [추가] 추가 멘션 처리 - 입고 탭의 "🔔 추가 멘션" 입력 칸에서 가져옴
+                    extra_mentions_text = ''
+                    extra_mention_names = []
+                    try:
+                        extra_mention_names = self._get_extra_mention_names()
+                        if extra_mention_names:
+                            mapping = self.load_md_mapping()
+                            ids = []
+                            for nm in extra_mention_names:
+                                sid = mapping.get(nm)
+                                if sid:
+                                    ids.append(f"<@{sid}>")
+                            if ids:
+                                extra_mentions_text = ' '.join(ids)
+                    except Exception as e:
+                        print(f"⚠️ 추가 멘션 처리 오류: {e}")
+
                     # Slack 메시지 - 간단한 카드 스타일
                     slack_blocks = [
                         {
@@ -6157,6 +6213,9 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         body_lines.append(f"*👤 담당:* {mention_text}")
                     elif md_name:
                         body_lines.append(f"*👤 담당:* {md_name}")
+                    # [추가] 추가 멘션 라인 - 담당자 다음 줄
+                    if extra_mentions_text:
+                        body_lines.append(f"*🔔 추가 멘션:* {extra_mentions_text}")
                     if note_text:
                         body_lines.append(f"*📝 특이사항:* {note_text}")
                     if sheet_url:
@@ -6192,8 +6251,15 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                             extras.append("📋 시트 링크")
                         if mention_text:
                             extras.append("👤 멘션")
+                        if extra_mention_names:
+                            extras.append(f"🔔 추가멘션 {len(extra_mention_names)}명")
                         if extras:
                             slack_msg += f" ({' + '.join(extras)} 포함)"
+                        # [추가] 입고 완료 시 추가 멘션 칸만 자동 비움 (다른 칸은 유지)
+                        try:
+                            self._reset_extra_mention()
+                        except Exception:
+                            pass
                     else:
                         slack_msg = f"\n⚠️ 슬랙 전송 실패: {msg_s}"
             except Exception as e:
@@ -6582,6 +6648,219 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.defect_mode_var.set(new_val)
         self._update_defect_btn_ui()
 
+    # ========== [추가] 추가 멘션 자동완성 ==========
+
+    def _get_chosung(self, ch):
+        """[추가] 한 글자의 초성 추출. 한글 아니면 본인 그대로."""
+        if not ch:
+            return ''
+        code = ord(ch)
+        # 한글 음절 범위
+        if 0xAC00 <= code <= 0xD7A3:
+            chosung_idx = (code - 0xAC00) // 588
+            chosung_list = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'
+            return chosung_list[chosung_idx]
+        # 한글 자음 자체면 그대로
+        return ch
+
+    def _match_extra_mention(self, query, name):
+        """[추가] 검색어가 이름에 매칭되는지 (prefix + 초성).
+        예: query='ㅎ' → '홍길동' OK
+            query='홍' → '홍길동' OK
+            query='홍길' → '홍길동' OK
+            query='ㅎㄱ' → '홍길동' OK (초성 prefix)
+        """
+        if not query or not name:
+            return False
+        q = query.strip()
+        n = name.strip()
+        if not q or not n:
+            return False
+        # 1) 일반 prefix 매칭 (대소문자 무시)
+        if n.lower().startswith(q.lower()):
+            return True
+        # 2) 초성 매칭 - query 전체가 자음/한글이면 이름의 초성 시퀀스와 prefix 비교
+        if all(0x3131 <= ord(c) <= 0x314E or 0xAC00 <= ord(c) <= 0xD7A3 for c in q):
+            name_chosung = ''.join(self._get_chosung(c) for c in n)
+            query_chosung = ''.join(self._get_chosung(c) for c in q)
+            if name_chosung.startswith(query_chosung):
+                return True
+        return False
+
+    def _on_extra_mention_keyrelease(self, event):
+        """[추가] 추가 멘션 입력 시 자동완성 드롭다운 갱신."""
+        # 화살표/엔터/이스케이프는 드롭다운 네비게이션용
+        if event.keysym in ('Up', 'Down', 'Return', 'Escape'):
+            self._handle_extra_mention_nav(event)
+            return
+
+        # 현재 입력값에서 마지막 토큰만 추출 (콤마 기준)
+        full_text = self.ent_extra_mention_in.get()
+        if full_text == self._extra_mention_placeholder:
+            return
+        last_token = full_text.split(',')[-1].strip()
+
+        if not last_token:
+            self._hide_extra_mention_dropdown()
+            return
+
+        # MD 매핑에서 매칭되는 이름들 찾기
+        try:
+            md_mapping = self.load_md_mapping()  # Slack mixin 함수
+        except Exception:
+            md_mapping = []
+
+        matches = []
+        seen_names = set()
+        for entry in md_mapping:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get('md', '') or entry.get('name', '')
+            if not name or name in seen_names:
+                continue
+            if self._match_extra_mention(last_token, name):
+                matches.append(name)
+                seen_names.add(name)
+
+        if not matches:
+            self._hide_extra_mention_dropdown()
+            return
+
+        self._show_extra_mention_dropdown(matches)
+
+    def _show_extra_mention_dropdown(self, names):
+        """[추가] 자동완성 드롭다운 표시."""
+        # 기존 거 닫고 새로
+        self._hide_extra_mention_dropdown()
+
+        entry = self.ent_extra_mention_in
+        # Toplevel을 entry 바로 아래에 띄움
+        x = entry.winfo_rootx()
+        y = entry.winfo_rooty() + entry.winfo_height()
+        w = entry.winfo_width()
+
+        self._extra_mention_dropdown = tk.Toplevel(self.root)
+        self._extra_mention_dropdown.overrideredirect(True)  # 테두리 없는 팝업
+        self._extra_mention_dropdown.geometry(f"{w}x{min(160, len(names)*28 + 4)}+{x}+{y}")
+        self._extra_mention_dropdown.attributes("-topmost", True)
+
+        lb = tk.Listbox(self._extra_mention_dropdown,
+                        font=("맑은 고딕", 10),
+                        bd=1, relief="solid",
+                        highlightthickness=0,
+                        activestyle='none',
+                        selectbackground="#3B82F6",
+                        selectforeground="white")
+        lb.pack(fill="both", expand=True)
+        for n in names[:8]:  # 최대 8개
+            lb.insert("end", n)
+        self._extra_mention_listbox = lb
+
+        lb.bind("<<ListboxSelect>>", lambda e: None)  # 선택만으로는 동작 X
+        lb.bind("<ButtonRelease-1>", self._on_extra_mention_pick)
+        lb.bind("<Return>", self._on_extra_mention_pick)
+
+    def _hide_extra_mention_dropdown(self):
+        """[추가] 드롭다운 닫기."""
+        try:
+            if hasattr(self, '_extra_mention_dropdown') and self._extra_mention_dropdown:
+                self._extra_mention_dropdown.destroy()
+        except Exception:
+            pass
+        self._extra_mention_dropdown = None
+        self._extra_mention_listbox = None
+
+    def _on_extra_mention_pick(self, event):
+        """[추가] 드롭다운에서 이름 선택 시 입력 칸에 박음."""
+        lb = getattr(self, '_extra_mention_listbox', None)
+        if not lb:
+            return
+        sel = lb.curselection()
+        if not sel:
+            return
+        picked = lb.get(sel[0])
+
+        # 현재 입력값에서 마지막 토큰을 picked로 치환
+        full_text = self.ent_extra_mention_in.get()
+        tokens = [t.strip() for t in full_text.split(',')]
+        if tokens:
+            tokens[-1] = picked
+        new_text = ', '.join(tokens) + ', '  # 다음 입력 편하게 콤마+공백 추가
+
+        self.ent_extra_mention_in.delete(0, tk.END)
+        self.ent_extra_mention_in.config(fg="#111827")
+        self.ent_extra_mention_in.insert(0, new_text)
+        self.ent_extra_mention_in.icursor(tk.END)
+        self.ent_extra_mention_in.focus_set()
+        self._hide_extra_mention_dropdown()
+
+    def _handle_extra_mention_nav(self, event):
+        """[추가] 드롭다운 키보드 네비게이션 (↑↓, Enter, Esc)."""
+        lb = getattr(self, '_extra_mention_listbox', None)
+        if not lb:
+            if event.keysym == 'Escape':
+                self._hide_extra_mention_dropdown()
+            return
+        if event.keysym == 'Down':
+            cur = lb.curselection()
+            new_idx = 0 if not cur else min(cur[0] + 1, lb.size() - 1)
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(new_idx)
+            lb.see(new_idx)
+            return 'break'
+        elif event.keysym == 'Up':
+            cur = lb.curselection()
+            new_idx = 0 if not cur else max(cur[0] - 1, 0)
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(new_idx)
+            lb.see(new_idx)
+            return 'break'
+        elif event.keysym == 'Return':
+            if lb.curselection():
+                self._on_extra_mention_pick(event)
+                return 'break'
+        elif event.keysym == 'Escape':
+            self._hide_extra_mention_dropdown()
+            return 'break'
+
+    def _get_extra_mention_names(self):
+        """[추가] 추가 멘션 입력 칸에서 이름 리스트 추출.
+        - placeholder 텍스트면 빈 리스트
+        - 콤마로 분리, 공백/빈 제거
+        - MD 매핑에 실제 존재하는 이름만 반환
+        """
+        text = self.ent_extra_mention_in.get() if hasattr(self, 'ent_extra_mention_in') else ''
+        if not text or text == self._extra_mention_placeholder:
+            return []
+        # 콤마로 분리
+        names = [t.strip() for t in text.split(',') if t.strip()]
+        if not names:
+            return []
+        # MD 매핑에 있는 이름만 골라냄 (오타로 매칭 안 되는 거 제거)
+        try:
+            md_mapping = self.load_md_mapping()
+        except Exception:
+            md_mapping = []
+        valid_set = set()
+        for entry in md_mapping:
+            if isinstance(entry, dict):
+                nm = entry.get('md', '') or entry.get('name', '')
+                if nm:
+                    valid_set.add(nm)
+        return [n for n in names if n in valid_set]
+
+    def _reset_extra_mention(self):
+        """[추가] 입고 처리 후 추가 멘션 칸 비움 + placeholder 복원."""
+        if not hasattr(self, 'ent_extra_mention_in'):
+            return
+        try:
+            self.ent_extra_mention_in.delete(0, tk.END)
+            self.ent_extra_mention_in.insert(0, self._extra_mention_placeholder)
+            self.ent_extra_mention_in.config(fg="#9CA3AF")
+            self._hide_extra_mention_dropdown()
+        except Exception:
+            pass
+
     def _update_defect_btn_ui(self):
         """[추가] 불량 모드 토글 버튼 UI 갱신"""
         if not hasattr(self, 'defect_mode_btn'):
@@ -6628,6 +6907,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             self.ent_note_in.delete(0, tk.END)
             self.ent_note_in.insert(0, getattr(self, '_note_placeholder', ''))
             self.ent_note_in.config(fg="#9CA3AF")
+        # [추가] 추가 멘션 칸 리셋 + placeholder 복원
+        self._reset_extra_mention()
         # [추가] 불량 모드 초기화 (정상으로)
         if hasattr(self, 'defect_mode_var'):
             self.defect_mode_var.set(False)
