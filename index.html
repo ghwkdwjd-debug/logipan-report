@@ -15,6 +15,7 @@
     <!-- [추가] 바코드 디코더
          메인: ZBar WASM (C 네이티브, 1D 바코드 강력) + zxing-wasm (C++ WASM)
          백업: ZXing JS, Quagga
+         OCR: Tesseract.js (바코드 안 잡힐 때 텍스트로 우회)
          + 이미지 전처리로 빛 번짐 대응 -->
     <script type="module">
         // ZBar WASM은 ES module - 글로벌로 노출
@@ -44,6 +45,8 @@
     </script>
     <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+    <!-- [추가] OCR - 바코드 밑 텍스트 인식 (Tesseract.js, 영문+숫자만이라 가볍게) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
@@ -2199,10 +2202,12 @@
             // ─── 디코더 동시 가동 ─────────────
             // 메인: ZBar WASM (1D 최강) + zxing-wasm (C++) - 둘 다 전처리 적용
             // 백업: Quagga (1D 보조), ZXing JS (QR/2D 보조)
+            // OCR: 바코드 안 잡힐 때 텍스트로 우회 (1초에 1번, 보조)
             startZbarDetector(videoEl, realW, realH, zoomApplied);
             startZxingWasmDetector(videoEl, realW, realH, zoomApplied);
             startQuaggaDetector(videoEl, realW, realH, zoomApplied);
             startZxingBackupDetector(videoEl);
+            startOcrDetector(videoEl, realW, realH, zoomApplied);
 
             // 탭 초점
             const viewport = document.getElementById('camera-viewport');
@@ -2333,12 +2338,142 @@
                 } catch (e) {
                     // 디코딩 실패는 무시
                 }
-                zbarLoopId = setTimeout(tick, 50);
+                zbarLoopId = setTimeout(tick, 80);
             };
             tick();
             console.log("✅ ZBar 디코더 가동");
         } catch (e) {
             console.error("ZBar 시작 실패:", e);
+        }
+    }
+
+    // ─── OCR 디코더 (Tesseract.js) - 바코드 밑 텍스트 인식 ─────────────────────────
+    // 바코드 자체가 안 잡힐 때 (빛 번짐, 작은 라벨) 우회 수단
+    // 무신사 바코드 텍스트 패턴:
+    //   - TWJU261PAJW032SV000 (영문 4 + 숫자 3 + 영문 + 숫자 + ..., 15~20자 영문/숫자)
+    //   - 1-0127020002 (숫자 + 하이픈 + 숫자, 짧음)
+    // OCR로 읽은 텍스트가 이 패턴에 맞으면 채택
+    let ocrWorker = null;
+    let ocrCanvas = null;
+    let ocrCtx = null;
+    let ocrLoopId = null;
+    let ocrBusy = false;  // 동시 호출 방지
+
+    async function initOcrWorker() {
+        if (ocrWorker || typeof Tesseract === 'undefined') return ocrWorker;
+        try {
+            console.log("⏳ OCR 워커 초기화 중...");
+            ocrWorker = await Tesseract.createWorker('eng', 1, {
+                // logger: m => console.log('[OCR]', m)  // 진행 로그 (필요 시)
+            });
+            // 영문 대문자 + 숫자 + 하이픈만 인식 (정확도 ↑)
+            await ocrWorker.setParameters({
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
+                // PSM 7 = 한 줄로 인식 (텍스트가 한 줄이라)
+                tessedit_pageseg_mode: '7',
+            });
+            console.log("✅ OCR 워커 준비 완료");
+            return ocrWorker;
+        } catch (e) {
+            console.error("OCR 워커 초기화 실패:", e);
+            return null;
+        }
+    }
+
+    // 무신사 바코드 텍스트 패턴 검증
+    function matchBarcodeTextPattern(text) {
+        if (!text) return null;
+        const cleaned = text.replace(/\s+/g, '').toUpperCase();
+
+        // 패턴 1: TWJU261PAJW032SV000 - 영문+숫자 혼합, 15~20자
+        // 영문 3~5자 시작 + 숫자 + 영문 + 숫자 ... (CODE128 무신사)
+        if (/^[A-Z0-9]{15,22}$/.test(cleaned) && /[A-Z]/.test(cleaned) && /\d/.test(cleaned)) {
+            return cleaned;
+        }
+        // 패턴 2: 1-0127020002 - 숫자-숫자 형식
+        if (/^\d+-\d{8,12}$/.test(cleaned)) {
+            return cleaned;
+        }
+        return null;
+    }
+
+    async function startOcrDetector(videoElement, w, h, zoomInfo) {
+        try {
+            if (typeof Tesseract === 'undefined') {
+                console.warn("Tesseract 미로드 - OCR 사용 안 함");
+                return;
+            }
+            // 워커는 lazy init (메모리 절약, 다운로드는 첫 시도 때)
+            ocrCanvas = document.createElement('canvas');
+            ocrCtx = ocrCanvas.getContext('2d', { willReadFrequently: true });
+
+            // OCR은 무거우니까 1초에 1번 정도만 시도 (다른 디코더가 메인, OCR은 보조)
+            const tick = async () => {
+                if (!scannerRunning || !videoElement || scanPaused) {
+                    ocrLoopId = setTimeout(tick, 500);
+                    return;
+                }
+                // 이미 OCR 처리 중이면 skip (한 번에 하나만)
+                if (ocrBusy) {
+                    ocrLoopId = setTimeout(tick, 500);
+                    return;
+                }
+                try {
+                    if (videoElement.readyState >= 2) {
+                        const vw = videoElement.videoWidth;
+                        const vh = videoElement.videoHeight;
+                        if (vw > 0 && vh > 0) {
+                            // 텍스트가 보통 바코드 아래 또는 위에 있음
+                            // ROI는 라이브 영상 중앙 영역 (텍스트 박힌 곳 추정)
+                            const cropW = Math.floor(vw * 0.9);
+                            const cropH = Math.floor(vh * 0.5);
+                            const cropX = Math.floor((vw - cropW) / 2);
+                            const cropY = Math.floor((vh - cropH) / 2);
+                            ocrCanvas.width = cropW;
+                            ocrCanvas.height = cropH;
+                            ocrCtx.drawImage(videoElement,
+                                cropX, cropY, cropW, cropH,
+                                0, 0, cropW, cropH);
+
+                            // 텍스트 인식 시작 - 워커 초기화 lazy
+                            ocrBusy = true;
+                            try {
+                                const worker = await initOcrWorker();
+                                if (!worker) {
+                                    ocrBusy = false;
+                                    ocrLoopId = setTimeout(tick, 1000);
+                                    return;
+                                }
+
+                                const { data } = await worker.recognize(ocrCanvas);
+                                if (data && data.text) {
+                                    // 한 줄씩 검사 - 패턴 맞으면 채택
+                                    const lines = data.text.split('\n');
+                                    for (const line of lines) {
+                                        const matched = matchBarcodeTextPattern(line);
+                                        if (matched) {
+                                            console.log("📝 OCR 매칭:", matched, "(원본:", line.trim(), ")");
+                                            onBarcodeScanned(matched, 'ocr');
+                                            break;
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                // OCR 실패는 무시
+                            }
+                            ocrBusy = false;
+                        }
+                    }
+                } catch (e) {
+                    ocrBusy = false;
+                }
+                // OCR은 1초마다 (CPU 부담 ↓, 다른 디코더가 메인)
+                ocrLoopId = setTimeout(tick, 1000);
+            };
+            tick();
+            console.log("✅ OCR 디코더 가동");
+        } catch (e) {
+            console.error("OCR 시작 실패:", e);
         }
     }
 
@@ -2354,7 +2489,7 @@
                 console.warn("zxing-wasm 미준비 - 백업 디코더만 사용");
                 // 엔진 표시 - ZBar 상태도 같이
                 const zbarOk = window.zbarReady ? "ZBar+" : "";
-                engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing (${w}x${h}${zoomInfo})`;
+                engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing+OCR (${w}x${h}${zoomInfo})`;
                 return;
             }
 
@@ -2414,17 +2549,17 @@
                 } catch (e) {
                     // 디코딩 실패는 무시
                 }
-                zxingWasmLoopId = setTimeout(tick, 50);
+                zxingWasmLoopId = setTimeout(tick, 80);
             };
             tick();
             usingEngine = 'zxing-wasm';
             // ZBar 상태도 포함해서 표시
             const zbarOk = window.zbarReady ? "ZBar+" : "";
-            engineInfo.innerText = `엔진: ${zbarOk}ZXing-WASM+Quagga (${w}x${h}${zoomInfo})`;
+            engineInfo.innerText = `엔진: ${zbarOk}ZXing-WASM+Quagga+OCR (${w}x${h}${zoomInfo})`;
         } catch (e) {
             console.error("zxing-wasm 시작 실패:", e);
             const zbarOk = window.zbarReady ? "ZBar+" : "";
-            engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing (${w}x${h}${zoomInfo})`;
+            engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing+OCR (${w}x${h}${zoomInfo})`;
         }
     }
 
@@ -2453,12 +2588,11 @@
                     }
                 },
                 locator: {
-                    // [패치] patch size large - 디테일 인식 강화
-                    patchSize: "large",
-                    halfSample: false  // halfSample 끄면 정확도 ↑ (속도는 좀 떨어짐)
+                    patchSize: "medium",
+                    halfSample: true
                 },
-                numOfWorkers: 4,  // 멀티스레드
-                frequency: 15,    // [패치] 10 → 15 (1초에 15번 시도)
+                numOfWorkers: 4,
+                frequency: 10,
                 decoder: {
                     // [패치] 영문+숫자 혼합 19자리(TWJU...)에 대응
                     // EAN/UPC 같은 숫자 전용 reader 제거 - 오인식 큰 폭 감소
@@ -2563,6 +2697,14 @@
             consensusTimer = null;
         }
         consensusVotes = {};
+        // [추가] OCR 루프 정지 (워커는 유지 - 다음 카메라 켤 때 재사용)
+        if (ocrLoopId) {
+            clearTimeout(ocrLoopId);
+            ocrLoopId = null;
+        }
+        ocrCanvas = null;
+        ocrCtx = null;
+        ocrBusy = false;
         // ZBar 루프 정지
         if (zbarLoopId) {
             clearTimeout(zbarLoopId);
@@ -2750,8 +2892,9 @@
 
         // [패치] ZBar는 오인식 거의 안 함 - 1표만으로 즉시 채택
         // ZBar = C 네이티브 디코더라 잡으면 거의 다 진짜
-        if (source === 'zbar') {
-            console.log(`✅ ZBar 즉시 채택: ${code}`);
+        // OCR도 패턴 매칭 통과한 거라 즉시 채택
+        if (source === 'zbar' || source === 'ocr') {
+            console.log(`✅ ${source} 즉시 채택: ${code}`);
             if (consensusTimer) { clearTimeout(consensusTimer); consensusTimer = null; }
             finalizeWithCode(code);
             return;
