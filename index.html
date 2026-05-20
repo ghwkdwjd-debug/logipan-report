@@ -416,6 +416,24 @@
         }
         .focus-btn:active { background: #ffcc80; }
 
+        .zoom-control {
+            display: flex; align-items: center; gap: 4px;
+            background: #f5f6f8; border-radius: 14px;
+            padding: 4px 6px;
+        }
+        .zoom-btn {
+            width: 26px; height: 26px;
+            border: none; background: white; border-radius: 50%;
+            font-size: 12px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .zoom-btn:active { background: #e0e0e0; }
+        .zoom-label {
+            font-size: 12px; font-weight: bold; color: #555;
+            min-width: 32px; text-align: center;
+        }
+
         .manual-input-row {
             display: flex; gap: 6px;
             padding: 8px 16px 4px;
@@ -694,6 +712,11 @@
             <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊</span>
             <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳</span>
             <button class="focus-btn" onclick="triggerFocus()" title="초점 다시">🎯 초점</button>
+            <div class="zoom-control" id="zoom-control" style="display:none;">
+                <button class="zoom-btn" onclick="adjustZoom(-1)" title="축소">➖</button>
+                <span class="zoom-label" id="zoom-label">1.0x</span>
+                <button class="zoom-btn" onclick="adjustZoom(1)" title="확대">➕</button>
+            </div>
             <span id="camera-modal-status" style="margin-left:auto; font-size:12px; color:#666;"></span>
         </div>
         <!-- 수동 입력 fallback -->
@@ -2012,6 +2035,9 @@
 
     // 카메라 자원
     let cameraStream = null;        // MediaStream
+    let cameraTrack = null;         // [추가] 비디오 트랙 - 줌/포커스 조작용
+    let cameraZoomCaps = null;      // [추가] 줌 capability (min/max/step)
+    let currentZoom = 1.0;          // [추가] 현재 줌 값
     let videoEl = null;             // <video>
     let barcodeDetector = null;     // 네이티브 BarcodeDetector (지원 시)
     let detectLoopId = null;        // requestAnimationFrame ID
@@ -2119,6 +2145,7 @@
             // 비디오 트랙 정보 + 줌 적용 시도
             const track = cameraStream.getVideoTracks()[0];
             let zoomApplied = '';
+            cameraTrack = track;  // 줌 버튼 등에서 사용
             try {
                 if (track.getCapabilities) {
                     const caps = track.getCapabilities();
@@ -2127,11 +2154,21 @@
                     if (caps.focusMode && caps.focusMode.includes('continuous')) {
                         advanced.push({ focusMode: 'continuous' });
                     }
-                    // 줌 적용 - 너무 멀면 안 잡힘, 살짝 줌인이 도움 됨
+                    // [패치] 줌 기본값 1.0x - 19자리 바코드 다 들어오게
+                    // 작업자가 필요하면 + 버튼으로 확대
                     if (caps.zoom) {
-                        const targetZoom = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.5));
-                        advanced.push({ zoom: targetZoom });
-                        zoomApplied = ` z${targetZoom}x`;
+                        cameraZoomCaps = caps.zoom;
+                        currentZoom = Math.max(caps.zoom.min, 1.0);
+                        advanced.push({ zoom: currentZoom });
+                        zoomApplied = ` z${currentZoom}x`;
+                        // 줌 버튼 표시
+                        const zoomUI = document.getElementById('zoom-control');
+                        if (zoomUI) zoomUI.style.display = 'flex';
+                        updateZoomUI();
+                    } else {
+                        // 줌 미지원이면 UI 숨김
+                        const zoomUI = document.getElementById('zoom-control');
+                        if (zoomUI) zoomUI.style.display = 'none';
                     }
                     if (advanced.length > 0) {
                         await track.applyConstraints({ advanced });
@@ -2192,9 +2229,9 @@
                         const vw = videoElement.videoWidth;
                         const vh = videoElement.videoHeight;
                         if (vw > 0 && vh > 0) {
-                            // 중앙 영역 크롭 (속도 ↑ + 노이즈 ↓)
-                            const cropW = Math.floor(vw * 0.9);
-                            const cropH = Math.floor(vh * 0.6);
+                            // [패치] ROI 확장: 60% → 95% (19자리 긴 바코드 다 들어가게)
+                            const cropW = Math.floor(vw * 0.95);
+                            const cropH = Math.floor(vh * 0.7);
                             const cropX = Math.floor((vw - cropW) / 2);
                             const cropY = Math.floor((vh - cropH) / 2);
                             zxingWasmCanvas.width = cropW;
@@ -2248,15 +2285,14 @@
                     type: "LiveStream",
                     target: videoElement,
                     constraints: {
-                        // 이미 우리가 video 연결했으니 Quagga 자체 카메라는 안 씀
                         width: { ideal: 1280 },
                         height: { ideal: 720 },
                         facingMode: "environment"
                     },
                     area: {
-                        // 화면 중앙 영역만 분석 - 성능 ↑
-                        top: "20%", right: "10%",
-                        left: "10%", bottom: "20%"
+                        // [패치] 영역 확장: 19자리 긴 바코드 다 들어가게
+                        top: "10%", right: "2%",
+                        left: "2%", bottom: "10%"
                     }
                 },
                 locator: {
@@ -2308,8 +2344,7 @@
         const code = result.codeResult.code;
         if (!code) return;
 
-        // [패치] 신뢰도 강화 - 오인식 방지
-        // Quagga의 decodedCodes 평균 에러로 신뢰도 판단
+        // 신뢰도 체크 - 사용자가 ✓ 눌러야 추가되니까 좀 풀어줘도 됨
         const decoded = result.codeResult.decodedCodes || [];
         let totalErr = 0;
         let validCount = 0;
@@ -2320,16 +2355,14 @@
             }
         }
         const avgErr = validCount > 0 ? totalErr / validCount : 1;
-        // [강화] 0.15 → 0.08 (훨씬 엄격)
-        if (avgErr > 0.08) {
-            console.log(`🚫 Quagga 신뢰도 낮음 (err=${avgErr.toFixed(3)}): ${code}`);
+        // [완화] 0.08 → 0.2 (PDA 확인 모드라 사용자가 검증 가능)
+        if (avgErr > 0.2) {
+            console.log(`🚫 Quagga 신뢰도 너무 낮음 (err=${avgErr.toFixed(3)}): ${code}`);
             return;
         }
 
-        // [추가] 너무 짧은 바코드는 의심 (오인식 빈번)
-        // 무신사 바코드는 11~19자 정도. 8자리 미만 숫자만 나오면 거의 잘못 읽은 거
-        if (code.length < 8) {
-            console.log(`🚫 길이 너무 짧음: ${code}`);
+        // [완화] 너무 짧은 거만 거부 (3자 미만은 진짜 노이즈)
+        if (code.length < 3) {
             return;
         }
 
@@ -2402,6 +2435,9 @@
             } catch(e) {}
             cameraStream = null;
         }
+        cameraTrack = null;
+        cameraZoomCaps = null;
+        currentZoom = 1.0;
         if (videoEl) {
             try { videoEl.srcObject = null; } catch(e) {}
         }
@@ -2478,6 +2514,32 @@
             vibrate(30);
             beep(800, 60);
         } catch(e) {}
+    }
+
+    // ─── 줌 조절 (➕➖) ─────────────────────────
+    async function adjustZoom(direction) {
+        if (!cameraTrack || !cameraZoomCaps) return;
+        try {
+            const step = cameraZoomCaps.step || 0.5;
+            let newZoom = currentZoom + (direction * Math.max(step, 0.5));
+            newZoom = Math.max(cameraZoomCaps.min, Math.min(cameraZoomCaps.max, newZoom));
+            // 소수점 1자리로 반올림
+            newZoom = Math.round(newZoom * 10) / 10;
+            if (newZoom === currentZoom) return;
+            await cameraTrack.applyConstraints({
+                advanced: [{ zoom: newZoom }]
+            });
+            currentZoom = newZoom;
+            updateZoomUI();
+            // 짧은 피드백
+            beep(900, 40);
+        } catch(e) {
+            console.warn("줌 조절 실패:", e);
+        }
+    }
+    function updateZoomUI() {
+        const label = document.getElementById('zoom-label');
+        if (label) label.innerText = `${currentZoom.toFixed(1)}x`;
     }
 
     // ─── 수동 입력 (키보드로 직접) ─────────────────────────
