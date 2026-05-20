@@ -980,25 +980,33 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         row2 = tk.Frame(brand_inner, bg="white")
         row2.pack(fill="x", pady=(8, 0))
 
-        # [추가] 담당 MD 입력
+        # [추가] 담당 MD 입력 - 추가 멘션이랑 비율 맞춤
         tk.Label(row2, text="👤 담당MD",
                  bg="white", fg="#374151",
                  font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(0, 6))
-        self.ent_md_in = tk.Entry(row2, font=("맑은 고딕", 11),
+        # 담당MD: row2의 30% 비율 (추가멘션이랑 같은 weight지만 적정한 폭으로)
+        md_frame = tk.Frame(row2, bg="white")
+        md_frame.pack(side="left", fill="x", expand=True, ipady=0)
+        self.ent_md_in = tk.Entry(md_frame, font=("맑은 고딕", 11),
                                     bd=1, relief="solid",
-                                    highlightthickness=0,
-                                    width=10)
-        self.ent_md_in.pack(side="left", ipady=5)
+                                    highlightthickness=0)
+        self.ent_md_in.pack(fill="x", expand=True, ipady=5)
+        # [추가] 담당MD에도 자동완성 (단일 이름)
+        self.ent_md_in.bind("<KeyRelease>", self._on_md_keyrelease)
+        self.ent_md_in.bind("<FocusOut>",
+            lambda e: self.root.after(150, self._hide_md_dropdown))
 
         # [추가] 추가 멘션 입력 (자동완성)
         tk.Label(row2, text="  🔔 추가 멘션",
                  bg="white", fg="#374151",
                  font=("맑은 고딕", 10, "bold")).pack(side="left", padx=(12, 6))
-        self.ent_extra_mention_in = tk.Entry(row2, font=("맑은 고딕", 11),
+        ext_frame = tk.Frame(row2, bg="white")
+        ext_frame.pack(side="left", fill="x", expand=True, ipady=0)
+        self.ent_extra_mention_in = tk.Entry(ext_frame, font=("맑은 고딕", 11),
                                                 bd=1, relief="solid",
                                                 highlightthickness=0,
                                                 fg="#9CA3AF")
-        self.ent_extra_mention_in.pack(side="left", fill="x", expand=True, ipady=5)
+        self.ent_extra_mention_in.pack(fill="x", expand=True, ipady=5)
 
         # 추가 멘션 placeholder
         self._extra_mention_placeholder = "이름 입력 (예: 홍, ㅎ) - 콤마로 여러 명"
@@ -6705,22 +6713,23 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             return
 
         # MD 매핑에서 매칭되는 이름들 찾기
+        # load_md_mapping은 {이름: slack_id} dict를 리턴
         try:
-            md_mapping = self.load_md_mapping()  # Slack mixin 함수
+            md_mapping = self.load_md_mapping()
         except Exception:
-            md_mapping = []
+            md_mapping = {}
+
+        # 이미 입력된 이름들은 제외 (중복 방지)
+        already_in = set(t.strip() for t in full_text.split(',')[:-1] if t.strip())
 
         matches = []
-        seen_names = set()
-        for entry in md_mapping:
-            if not isinstance(entry, dict):
-                continue
-            name = entry.get('md', '') or entry.get('name', '')
-            if not name or name in seen_names:
+        for name in md_mapping.keys():
+            if not name or name in already_in:
                 continue
             if self._match_extra_mention(last_token, name):
                 matches.append(name)
-                seen_names.add(name)
+            if len(matches) >= 8:
+                break
 
         if not matches:
             self._hide_extra_mention_dropdown()
@@ -6836,17 +6845,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         names = [t.strip() for t in text.split(',') if t.strip()]
         if not names:
             return []
-        # MD 매핑에 있는 이름만 골라냄 (오타로 매칭 안 되는 거 제거)
+        # MD 매핑(dict)에 있는 이름만 골라냄
         try:
             md_mapping = self.load_md_mapping()
         except Exception:
-            md_mapping = []
-        valid_set = set()
-        for entry in md_mapping:
-            if isinstance(entry, dict):
-                nm = entry.get('md', '') or entry.get('name', '')
-                if nm:
-                    valid_set.add(nm)
+            md_mapping = {}
+        valid_set = set(md_mapping.keys()) if isinstance(md_mapping, dict) else set()
         return [n for n in names if n in valid_set]
 
     def _reset_extra_mention(self):
@@ -6860,6 +6864,116 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             self._hide_extra_mention_dropdown()
         except Exception:
             pass
+
+    # ========== [추가] 담당MD 자동완성 (단일 이름) ==========
+
+    def _on_md_keyrelease(self, event):
+        """[추가] 담당MD 입력 시 자동완성 드롭다운 갱신."""
+        if event.keysym in ('Up', 'Down', 'Return', 'Escape'):
+            self._handle_md_nav(event)
+            return
+
+        text = self.ent_md_in.get().strip()
+        if not text:
+            self._hide_md_dropdown()
+            return
+
+        try:
+            md_mapping = self.load_md_mapping()
+        except Exception:
+            md_mapping = {}
+
+        matches = []
+        for name in md_mapping.keys():
+            if not name:
+                continue
+            if self._match_extra_mention(text, name):
+                matches.append(name)
+            if len(matches) >= 8:
+                break
+
+        if not matches:
+            self._hide_md_dropdown()
+            return
+
+        self._show_md_dropdown(matches)
+
+    def _show_md_dropdown(self, names):
+        self._hide_md_dropdown()
+        entry = self.ent_md_in
+        x = entry.winfo_rootx()
+        y = entry.winfo_rooty() + entry.winfo_height()
+        w = max(entry.winfo_width(), 180)
+
+        self._md_dropdown = tk.Toplevel(self.root)
+        self._md_dropdown.overrideredirect(True)
+        self._md_dropdown.geometry(f"{w}x{min(160, len(names)*28 + 4)}+{x}+{y}")
+        self._md_dropdown.attributes("-topmost", True)
+
+        lb = tk.Listbox(self._md_dropdown,
+                        font=("맑은 고딕", 10),
+                        bd=1, relief="solid",
+                        highlightthickness=0,
+                        activestyle='none',
+                        selectbackground="#3B82F6",
+                        selectforeground="white")
+        lb.pack(fill="both", expand=True)
+        for n in names[:8]:
+            lb.insert("end", n)
+        self._md_listbox = lb
+        lb.bind("<ButtonRelease-1>", self._on_md_pick)
+        lb.bind("<Return>", self._on_md_pick)
+
+    def _hide_md_dropdown(self, event=None):
+        try:
+            if hasattr(self, '_md_dropdown') and self._md_dropdown:
+                self._md_dropdown.destroy()
+        except Exception:
+            pass
+        self._md_dropdown = None
+        self._md_listbox = None
+
+    def _on_md_pick(self, event):
+        lb = getattr(self, '_md_listbox', None)
+        if not lb:
+            return
+        sel = lb.curselection()
+        if not sel:
+            return
+        picked = lb.get(sel[0])
+        self.ent_md_in.delete(0, tk.END)
+        self.ent_md_in.insert(0, picked)
+        self.ent_md_in.icursor(tk.END)
+        self.ent_md_in.focus_set()
+        self._hide_md_dropdown()
+
+    def _handle_md_nav(self, event):
+        lb = getattr(self, '_md_listbox', None)
+        if not lb:
+            if event.keysym == 'Escape':
+                self._hide_md_dropdown()
+            return
+        if event.keysym == 'Down':
+            cur = lb.curselection()
+            new_idx = 0 if not cur else min(cur[0] + 1, lb.size() - 1)
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(new_idx)
+            lb.see(new_idx)
+            return 'break'
+        elif event.keysym == 'Up':
+            cur = lb.curselection()
+            new_idx = 0 if not cur else max(cur[0] - 1, 0)
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(new_idx)
+            lb.see(new_idx)
+            return 'break'
+        elif event.keysym == 'Return':
+            if lb.curselection():
+                self._on_md_pick(event)
+                return 'break'
+        elif event.keysym == 'Escape':
+            self._hide_md_dropdown()
+            return 'break'
 
     def _update_defect_btn_ui(self):
         """[추가] 불량 모드 토글 버튼 UI 갱신"""
