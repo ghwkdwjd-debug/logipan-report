@@ -2325,7 +2325,7 @@
                             if (results && results.length > 0) {
                                 const code = results[0].decode();
                                 if (code) {
-                                    onBarcodeScanned(code);
+                                    onBarcodeScanned(code, "zbar");
                                 }
                             }
                         }
@@ -2333,7 +2333,7 @@
                 } catch (e) {
                     // 디코딩 실패는 무시
                 }
-                zbarLoopId = setTimeout(tick, 80);
+                zbarLoopId = setTimeout(tick, 50);
             };
             tick();
             console.log("✅ ZBar 디코더 가동");
@@ -2407,14 +2407,14 @@
                                 maxNumberOfSymbols: 1
                             });
                             if (results && results.length > 0 && results[0].text) {
-                                onBarcodeScanned(results[0].text);
+                                onBarcodeScanned(results[0].text, "zxing-wasm");
                             }
                         }
                     }
                 } catch (e) {
                     // 디코딩 실패는 무시
                 }
-                zxingWasmLoopId = setTimeout(tick, 80);
+                zxingWasmLoopId = setTimeout(tick, 50);
             };
             tick();
             usingEngine = 'zxing-wasm';
@@ -2453,11 +2453,12 @@
                     }
                 },
                 locator: {
-                    patchSize: "medium",
-                    halfSample: true
+                    // [패치] patch size large - 디테일 인식 강화
+                    patchSize: "large",
+                    halfSample: false  // halfSample 끄면 정확도 ↑ (속도는 좀 떨어짐)
                 },
                 numOfWorkers: 4,  // 멀티스레드
-                frequency: 10,    // 1초에 10번 시도
+                frequency: 15,    // [패치] 10 → 15 (1초에 15번 시도)
                 decoder: {
                     // [패치] 영문+숫자 혼합 19자리(TWJU...)에 대응
                     // EAN/UPC 같은 숫자 전용 reader 제거 - 오인식 큰 폭 감소
@@ -2518,7 +2519,7 @@
             return;
         }
 
-        onBarcodeScanned(code);
+        onBarcodeScanned(code, "quagga");
     }
 
     // ─── ZXing 백업 디코더 ─────────────────────────
@@ -2545,7 +2546,7 @@
             }
             zxingScanner.decodeFromVideoElement(videoElement, (result, err) => {
                 if (result) {
-                    onBarcodeScanned(result.getText());
+                    onBarcodeScanned(result.getText(), "zxing-js");
                 }
             });
         } catch (e) {
@@ -2735,7 +2736,7 @@
     let consensusTimer = null;
     let consensusStartedAt = 0;
 
-    function onBarcodeScanned(decodedText, decodedResult) {
+    function onBarcodeScanned(decodedText, source) {
         const code = (decodedText || '').trim();
         if (!code) return;
 
@@ -2745,7 +2746,16 @@
         const now = Date.now();
         if ((now - lastScanAt) < SCAN_COOLDOWN_MS) return;
 
-        console.log("📷 후보:", code);
+        console.log(`📷 후보 [${source || '?'}]:`, code);
+
+        // [패치] ZBar는 오인식 거의 안 함 - 1표만으로 즉시 채택
+        // ZBar = C 네이티브 디코더라 잡으면 거의 다 진짜
+        if (source === 'zbar') {
+            console.log(`✅ ZBar 즉시 채택: ${code}`);
+            if (consensusTimer) { clearTimeout(consensusTimer); consensusTimer = null; }
+            finalizeWithCode(code);
+            return;
+        }
 
         // [Consensus] voting에 추가
         consensusVotes[code] = (consensusVotes[code] || 0) + 1;
