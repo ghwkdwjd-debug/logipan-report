@@ -2466,6 +2466,135 @@
         return null;
     }
 
+    // [추가] OCR 부분 보정 - 무신사 바코드 패턴 활용
+    // 두 가지 패턴 지원:
+    //   1) 19자 영문+숫자 혼합: HOUU252NRPN032BR003 (4-3-4-3-2-3)
+    //   2) 숫자-숫자 형식: 1-0127020002
+    function correctOcrPartial(text) {
+        if (!text) return text;
+
+        // 영문 → 숫자 헷갈림 보정 매핑
+        const toDigit = { 'O': '0', 'I': '1', 'L': '1', 'Z': '2', 'S': '5', 'B': '8', 'G': '6', 'Q': '0', 'D': '0' };
+        // 숫자 → 영문 헷갈림 보정 매핑
+        const toAlpha = { '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B', '6': 'G' };
+
+        // ─── 패턴 2: 숫자-숫자 형식 (예: 1-0127020002) ─────
+        // 하이픈이 있으면 숫자형 패턴 가능성 큼
+        if (text.includes('-')) {
+            // 모든 영문을 숫자로 강제 변환
+            let numericForced = '';
+            for (const c of text) {
+                if (c === '-') {
+                    numericForced += '-';
+                } else if (/[A-Z]/.test(c)) {
+                    // 영문이면 숫자로 보정 (매핑 없으면 그대로)
+                    numericForced += toDigit[c] || c;
+                } else {
+                    numericForced += c;
+                }
+            }
+            // 보정 결과가 숫자-숫자 패턴 맞으면 그거 반환
+            if (/^\d+-\d{6,12}$/.test(numericForced)) {
+                return numericForced;
+            }
+            // 안 맞으면 원본 그대로
+            return text;
+        }
+
+        // ─── 패턴 1: 19자 무신사 영문+숫자 ─────
+        // 패턴: [영문4][숫자3][영문4][숫자3][영문2][혼합3]
+        // 예: HOUU 252 NRPN 032 BR 003
+        if (text.length !== 19) return text;
+
+        // 위치별 타입: A=영문, N=숫자, X=둘다 가능 (보정 X)
+        const positionTypes = [
+            'A','A','A','A',   // 0~3: 영문 4자
+            'N','N','N',       // 4~6: 숫자 3자
+            'A','A','A','A',   // 7~10: 영문 4자
+            'N','N','N',       // 11~13: 숫자 3자
+            'A','A',           // 14~15: 영문 2자
+            'X','X','X'        // 16~18: 혼합 (보정 X)
+        ];
+
+        let corrected = '';
+        for (let i = 0; i < 19; i++) {
+            const c = text[i];
+            const expected = positionTypes[i];
+
+            if (expected === 'A' && /\d/.test(c)) {
+                // 영문 자리인데 숫자로 인식됨 → 영문으로 강제
+                corrected += toAlpha[c] || c;
+            } else if (expected === 'N' && /[A-Z]/.test(c)) {
+                // 숫자 자리인데 영문으로 인식됨 → 숫자로 강제
+                corrected += toDigit[c] || c;
+            } else {
+                // 이미 맞거나 X (혼합 자리)는 그대로
+                corrected += c;
+            }
+        }
+        return corrected;
+    }
+
+    // [추가] OCR Consensus voting - 여러 프레임 결과 모아서 가장 많이 나온 값 채택
+    // OCR이 한 번 잘못 인식해도 반복하면 진짜 값이 더 많이 나옴
+    let ocrConsensusVotes = {};  // {값: 표수}
+    let ocrConsensusTimer = null;
+    const OCR_CONSENSUS_WINDOW_MS = 5000;  // 5초 동안 모음
+    const OCR_CONSENSUS_MIN_VOTES = 2;     // 같은 값 2번 이상 나오면 즉시 채택
+
+    function addOcrCandidate(rawText) {
+        if (!rawText) return;
+
+        // 1차: 패턴 매칭 시도
+        let candidate = matchBarcodeTextPattern(rawText);
+
+        // 2차: 매칭 실패 시 보정 시도 후 다시 매칭
+        if (!candidate) {
+            const corrected = correctOcrPartial(rawText.toUpperCase().replace(/[\s.,;:'"`]/g, ''));
+            candidate = matchBarcodeTextPattern(corrected);
+        }
+
+        if (!candidate) return;
+
+        // voting에 추가
+        ocrConsensusVotes[candidate] = (ocrConsensusVotes[candidate] || 0) + 1;
+        console.log(`📝 OCR 후보 (${ocrConsensusVotes[candidate]}표):`, candidate);
+
+        // 같은 값 MIN_VOTES 이상 → 즉시 채택
+        if (ocrConsensusVotes[candidate] >= OCR_CONSENSUS_MIN_VOTES) {
+            console.log(`✅ OCR Consensus 채택 (${ocrConsensusVotes[candidate]}표): ${candidate}`);
+            if (ocrConsensusTimer) {
+                clearTimeout(ocrConsensusTimer);
+                ocrConsensusTimer = null;
+            }
+            ocrConsensusVotes = {};
+            onBarcodeScanned(candidate, 'ocr');
+            return;
+        }
+
+        // 첫 후보가 들어오면 타이머 시작
+        if (!ocrConsensusTimer) {
+            ocrConsensusTimer = setTimeout(finalizeOcrConsensus, OCR_CONSENSUS_WINDOW_MS);
+        }
+    }
+
+    function finalizeOcrConsensus() {
+        ocrConsensusTimer = null;
+        let bestCode = null;
+        let bestVotes = 0;
+        for (const [code, votes] of Object.entries(ocrConsensusVotes)) {
+            if (votes > bestVotes) {
+                bestVotes = votes;
+                bestCode = code;
+            }
+        }
+        ocrConsensusVotes = {};
+        if (bestCode) {
+            console.log(`⚠️ OCR 단독 채택 (${bestVotes}표): ${bestCode}`);
+            onBarcodeScanned(bestCode, 'ocr');
+        }
+    }
+
     async function startOcrDetector(videoElement, w, h, zoomInfo) {
         try {
             if (typeof Tesseract === 'undefined') {
@@ -2542,39 +2671,37 @@
                                 });
 
                                 if (data && data.text) {
-                                    // 한 줄씩 검사 - 패턴 맞으면 채택
+                                    // 모든 줄을 voting 시스템에 넣음 - consensus로 진짜 값 찾기
                                     const lines = data.text.split('\n')
                                         .map(l => l.trim())
                                         .filter(l => l.length >= 3);
 
-                                    let matched = null;
                                     let bestRaw = '';
+                                    let hasCandidate = false;
                                     for (const line of lines) {
-                                        const m = matchBarcodeTextPattern(line);
-                                        if (m) {
-                                            matched = m;
-                                            bestRaw = line;
-                                            break;
+                                        // voting 시스템에 추가 (패턴 매칭 + 보정 다 시도)
+                                        const before = JSON.stringify(ocrConsensusVotes);
+                                        addOcrCandidate(line);
+                                        const after = JSON.stringify(ocrConsensusVotes);
+                                        if (before !== after) {
+                                            hasCandidate = true;
                                         }
                                         if (line.length > bestRaw.length) bestRaw = line;
                                     }
 
-                                    if (matched) {
-                                        console.log("📝 OCR 매칭:", matched, "(원본:", bestRaw, ")");
-                                        if (debugText) debugText.innerText = `✓ ${matched}`;
-                                        if (debugEl) debugEl.className = 'ocr-debug matched';
-                                        onBarcodeScanned(matched, 'ocr');
+                                    // 디버그 표시
+                                    const totalVotes = Object.values(ocrConsensusVotes).reduce((a,b)=>a+b, 0);
+                                    if (hasCandidate) {
+                                        if (debugText) debugText.innerText = `🔄 후보 모으는 중 (${totalVotes}표)`;
+                                        if (debugEl) debugEl.className = 'ocr-debug';
                                     } else if (bestRaw) {
-                                        // 패턴 매칭 실패 - 읽은 텍스트는 보여줌
                                         const truncated = bestRaw.length > 30 ? bestRaw.slice(0, 30) + '...' : bestRaw;
                                         if (debugText) debugText.innerText = `읽음: "${truncated}" (패턴 X)`;
                                         if (debugEl) debugEl.className = 'ocr-debug no-match';
                                     } else {
-                                        // [패치] words 개수도 표시 - OCR이 글자 단편이라도 봤는지 확인
                                         const wordsCount = data?.words?.length || 0;
                                         const conf = Math.round(data?.confidence || 0);
                                         if (wordsCount > 0) {
-                                            // 글자 단편은 봤는데 다 필터링됨
                                             if (debugText) debugText.innerText = `짧은 글자 ${wordsCount}개 (conf ${conf}, 길이 부족)`;
                                             if (debugEl) debugEl.className = 'ocr-debug no-match';
                                         } else {
@@ -2832,6 +2959,12 @@
         ocrCanvas = null;
         ocrCtx = null;
         ocrBusy = false;
+        // [추가] OCR consensus 상태 초기화
+        if (ocrConsensusTimer) {
+            clearTimeout(ocrConsensusTimer);
+            ocrConsensusTimer = null;
+        }
+        ocrConsensusVotes = {};
         // ZBar 루프 정지
         if (zbarLoopId) {
             clearTimeout(zbarLoopId);
@@ -3203,6 +3336,12 @@
             consensusTimer = null;
         }
         consensusVotes = {};
+        // [추가] OCR consensus도 정리
+        if (ocrConsensusTimer) {
+            clearTimeout(ocrConsensusTimer);
+            ocrConsensusTimer = null;
+        }
+        ocrConsensusVotes = {};
         // 비디오 재개
         if (videoEl) {
             try { videoEl.play(); } catch(e) {}
