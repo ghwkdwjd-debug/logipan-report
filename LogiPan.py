@@ -1147,6 +1147,28 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                  bg="white", fg="#9CA3AF",
                  font=("맑은 고딕", 8), anchor="w").pack(fill="x", pady=(0, 4))
 
+        # [추가] PWA 스캔 배지 - 기본 숨김, _on_send_scan_to_inbound가 호출되면 표시
+        # 시각적 구별 + ✕ 버튼으로 취소 가능
+        self.pwa_scan_badge = tk.Frame(r_inner, bg="#EFF6FF",
+                                         highlightthickness=1,
+                                         highlightbackground="#3B82F6")
+        # pack은 _on_send_scan_to_inbound 호출 시점에. 기본은 숨김.
+
+        self.pwa_scan_badge_label = tk.Label(self.pwa_scan_badge,
+                                              text="📦 PWA 스캔 데이터",
+                                              bg="#EFF6FF", fg="#1E40AF",
+                                              font=("맑은 고딕", 9, "bold"))
+        self.pwa_scan_badge_label.pack(side="left", padx=(8, 6), pady=4)
+
+        self.pwa_scan_badge_close = tk.Button(self.pwa_scan_badge, text="✕",
+                                                 bg="#EFF6FF", fg="#3B82F6",
+                                                 activebackground="#DBEAFE",
+                                                 font=("맑은 고딕", 9, "bold"),
+                                                 relief="flat", padx=8, pady=2,
+                                                 cursor="hand2",
+                                                 command=self._cancel_pwa_scan_badge)
+        self.pwa_scan_badge_close.pack(side="right", padx=(0, 6), pady=2)
+
         # 입력창 + 스크롤바 컨테이너
         scan_box = tk.Frame(r_inner, bg="white")
         scan_box.pack(fill="both", expand=True)
@@ -6129,6 +6151,11 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         scan_archive_msg = f"\n\n⚠️ 스캔 이력 시트 저장 실패\n{sheet_msg}"
                     # 임시 정보 정리 (한 번 사용하면 끝)
                     self._pending_scan_session = None
+                    # [추가] 배지도 숨김
+                    try:
+                        self._hide_pwa_scan_badge()
+                    except Exception:
+                        pass
             except Exception as e:
                 scan_archive_msg = f"\n\n⚠️ 스캔 이력 처리 오류: {e}"
                 print(f"❌ 스캔 이력 처리 오류: {e}")
@@ -7070,6 +7097,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         if hasattr(self, 'defect_mode_var'):
             self.defect_mode_var.set(False)
             self._update_defect_btn_ui()
+        # [추가] PWA 스캔 변수 + 배지 정리 (있으면)
+        self._pending_scan_session = None
+        try:
+            self._hide_pwa_scan_badge()
+        except Exception:
+            pass
         self.is_matched = False
         self.lbl_in_m.config(text="브랜드 수량 (0개)")
         self.lbl_in_s.config(text="스캔 수량 (0개)")
@@ -8514,22 +8547,111 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
     # ========== [추가] 스캔 데이터 입고탭으로 보내기 ==========
     # 시트 ID 하드코딩 (너 만든 [로지판] 스캔 이력 시트)
     SCAN_HISTORY_SHEET_ID = "1MB4coyKRNMZTL68LEYqdSDdWqEJhZayxvrZymxlIWJY"
+    # 서비스 계정 키 파일 (스캔 이력 시트만 권한 부여됨, 안전)
+    SERVICE_ACCOUNT_FILE = "service_account.json"
+
+    def _get_service_account_sheets_service(self):
+        """[추가] 서비스 계정으로 Google Sheets API 서비스 객체 생성.
+        - 사용자 OAuth와 분리 (다른 시트 영향 X)
+        - service_account.json은 스캔 이력 시트에만 편집자 권한 부여됨
+        - 토큰 만료 X, 자동 갱신
+        """
+        try:
+            from google.oauth2 import service_account
+            from googleapiclient.discovery import build
+            import os, sys
+
+            # JSON 키 파일 경로 찾기
+            # 1) 실행 파일과 같은 폴더
+            # 2) 현재 작업 디렉토리
+            candidates = []
+            if getattr(sys, 'frozen', False):
+                exe_dir = os.path.dirname(sys.executable)
+                candidates.append(os.path.join(exe_dir, self.SERVICE_ACCOUNT_FILE))
+            candidates.append(os.path.join(os.getcwd(), self.SERVICE_ACCOUNT_FILE))
+            candidates.append(self.SERVICE_ACCOUNT_FILE)
+
+            key_path = None
+            for p in candidates:
+                if os.path.exists(p):
+                    key_path = p
+                    break
+
+            if not key_path:
+                return None, f"service_account.json 파일을 찾을 수 없음 (확인 경로: {candidates})"
+
+            SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+            creds = service_account.Credentials.from_service_account_file(
+                key_path, scopes=SCOPES)
+            service = build('sheets', 'v4', credentials=creds, cache_discovery=False)
+            return service, None
+        except ImportError as e:
+            return None, f"google-auth 라이브러리 없음: {e}"
+        except Exception as e:
+            return None, f"서비스 계정 인증 실패: {e}"
+
+    def _show_pwa_scan_badge(self, worker, label, quality, item_count):
+        """[추가] 입고 탭 스캔 칸 위에 PWA 스캔 배지 표시.
+        - 시각적 구별 (PWA 스캔 받았다는 거 한눈에)
+        - 색상도 정상/불량에 따라 다르게
+        """
+        if not hasattr(self, 'pwa_scan_badge'):
+            return
+        try:
+            quality_label = "🟢 정상" if quality == 'normal' else "🔴 불량"
+            text = f"📦 PWA 스캔 데이터 - {worker} · {label} · {quality_label} {item_count}개"
+            self.pwa_scan_badge_label.config(text=text)
+
+            # 정상/불량 색상 구분
+            if quality == 'defect':
+                bg_color = "#FEE2E2"
+                border = "#DC2626"
+                fg_color = "#991B1B"
+            else:
+                bg_color = "#EFF6FF"
+                border = "#3B82F6"
+                fg_color = "#1E40AF"
+
+            self.pwa_scan_badge.config(bg=bg_color, highlightbackground=border)
+            self.pwa_scan_badge_label.config(bg=bg_color, fg=fg_color)
+            self.pwa_scan_badge_close.config(bg=bg_color, fg=border)
+
+            # 보이게 (안내 라벨 다음 위치)
+            self.pwa_scan_badge.pack(fill="x", pady=(0, 4), before=None)
+        except Exception as e:
+            print(f"PWA 스캔 배지 표시 실패: {e}")
+
+    def _hide_pwa_scan_badge(self):
+        """[추가] PWA 스캔 배지 숨기기 (UI만)."""
+        if not hasattr(self, 'pwa_scan_badge'):
+            return
+        try:
+            self.pwa_scan_badge.pack_forget()
+        except Exception:
+            pass
+
+    def _cancel_pwa_scan_badge(self):
+        """[추가] ✕ 버튼 - PWA 스캔 취소.
+        - 배지 숨김
+        - _pending_scan_session 변수 정리
+        - 스캔 칸 데이터는 그대로 (너가 처리하고 싶으면 일반 입고로 진행 가능)
+        """
+        self._pending_scan_session = None
+        self._hide_pwa_scan_badge()
+        print("PWA 스캔 취소 → 일반 입고로 전환")
 
     def _archive_scan_to_sheet(self, pending, brand, md_name, jira_key, jira_url):
         """[추가] 스캔 데이터를 Google Sheets에 영구 저장.
         - 월별 탭 자동 생성 (예: "26년 5월", "26년 6월")
+        - 서비스 계정으로 인증 (사용자 OAuth와 분리 = 다른 시트 안전)
         - pending = self._pending_scan_session
         - 반환: (ok, msg)
         """
         try:
-            if not self.is_google_authed():
-                return False, "Google 인증 안 됨 - 시트 설정에서 로그인하세요"
-            creds = self.get_google_creds()
-            if not creds:
-                return False, "Google 인증 정보 없음"
-
-            from googleapiclient.discovery import build
-            service = build('sheets', 'v4', credentials=creds, cache_discovery=False)
+            # 서비스 계정으로 인증 (스캔 이력 시트만 권한 있음)
+            service, err = self._get_service_account_sheets_service()
+            if not service:
+                return False, err
 
             # 1) 이번 달 탭 이름 (예: "26년 5월")
             from datetime import datetime, timezone, timedelta
@@ -8729,6 +8851,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 'worker': worker,
                 'item_count': item_count
             }
+
+            # [추가] 입고 탭 스캔 칸 위에 배지 표시 (시각적 구별)
+            try:
+                self._show_pwa_scan_badge(worker, label, quality, item_count)
+            except Exception as e:
+                print(f"배지 표시 실패: {e}")
 
             # [참고] 브랜드명/불량모드/특이사항 자동 채움은 빼버림
             # → 사용자가 직접 입력하는 게 더 정확함 (스캔 데이터만 옮기는 게 의도)
