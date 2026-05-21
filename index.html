@@ -182,21 +182,27 @@
             40%, 80% { transform: translateX(5px); }
         }
 
-        /* [추가] 정상/불량 토글 */
-        .quality-toggle-row {
-            display: flex; gap: 6px; margin: 10px 0;
+        /* [추가] 스캔 탭 작은 토글 버튼들 (작업 종류 + 정상/불량 공용) */
+        .scan-mini-row {
+            display: flex; gap: 6px; margin-top: 6px;
         }
-        .quality-toggle-btn {
-            flex: 1; padding: 11px 6px;
+        .scan-mini-btn {
+            flex: 1; padding: 10px 6px;
             border: 1.5px solid #e0e0e0; background: #f5f6f8; color: #888;
             border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer;
             transition: all 0.15s;
         }
-        .quality-toggle-btn.active.normal {
+        .scan-mini-btn:hover { background: #ebebeb; }
+        .scan-mini-btn.active {
+            background: #222; color: white; border-color: #222;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        }
+        /* 정상/불량은 활성 시 색상 다르게 */
+        #quality-btn-normal.active {
             background: #16A34A; color: white; border-color: #16A34A;
             box-shadow: 0 2px 6px rgba(22,163,74,0.3);
         }
-        .quality-toggle-btn.active.defect {
+        #quality-btn-defect.active {
             background: #DC2626; color: white; border-color: #DC2626;
             box-shadow: 0 2px 6px rgba(220,38,38,0.3);
         }
@@ -734,11 +740,19 @@
         <label>📌 작업명</label>
         <input type="text" id="scan-label" placeholder="예: ADIDAS26_3월1주차">
 
-        <!-- [추가] 정상/불량 토글 - 스캔 시점 상태가 박스에 저장됨 -->
-        <label>🏷️ 품질 구분 (스캔 시 적용)</label>
-        <div class="quality-toggle-row">
-            <button type="button" class="quality-toggle-btn active normal" id="quality-btn-normal" onclick="selectQuality('normal')">🟢 정상</button>
-            <button type="button" class="quality-toggle-btn defect" id="quality-btn-defect" onclick="selectQuality('defect')">🔴 불량</button>
+        <!-- [추가] 작업 종류 (필수, 기본 미선택) -->
+        <label>🏷️ 작업 종류 <span style="color:#ff4d4f;">*</span></label>
+        <div class="scan-mini-row">
+            <button type="button" class="scan-mini-btn" data-work="매입" onclick="selectWorkType('매입')">매입</button>
+            <button type="button" class="scan-mini-btn" data-work="위탁" onclick="selectWorkType('위탁')">위탁</button>
+            <button type="button" class="scan-mini-btn" data-work="기타" onclick="selectWorkType('기타')">기타</button>
+        </div>
+
+        <!-- [추가] 정상/불량 (필수, 기본 미선택) -->
+        <label>🏷️ 정상/불량 <span style="color:#ff4d4f;">*</span></label>
+        <div class="scan-mini-row">
+            <button type="button" class="scan-mini-btn" id="quality-btn-normal" onclick="selectQuality('normal')">🟢 정상</button>
+            <button type="button" class="scan-mini-btn" id="quality-btn-defect" onclick="selectQuality('defect')">🔴 불량</button>
         </div>
 
         <!-- 현재 로케이션 (📷 버튼 포함) -->
@@ -1904,12 +1918,13 @@
     let scanState = {
         mode: 'inbound',        // inbound | move | audit
         label: '',
-        quality: 'normal',      // [추가] normal | defect - 현재 스캔 품질 상태
+        workType: null,         // [추가] 매입 | 위탁 | 기타 (필수, 기본 미선택)
+        quality: null,          // [수정] normal | defect (필수, 기본 미선택)
         currentLoc: '',         // 입고/조사용 현재 로케
         fromLoc: '',            // 재고이동: 출발
         toLoc: '',              // 재고이동: 도착
         moveFocus: 'from',      // 재고이동: 다음에 어디 채울지 (from→to)
-        items: []               // [{barcode, qty, location, quality, fromLoc, toLoc, ts}, ...]
+        items: []               // [{barcode, qty, location, ts}, ...]
     };
 
     let scannerRunning = false;
@@ -2099,7 +2114,18 @@
         saveScanDraft();
     }
 
-    // [추가] 정상/불량 토글 - 사용자가 누른 시점부터 그 상태로 박스 저장됨
+    // [추가] 작업 종류 선택 (필수, 기본 미선택)
+    function selectWorkType(type) {
+        scanState.workType = type;
+        document.querySelectorAll('.scan-mini-btn[data-work]').forEach(b => {
+            b.classList.toggle('active', b.dataset.work === type);
+        });
+        saveScanDraft();
+        vibrate(20);
+    }
+
+    // [추가] 정상/불량 선택 (필수, 기본 미선택)
+    // 세션 단위 - 작업자가 선택한 게 그 세션 전체에 적용
     function selectQuality(q) {
         scanState.quality = q;
         const normalBtn = document.getElementById('quality-btn-normal');
@@ -2107,13 +2133,15 @@
         if (q === 'normal') {
             normalBtn.classList.add('active');
             defectBtn.classList.remove('active');
-        } else {
+        } else if (q === 'defect') {
             normalBtn.classList.remove('active');
             defectBtn.classList.add('active');
+        } else {
+            normalBtn.classList.remove('active');
+            defectBtn.classList.remove('active');
         }
         saveScanDraft();
-        // 시각적 피드백 - 짧은 진동
-        vibrate(30);
+        vibrate(20);
     }
 
     // ─── localStorage 저장/복원 ─────────────────────────
@@ -2134,7 +2162,11 @@
                 if (scanState.currentLoc) {
                     updateLocUI(scanState.currentLoc);
                 }
-                // [추가] 정상/불량 토글 복원
+                // [추가] 작업 종류 복원
+                if (scanState.workType) {
+                    selectWorkType(scanState.workType);
+                }
+                // [추가] 정상/불량 복원
                 if (scanState.quality) {
                     selectQuality(scanState.quality);
                 }
@@ -3382,7 +3414,6 @@
                 barcode: code,
                 qty: 1,
                 location: scanState.currentLoc,
-                quality: scanState.quality || 'normal',  // [추가] 스캔 시점의 품질 상태
                 ts: Date.now()
             };
             scanState.items.push(item);
@@ -3450,7 +3481,6 @@
             barcode: barcode,
             qty: 1,
             location: scanState.currentLoc,
-            quality: scanState.quality || 'normal',  // [추가] 품질 상태
             ts: Date.now()
         };
         scanState.items.push(item);
@@ -3484,13 +3514,9 @@
         let html = '';
         showItems.forEach((it, idx) => {
             const realIdx = totalCount - 1 - idx;  // 원본 인덱스
-            // [추가] 품질 뱃지 - 정상은 안 표시, 불량만 빨간 뱃지 (불량이 눈에 띄게)
-            const qualityBadge = (it.quality === 'defect')
-                ? '<span style="background:#DC2626; color:white; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:bold; margin-left:4px;">불량</span>'
-                : '';
             html += `<div class="scan-item">
                 <div style="flex:1; min-width:0;">
-                    <div class="barcode">${escapeHtml(it.barcode)}${qualityBadge}</div>
+                    <div class="barcode">${escapeHtml(it.barcode)}</div>
                     <div class="loc">📍 ${escapeHtml(it.location || '?')}</div>
                 </div>
                 <div class="qty">x${it.qty}</div>
@@ -3532,7 +3558,8 @@
         scanState = {
             mode: scanState.mode,
             label: '',
-            quality: 'normal',  // [추가] 정상으로 초기화
+            workType: null,    // [수정] 미선택
+            quality: null,     // [수정] 미선택
             currentLoc: '',
             fromLoc: '',
             toLoc: '',
@@ -3541,7 +3568,8 @@
         };
         document.getElementById('scan-label').value = '';
         updateLocUI('');
-        selectQuality('normal');  // [추가] UI 토글도 정상으로
+        // UI 토글 모두 active 제거
+        document.querySelectorAll('.scan-mini-btn').forEach(b => b.classList.remove('active'));
         renderScanList();
         clearScanDraft();
     }
@@ -3550,16 +3578,62 @@
     async function sendScanSession() {
         const name = localStorage.getItem("logipan_user_name");
         if (!name) {
-            feedbackError("작업자 이름이 등록되지 않았어요");
+            showToast("⚠️ 작업자 이름이 등록되지 않았어요");
             return;
         }
         if (scanState.items.length === 0) {
-            feedbackError("스캔 데이터 없음");
+            showToast("⚠️ 스캔 데이터가 없어요");
             return;
         }
         const label = (document.getElementById('scan-label').value || '').trim();
         if (!label) {
-            feedbackError("작업명을 입력하세요");
+            showToast("⚠️ 작업명을 입력하세요");
+            const labelEl = document.getElementById('scan-label');
+            labelEl.focus();
+            labelEl.style.transition = 'all 0.2s';
+            labelEl.style.border = '2px solid #DC2626';
+            labelEl.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.2)';
+            labelEl.style.animation = 'shakeInput 0.4s';
+            setTimeout(() => {
+                labelEl.style.border = ''; labelEl.style.boxShadow = ''; labelEl.style.animation = '';
+            }, 1500);
+            return;
+        }
+        // [추가] 작업 종류 필수 검증
+        if (!scanState.workType) {
+            showToast("⚠️ 작업 종류를 선택하세요 (매입/위탁/기타)");
+            // 작업 종류 버튼 영역 강조
+            const workBtns = document.querySelectorAll('.scan-mini-btn[data-work]');
+            workBtns.forEach(b => {
+                b.style.transition = 'all 0.2s';
+                b.style.border = '2px solid #DC2626';
+                b.style.boxShadow = '0 0 0 2px rgba(220,38,38,0.15)';
+                b.style.animation = 'shakeInput 0.4s';
+            });
+            setTimeout(() => {
+                workBtns.forEach(b => {
+                    b.style.border = ''; b.style.boxShadow = ''; b.style.animation = '';
+                });
+            }, 1500);
+            return;
+        }
+        // [추가] 정상/불량 필수 검증
+        if (!scanState.quality) {
+            showToast("⚠️ 정상/불량을 선택하세요");
+            const qualBtns = [document.getElementById('quality-btn-normal'), document.getElementById('quality-btn-defect')];
+            qualBtns.forEach(b => {
+                if (!b) return;
+                b.style.transition = 'all 0.2s';
+                b.style.border = '2px solid #DC2626';
+                b.style.boxShadow = '0 0 0 2px rgba(220,38,38,0.15)';
+                b.style.animation = 'shakeInput 0.4s';
+            });
+            setTimeout(() => {
+                qualBtns.forEach(b => {
+                    if (!b) return;
+                    b.style.border = ''; b.style.boxShadow = ''; b.style.animation = '';
+                });
+            }, 1500);
             return;
         }
 
@@ -3569,16 +3643,17 @@
         sendBtn.innerText = '📤 전송 중...';
 
         try {
-            // Firestore에 저장
+            // Firestore에 저장 - 세션 단위로 workType + quality 박힘
             await db.collection("scan_sessions").add({
                 user: name,
                 mode: scanState.mode,
+                work_type: scanState.workType,       // [추가] 매입/위탁/기타
+                quality: scanState.quality,          // [추가] normal/defect (세션 단위)
                 label: label,
                 items: scanState.items.map(it => ({
                     barcode: it.barcode,
                     qty: it.qty,
                     location: it.location || '',
-                    quality: it.quality || 'normal',  // [추가] 정상/불량
                     ts: it.ts || Date.now()
                 })),
                 item_count: scanState.items.length,
@@ -3592,11 +3667,13 @@
             // 초기화
             scanState.items = [];
             scanState.label = '';
-            scanState.quality = 'normal';  // [추가] 정상으로 리셋
+            scanState.workType = null;       // [수정] 다시 미선택 상태로
+            scanState.quality = null;        // [수정] 다시 미선택 상태로
             scanState.currentLoc = '';
             document.getElementById('scan-label').value = '';
             updateLocUI('');
-            selectQuality('normal');  // [추가] UI도
+            // UI 토글 모두 초기화 (active 제거)
+            document.querySelectorAll('.scan-mini-btn').forEach(b => b.classList.remove('active'));
             renderScanList();
             clearScanDraft();
         } catch (e) {
