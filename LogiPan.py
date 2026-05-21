@@ -8477,8 +8477,11 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
     def _on_send_scan_to_inbound(self, scan_session_id, report_doc_id):
         """[추가] 스캔 카드의 '입고탭으로 보내기' 버튼 클릭 핸들러.
         - Firestore scan_sessions에서 박스 데이터 가져옴
-        - 입고 탭으로 자동 전환
-        - 박스 데이터를 스캔 칸에 자동 박음 (다음 단계 구현)
+        - 입고 탭 자동 전환
+        - 5열 양식으로 스캔 칸에 박힘: 바코드 정상수 불량수 정상로케 불량로케
+            - 정상 세션: 바코드 1 0 AA-00-00-00 00-00-00-00
+            - 불량 세션: 바코드 0 1 00-00-00-00 BB-00-00-00
+        - 브랜드명도 자동 채움 (바코드 앞 3자 → 마스터)
         """
         if not scan_session_id:
             messagebox.showwarning("오류", "스캔 세션 ID가 없습니다.")
@@ -8512,23 +8515,103 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 f"작업명: {label}\n"
                 f"종류: {work_type} / {quality_text}\n"
                 f"박스 수: {item_count}개\n\n"
-                f"※ 입고 탭으로 전환하고 스캔 데이터가 자동으로 박힙니다.\n"
-                f"  (다음 단계에서 구현 - 현재는 미리보기만)"
+                f"※ 입고 탭으로 전환되고 스캔 수량 칸에 자동 박힙니다.\n"
+                f"   브랜드명은 자동 추출됩니다."
             )
             if not messagebox.askyesno("📥 입고탭으로 보내기", preview_text):
                 return
 
-            # TODO: 다음 단계에서 구현
-            # 1. 입고 탭으로 전환 (self.nb.select(self.t_in))
-            # 2. 스캔 칸에 박스 자동 박음
-            # 3. 정상/불량 모드 설정
-            # 4. 작업명/브랜드 자동 매칭
-            messagebox.showinfo("준비 중",
-                f"📦 {item_count}개 박스 가져오기 준비됨.\n\n"
-                f"다음 단계에서 입고 탭에 자동으로 박는 기능 구현 예정.")
+            # ─── 1) 입고 탭으로 전환 ─────────────────────────
+            try:
+                self.nb.select(self.t_in)
+            except Exception:
+                pass
+
+            # ─── 2) 5열 양식 생성 ─────────────────────────
+            # 정상 세션: 바코드  1  0  로케  00-00-00-00
+            # 불량 세션: 바코드  0  1  00-00-00-00  로케
+            lines = []
+            EMPTY_LOC = "00-00-00-00"
+            is_defect = (quality == 'defect')
+
+            for it in items:
+                barcode = it.get('barcode', '').strip()
+                location = it.get('location', '').strip() or EMPTY_LOC
+                qty = it.get('qty', 1)
+                if not barcode:
+                    continue
+                if is_defect:
+                    # 불량 세션: 정상수=0, 불량수=qty, 정상로케=빈, 불량로케=location
+                    lines.append(f"{barcode}\t0\t{qty}\t{EMPTY_LOC}\t{location}")
+                else:
+                    # 정상 세션: 정상수=qty, 불량수=0, 정상로케=location, 불량로케=빈
+                    lines.append(f"{barcode}\t{qty}\t0\t{location}\t{EMPTY_LOC}")
+
+            scan_text = "\n".join(lines)
+
+            # ─── 3) 스캔 칸에 박기 (기존 내용 덮어쓰기) ─────────────────────────
+            try:
+                self.txt_in_scan.delete("1.0", tk.END)
+                self.txt_in_scan.insert("1.0", scan_text)
+                # count_total_qty 강제 호출 (수량 라벨 갱신)
+                self.count_total_qty(self.txt_in_scan, self.lbl_in_s, "스캔 수량")
+            except Exception as e:
+                print(f"스캔 칸 입력 실패: {e}")
+
+            # ─── 4) 브랜드명 자동 추출 (첫 박스 바코드 앞 3자) ─────────────────────────
+            try:
+                first_barcode = items[0].get('barcode', '').strip().upper()
+                if first_barcode and len(first_barcode) >= 3:
+                    brand_code = first_barcode[:3]
+                    brand_name = ''
+                    if hasattr(self, '_brand_cache') and self._brand_cache:
+                        brand_name = self._brand_cache.get(brand_code, '')
+                    if brand_name and hasattr(self, 'ent_brand_in'):
+                        self.ent_brand_in.delete(0, tk.END)
+                        self.ent_brand_in.insert(0, brand_name)
+            except Exception as e:
+                print(f"브랜드명 자동 추출 실패: {e}")
+
+            # ─── 5) 불량 모드 자동 토글 ─────────────────────────
+            try:
+                if hasattr(self, 'defect_mode_var'):
+                    self.defect_mode_var.set(is_defect)
+                    self._update_defect_btn_ui()
+            except Exception as e:
+                print(f"불량 모드 설정 실패: {e}")
+
+            # ─── 6) 특이사항 칸에 스캔 출처 메모 ─────────────────────────
+            try:
+                if hasattr(self, 'ent_note_in'):
+                    note = f"📦 PWA 스캔: {worker} - {label} ({item_count}개)"
+                    self.ent_note_in.delete(0, tk.END)
+                    self.ent_note_in.insert(0, note)
+                    self.ent_note_in.config(fg="#111827")  # placeholder 색 해제
+            except Exception as e:
+                print(f"특이사항 입력 실패: {e}")
+
+            # ─── 7) field_reports 상태 변경 - 처리중 표시 ─────────────────────────
+            # 카드는 일단 그대로 두고, CSV 저장 + Jira 상신 성공 시 완료로 바뀜
+            # 지금은 표시만 변경 (실제 삭제/완료는 다음 단계 6에서)
+            try:
+                if report_doc_id:
+                    self.db.collection('field_reports').document(report_doc_id).update({
+                        'status': '🔄 입고 처리 중',
+                        'processed_by': self.user_name if hasattr(self, 'user_name') else '관리자'
+                    })
+            except Exception as e:
+                print(f"카드 상태 변경 실패: {e}")
+
+            # 완료 알림
+            messagebox.showinfo("✅ 가져오기 완료",
+                f"📦 {item_count}개 박스 가져옴.\n\n"
+                f"이제 담당MD 입력하고\n"
+                f"대조 분석 → CSV 저장 → Jira 상신 진행하세요.")
+
         except Exception as e:
             messagebox.showerror("오류", f"스캔 데이터 로드 실패:\n{e}")
             print(f"❌ 스캔 데이터 로드 오류: {e}")
+
 
     def _open_report_detail(self, doc_id):
         """카드 더블클릭 시 상세 팝업 열기 - 기존 on_message_double_click 호환"""
