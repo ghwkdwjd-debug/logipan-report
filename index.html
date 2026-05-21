@@ -175,6 +175,32 @@
         .msg-toast .title { font-weight: bold; margin-bottom: 4px; font-size: 13px; }
         .msg-toast .preview { font-size: 13px; opacity: 0.95; }
 
+        /* [추가] 입력 필드 흔들림 (검증 실패 시각 강조) */
+        @keyframes shakeInput {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-5px); }
+            40%, 80% { transform: translateX(5px); }
+        }
+
+        /* [추가] 정상/불량 토글 */
+        .quality-toggle-row {
+            display: flex; gap: 6px; margin: 10px 0;
+        }
+        .quality-toggle-btn {
+            flex: 1; padding: 11px 6px;
+            border: 1.5px solid #e0e0e0; background: #f5f6f8; color: #888;
+            border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .quality-toggle-btn.active.normal {
+            background: #16A34A; color: white; border-color: #16A34A;
+            box-shadow: 0 2px 6px rgba(22,163,74,0.3);
+        }
+        .quality-toggle-btn.active.defect {
+            background: #DC2626; color: white; border-color: #DC2626;
+            box-shadow: 0 2px 6px rgba(220,38,38,0.3);
+        }
+
         /* ===== [추가] 📦 스캔 탭 전용 스타일 ===== */
         .scan-mode-row { display: flex; gap: 6px; margin: 10px 0 14px; }
         .scan-mode-btn {
@@ -707,6 +733,13 @@
         <!-- 작업명 -->
         <label>📌 작업명</label>
         <input type="text" id="scan-label" placeholder="예: ADIDAS26_3월1주차">
+
+        <!-- [추가] 정상/불량 토글 - 스캔 시점 상태가 박스에 저장됨 -->
+        <label>🏷️ 품질 구분 (스캔 시 적용)</label>
+        <div class="quality-toggle-row">
+            <button type="button" class="quality-toggle-btn active normal" id="quality-btn-normal" onclick="selectQuality('normal')">🟢 정상</button>
+            <button type="button" class="quality-toggle-btn defect" id="quality-btn-defect" onclick="selectQuality('defect')">🔴 불량</button>
+        </div>
 
         <!-- 현재 로케이션 (📷 버튼 포함) -->
         <label>📍 현재 로케이션</label>
@@ -1871,11 +1904,12 @@
     let scanState = {
         mode: 'inbound',        // inbound | move | audit
         label: '',
+        quality: 'normal',      // [추가] normal | defect - 현재 스캔 품질 상태
         currentLoc: '',         // 입고/조사용 현재 로케
         fromLoc: '',            // 재고이동: 출발
         toLoc: '',              // 재고이동: 도착
         moveFocus: 'from',      // 재고이동: 다음에 어디 채울지 (from→to)
-        items: []               // [{barcode, qty, location, fromLoc, toLoc, ts}, ...]
+        items: []               // [{barcode, qty, location, quality, fromLoc, toLoc, ts}, ...]
     };
 
     let scannerRunning = false;
@@ -2065,6 +2099,23 @@
         saveScanDraft();
     }
 
+    // [추가] 정상/불량 토글 - 사용자가 누른 시점부터 그 상태로 박스 저장됨
+    function selectQuality(q) {
+        scanState.quality = q;
+        const normalBtn = document.getElementById('quality-btn-normal');
+        const defectBtn = document.getElementById('quality-btn-defect');
+        if (q === 'normal') {
+            normalBtn.classList.add('active');
+            defectBtn.classList.remove('active');
+        } else {
+            normalBtn.classList.remove('active');
+            defectBtn.classList.add('active');
+        }
+        saveScanDraft();
+        // 시각적 피드백 - 짧은 진동
+        vibrate(30);
+    }
+
     // ─── localStorage 저장/복원 ─────────────────────────
     function saveScanDraft() {
         try {
@@ -2082,6 +2133,10 @@
                 document.getElementById('scan-label').value = scanState.label || '';
                 if (scanState.currentLoc) {
                     updateLocUI(scanState.currentLoc);
+                }
+                // [추가] 정상/불량 토글 복원
+                if (scanState.quality) {
+                    selectQuality(scanState.quality);
                 }
                 renderScanList();
             }
@@ -2118,10 +2173,22 @@
 
     async function openCameraModal(mode) {
         if (mode === 'product') {
-            const label = (document.getElementById('scan-label').value || '').trim();
+            const labelEl = document.getElementById('scan-label');
+            const label = (labelEl.value || '').trim();
             if (!label) {
-                feedbackError("작업명을 먼저 입력하세요");
-                document.getElementById('scan-label').focus();
+                // [패치] 모달 안 열리니까 토스트로 알림 + 입력 칸 흔들기 + 포커스
+                showToast("⚠️ 작업명을 먼저 입력하세요");
+                labelEl.focus();
+                // 시각적 강조 - 빨간 테두리 + 흔들림 효과 1초
+                labelEl.style.transition = 'all 0.2s';
+                labelEl.style.border = '2px solid #DC2626';
+                labelEl.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.2)';
+                labelEl.style.animation = 'shakeInput 0.4s';
+                setTimeout(() => {
+                    labelEl.style.border = '';
+                    labelEl.style.boxShadow = '';
+                    labelEl.style.animation = '';
+                }, 1500);
                 return;
             }
             scanState.label = label;
@@ -2133,7 +2200,19 @@
                 saveScanDraft();
             }
             if (!scanState.currentLoc) {
-                feedbackError("먼저 로케이션을 입력하거나 스캔하세요");
+                // [패치] 로케 비어있을 때도 동일
+                const locEl = document.getElementById('scan-loc-input');
+                showToast("⚠️ 먼저 로케이션을 입력하거나 📷로 스캔하세요");
+                locEl.focus();
+                locEl.style.transition = 'all 0.2s';
+                locEl.style.border = '2px solid #DC2626';
+                locEl.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.2)';
+                locEl.style.animation = 'shakeInput 0.4s';
+                setTimeout(() => {
+                    locEl.style.border = '';
+                    locEl.style.boxShadow = '';
+                    locEl.style.animation = '';
+                }, 1500);
                 return;
             }
         }
@@ -3303,6 +3382,7 @@
                 barcode: code,
                 qty: 1,
                 location: scanState.currentLoc,
+                quality: scanState.quality || 'normal',  // [추가] 스캔 시점의 품질 상태
                 ts: Date.now()
             };
             scanState.items.push(item);
@@ -3370,6 +3450,7 @@
             barcode: barcode,
             qty: 1,
             location: scanState.currentLoc,
+            quality: scanState.quality || 'normal',  // [추가] 품질 상태
             ts: Date.now()
         };
         scanState.items.push(item);
@@ -3403,9 +3484,13 @@
         let html = '';
         showItems.forEach((it, idx) => {
             const realIdx = totalCount - 1 - idx;  // 원본 인덱스
+            // [추가] 품질 뱃지 - 정상은 안 표시, 불량만 빨간 뱃지 (불량이 눈에 띄게)
+            const qualityBadge = (it.quality === 'defect')
+                ? '<span style="background:#DC2626; color:white; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:bold; margin-left:4px;">불량</span>'
+                : '';
             html += `<div class="scan-item">
                 <div style="flex:1; min-width:0;">
-                    <div class="barcode">${escapeHtml(it.barcode)}</div>
+                    <div class="barcode">${escapeHtml(it.barcode)}${qualityBadge}</div>
                     <div class="loc">📍 ${escapeHtml(it.location || '?')}</div>
                 </div>
                 <div class="qty">x${it.qty}</div>
@@ -3447,6 +3532,7 @@
         scanState = {
             mode: scanState.mode,
             label: '',
+            quality: 'normal',  // [추가] 정상으로 초기화
             currentLoc: '',
             fromLoc: '',
             toLoc: '',
@@ -3455,6 +3541,7 @@
         };
         document.getElementById('scan-label').value = '';
         updateLocUI('');
+        selectQuality('normal');  // [추가] UI 토글도 정상으로
         renderScanList();
         clearScanDraft();
     }
@@ -3491,6 +3578,7 @@
                     barcode: it.barcode,
                     qty: it.qty,
                     location: it.location || '',
+                    quality: it.quality || 'normal',  // [추가] 정상/불량
                     ts: it.ts || Date.now()
                 })),
                 item_count: scanState.items.length,
@@ -3504,9 +3592,11 @@
             // 초기화
             scanState.items = [];
             scanState.label = '';
+            scanState.quality = 'normal';  // [추가] 정상으로 리셋
             scanState.currentLoc = '';
             document.getElementById('scan-label').value = '';
             updateLocUI('');
+            selectQuality('normal');  // [추가] UI도
             renderScanList();
             clearScanDraft();
         } catch (e) {
