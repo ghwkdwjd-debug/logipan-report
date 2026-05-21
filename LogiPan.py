@@ -8558,54 +8558,15 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             except Exception as e:
                 print(f"스캔 칸 입력 실패: {e}")
 
-            # ─── 4) 브랜드명 자동 추출 (첫 박스 바코드 앞 3자) ─────────────────────────
-            try:
-                first_barcode = items[0].get('barcode', '').strip().upper()
-                if first_barcode and len(first_barcode) >= 3:
-                    brand_code = first_barcode[:3]
-                    brand_name = ''
-                    if hasattr(self, '_brand_cache') and self._brand_cache:
-                        brand_name = self._brand_cache.get(brand_code, '')
-                    if brand_name and hasattr(self, 'ent_brand_in'):
-                        self.ent_brand_in.delete(0, tk.END)
-                        self.ent_brand_in.insert(0, brand_name)
-            except Exception as e:
-                print(f"브랜드명 자동 추출 실패: {e}")
-
-            # ─── 5) 불량 모드 자동 토글 ─────────────────────────
-            try:
-                if hasattr(self, 'defect_mode_var'):
-                    self.defect_mode_var.set(is_defect)
-                    self._update_defect_btn_ui()
-            except Exception as e:
-                print(f"불량 모드 설정 실패: {e}")
-
-            # ─── 6) 특이사항 칸에 스캔 출처 메모 ─────────────────────────
-            try:
-                if hasattr(self, 'ent_note_in'):
-                    note = f"📦 PWA 스캔: {worker} - {label} ({item_count}개)"
-                    self.ent_note_in.delete(0, tk.END)
-                    self.ent_note_in.insert(0, note)
-                    self.ent_note_in.config(fg="#111827")  # placeholder 색 해제
-            except Exception as e:
-                print(f"특이사항 입력 실패: {e}")
-
-            # ─── 7) field_reports 상태 변경 - 처리중 표시 ─────────────────────────
-            # 카드는 일단 그대로 두고, CSV 저장 + Jira 상신 성공 시 완료로 바뀜
-            # 지금은 표시만 변경 (실제 삭제/완료는 다음 단계 6에서)
-            try:
-                if report_doc_id:
-                    self.db.collection('field_reports').document(report_doc_id).update({
-                        'status': '🔄 입고 처리 중',
-                        'processed_by': self.user_name if hasattr(self, 'user_name') else '관리자'
-                    })
-            except Exception as e:
-                print(f"카드 상태 변경 실패: {e}")
+            # [참고] 브랜드명/불량모드/특이사항 자동 채움은 빼버림
+            # → 사용자가 직접 입력하는 게 더 정확함 (스캔 데이터만 옮기는 게 의도)
+            # [참고] 작업보고 카드 상태 변경 안 함
+            # → 너가 디테일 팝업에서 수동 "완료" 처리할 때만 사라지게
 
             # 완료 알림
             messagebox.showinfo("✅ 가져오기 완료",
                 f"📦 {item_count}개 박스 가져옴.\n\n"
-                f"이제 담당MD 입력하고\n"
+                f"브랜드명, 담당MD, 특이사항 입력 후\n"
                 f"대조 분석 → CSV 저장 → Jira 상신 진행하세요.")
 
         except Exception as e:
