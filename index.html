@@ -3644,7 +3644,7 @@
 
         try {
             // Firestore에 저장 - 세션 단위로 workType + quality 박힘
-            await db.collection("scan_sessions").add({
+            const sessionRef = await db.collection("scan_sessions").add({
                 user: name,
                 mode: scanState.mode,
                 work_type: scanState.workType,       // [추가] 매입/위탁/기타
@@ -3660,6 +3660,32 @@
                 status: "pending",
                 created_at: firebase.firestore.FieldValue.serverTimestamp()
             });
+
+            // [추가] 작업보고 탭에 알림용 카드 추가 (관리자가 한눈에 보게)
+            // 일반 작업보고와 같은 컬렉션 but source='scan'으로 구분
+            const qualityLabel = scanState.quality === 'defect' ? '불량' : '정상';
+            const itemCount = scanState.items.length;
+            try {
+                await db.collection("field_reports").add({
+                    user: name,
+                    title: `[${scanState.workType}] ${label} (${qualityLabel} ${itemCount}개)`,
+                    text: `📦 스캔 ${itemCount}개 (${qualityLabel}) - 관리자가 입고 처리 대기 중`,
+                    work_category: scanState.workType,    // 매입/위탁/기타
+                    source: 'scan',                       // [핵심] 일반 vs 스캔 구분
+                    scan_session_id: sessionRef.id,       // scan_sessions 참조
+                    scan_quality: scanState.quality,      // normal/defect
+                    scan_item_count: itemCount,
+                    scan_label: label,
+                    date: new Date().toISOString().slice(2,10).replace(/-/g,'/'),  // yy/mm/dd
+                    status: "⏳ 처리중",
+                    comment_count: 0,
+                    has_attached_image: false,
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                });
+            } catch (e2) {
+                console.warn("작업보고 알림 추가 실패 (스캔은 OK):", e2);
+                // 알림 실패해도 스캔 데이터는 저장됨 → 관리자가 별도로 확인 가능
+            }
 
             feedbackSent();
             showToast(`✅ ${scanState.items.length}건 전송 완료!`);
