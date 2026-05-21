@@ -6095,6 +6095,44 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 jira_msg += "\n(URL이 클립보드에 복사됨)"
             except: pass
 
+            # [추가] PWA 스캔 데이터로 처리한 거면 시트 저장 + Firestore 정리
+            scan_archive_msg = ""
+            try:
+                pending = getattr(self, '_pending_scan_session', None)
+                if pending:
+                    # Jira 키 추출 (URL에서 LOGI-1234 형식)
+                    import re
+                    jira_key = ''
+                    m = re.search(r'([A-Z]+-\d+)', str(result))
+                    if m:
+                        jira_key = m.group(1)
+                    # 시트에 저장
+                    ok_sheet, sheet_msg = self._archive_scan_to_sheet(pending, brand, md_name, jira_key, result)
+                    if ok_sheet:
+                        scan_archive_msg = f"\n\n📊 스캔 이력 시트 저장 완료\n{sheet_msg}"
+                        # 시트 저장 성공 시 Firestore 정리
+                        try:
+                            self.db.collection('scan_sessions').document(pending['scan_session_id']).delete()
+                        except Exception as e:
+                            print(f"scan_sessions 삭제 실패: {e}")
+                        try:
+                            # field_reports 카드는 완료 상태로 변경 (사라지진 않고, 완료 탭에서 보임)
+                            self.db.collection('field_reports').document(pending['report_doc_id']).update({
+                                'status': '✅ 완료',
+                                'closed_by': getattr(self, 'current_user', '관리자'),
+                                'jira_url': str(result),
+                                'jira_key': jira_key
+                            })
+                        except Exception as e:
+                            print(f"field_reports 완료 처리 실패: {e}")
+                    else:
+                        scan_archive_msg = f"\n\n⚠️ 스캔 이력 시트 저장 실패\n{sheet_msg}"
+                    # 임시 정보 정리 (한 번 사용하면 끝)
+                    self._pending_scan_session = None
+            except Exception as e:
+                scan_archive_msg = f"\n\n⚠️ 스캔 이력 처리 오류: {e}"
+                print(f"❌ 스캔 이력 처리 오류: {e}")
+
             # [추가] Slack 알림 (활성화된 경우)
             slack_msg = ""
             try:
@@ -6280,7 +6318,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
             messagebox.showinfo("Jira 상신 완료",
                 f"✅ CSV 저장 + Jira 티켓 생성 완료!\n\n"
-                f"📄 파일: {fn}{jira_msg}{slack_msg}\n\n"
+                f"📄 파일: {fn}{jira_msg}{slack_msg}{scan_archive_msg}\n\n"
                 f"💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
         else:
             messagebox.showerror("Jira 상신 실패",
@@ -8474,6 +8512,127 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         toggle()
 
     # ========== [추가] 스캔 데이터 입고탭으로 보내기 ==========
+    # 시트 ID 하드코딩 (너 만든 [로지판] 스캔 이력 시트)
+    SCAN_HISTORY_SHEET_ID = "1MB4coyKRNMZTL68LEYqdSDdWqEJhZayxvrZymxlIWJY"
+
+    def _archive_scan_to_sheet(self, pending, brand, md_name, jira_key, jira_url):
+        """[추가] 스캔 데이터를 Google Sheets에 영구 저장.
+        - 월별 탭 자동 생성 (예: "26년 5월", "26년 6월")
+        - pending = self._pending_scan_session
+        - 반환: (ok, msg)
+        """
+        try:
+            if not self.is_google_authed():
+                return False, "Google 인증 안 됨 - 시트 설정에서 로그인하세요"
+            creds = self.get_google_creds()
+            if not creds:
+                return False, "Google 인증 정보 없음"
+
+            from googleapiclient.discovery import build
+            service = build('sheets', 'v4', credentials=creds, cache_discovery=False)
+
+            # 1) 이번 달 탭 이름 (예: "26년 5월")
+            from datetime import datetime, timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+            now = datetime.now(kst)
+            tab_name = f"{now.year % 100}년 {now.month}월"
+
+            # 2) 시트 메타데이터로 탭 존재 여부 확인
+            meta = service.spreadsheets().get(spreadsheetId=self.SCAN_HISTORY_SHEET_ID).execute()
+            existing_tabs = [s['properties']['title'] for s in meta.get('sheets', [])]
+
+            # 3) 탭 없으면 생성 + 헤더 박기
+            if tab_name not in existing_tabs:
+                # 탭 추가
+                requests = [{
+                    'addSheet': {
+                        'properties': {'title': tab_name}
+                    }
+                }]
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
+                    body={'requests': requests}
+                ).execute()
+                # 헤더 추가
+                headers = [['처리일시', '발송일시', '작업자', '작업명', '브랜드코드', '브랜드명',
+                           '바코드', '로케이션', '수량', '정상/불량', 'JIRA티켓', '관리자']]
+                service.spreadsheets().values().update(
+                    spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
+                    range=f"{tab_name}!A1:L1",
+                    valueInputOption='USER_ENTERED',
+                    body={'values': headers}
+                ).execute()
+                print(f"✅ 새 탭 생성: {tab_name}")
+
+            # 4) row 데이터 생성
+            items = pending.get('items', [])
+            worker = pending.get('worker', '')
+            label = pending.get('label', '')
+            quality = pending.get('quality', 'normal')
+            quality_text = '정상' if quality == 'normal' else '불량'
+            admin = getattr(self, 'current_user', '관리자')
+
+            processed_time = now.strftime('%Y-%m-%d %H:%M:%S')
+
+            # 발송 시각은 첫 박스의 ts 사용 (밀리초 단위)
+            sent_time = ''
+            if items and items[0].get('ts'):
+                try:
+                    sent_dt = datetime.fromtimestamp(items[0]['ts']/1000, tz=kst)
+                    sent_time = sent_dt.strftime('%Y-%m-%d %H:%M:%S')
+                except Exception:
+                    pass
+
+            rows = []
+            for it in items:
+                barcode = it.get('barcode', '').strip()
+                if not barcode:
+                    continue
+                location = it.get('location', '').strip()
+                qty = it.get('qty', 1)
+
+                # 브랜드 코드/이름 (바코드 앞 3자 → 마스터)
+                brand_code = barcode[:3].upper() if len(barcode) >= 3 else ''
+                brand_name_resolved = ''
+                if hasattr(self, '_brand_cache') and self._brand_cache:
+                    brand_name_resolved = self._brand_cache.get(brand_code, brand or '')
+                if not brand_name_resolved:
+                    brand_name_resolved = brand or ''
+
+                rows.append([
+                    processed_time,         # A: 처리일시
+                    sent_time,              # B: 발송일시
+                    worker,                 # C: 작업자
+                    label,                  # D: 작업명
+                    brand_code,             # E: 브랜드코드
+                    brand_name_resolved,    # F: 브랜드명
+                    barcode,                # G: 바코드
+                    location,               # H: 로케이션
+                    qty,                    # I: 수량
+                    quality_text,           # J: 정상/불량
+                    jira_key,               # K: JIRA티켓
+                    admin,                  # L: 관리자
+                ])
+
+            if not rows:
+                return False, "저장할 박스 데이터가 없음"
+
+            # 5) 시트에 append
+            service.spreadsheets().values().append(
+                spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
+                range=f"{tab_name}!A:L",
+                valueInputOption='USER_ENTERED',
+                insertDataOption='INSERT_ROWS',
+                body={'values': rows}
+            ).execute()
+
+            return True, f"{len(rows)}건 → '{tab_name}' 탭"
+        except Exception as e:
+            import traceback
+            print(f"❌ 시트 저장 오류: {e}")
+            print(traceback.format_exc())
+            return False, str(e)
+
     def _on_send_scan_to_inbound(self, scan_session_id, report_doc_id):
         """[추가] 스캔 카드의 '입고탭으로 보내기' 버튼 클릭 핸들러.
         - Firestore scan_sessions에서 박스 데이터 가져옴
@@ -8557,6 +8716,19 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 self.count_total_qty(self.txt_in_scan, self.lbl_in_s, "스캔 수량")
             except Exception as e:
                 print(f"스캔 칸 입력 실패: {e}")
+
+            # [추가] 시트 저장 + Firestore 정리를 위한 임시 정보 저장
+            # Jira 상신 성공 시 이 정보를 사용해서 시트에 저장 + scan_sessions 삭제
+            self._pending_scan_session = {
+                'scan_session_id': scan_session_id,
+                'report_doc_id': report_doc_id,
+                'items': items,
+                'work_type': work_type,
+                'quality': quality,
+                'label': label,
+                'worker': worker,
+                'item_count': item_count
+            }
 
             # [참고] 브랜드명/불량모드/특이사항 자동 채움은 빼버림
             # → 사용자가 직접 입력하는 게 더 정확함 (스캔 데이터만 옮기는 게 의도)
