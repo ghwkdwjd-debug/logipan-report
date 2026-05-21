@@ -399,6 +399,8 @@ class SlackIntegrationMixin:
         except ImportError:
             return None
 
+        # [참고] 사용자 OAuth는 읽기 전용으로 유지 (브랜드 시트 등 보호)
+        # 스캔 이력 시트 쓰기는 별도 서비스 계정(service_account.json)으로 처리
         SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
         client_path, token_path = self._get_google_paths()
 
