@@ -8292,12 +8292,33 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                              title, ts, is_worker_reply, comment_total, has_image,
                              last_comment_text, last_comment_user, idx):
         """모던 카드 한 개 그리기"""
+        # [추가] 스캔 카드 판별 - source='scan'이면 PWA에서 보낸 스캔 알림
+        is_scan = data.get('source') == 'scan'
+        scan_quality = data.get('scan_quality', 'normal')
+
         # 상태별 색상 테마
         if status == "✅ 완료":
             accent_color = "#9CA3AF"
             badge_bg = "#E5E7EB"
             badge_fg = "#6B7280"
             card_bg = "#FAFAFA"
+        elif is_scan:
+            # [추가] 스캔 카드 색상 - 정상=파란색, 불량=빨간색
+            if scan_quality == 'defect':
+                accent_color = "#DC2626"      # 빨강 강조
+                badge_bg = "#FEE2E2"
+                badge_fg = "#991B1B"
+                card_bg = "#FEF2F2"           # 살짝 빨간 배경
+            else:
+                accent_color = "#1877F2"      # 파랑 강조
+                badge_bg = "#DBEAFE"
+                badge_fg = "#1E40AF"
+                card_bg = "#EFF6FF"           # 살짝 파란 배경
+            # 스캔 카드의 step_text는 별도 표시 (위에서 결정된 것 무시)
+            if scan_quality == 'defect':
+                step_text = "📦 스캔·불량"
+            else:
+                step_text = "📦 스캔"
         elif is_worker_reply:
             accent_color = "#FF4757"  # 새 댓글 = 빨간색 강조
             badge_bg = "#FFE5E8"
@@ -8401,6 +8422,25 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                          font=("맑은 고딕", 9, "bold"),
                          anchor="w", justify="left").pack(fill="x", anchor="w", pady=(2, 0))
 
+        # [추가] 스캔 카드 - "📥 입고탭으로 보내기" 버튼 (처리 안 한 거만)
+        if is_scan and status != "✅ 완료":
+            scan_btn_frame = tk.Frame(content, bg=card_bg)
+            scan_btn_frame.pack(fill="x", anchor="w", pady=(8, 0))
+
+            scan_session_id = data.get('scan_session_id', '')
+            scan_item_count = data.get('scan_item_count', 0)
+
+            send_btn = tk.Button(scan_btn_frame,
+                                  text=f"📥 입고탭으로 보내기 ({scan_item_count}개)",
+                                  bg="#1877F2" if scan_quality == 'normal' else "#DC2626",
+                                  fg="white",
+                                  font=("맑은 고딕", 9, "bold"),
+                                  relief="flat",
+                                  padx=12, pady=6,
+                                  cursor="hand2",
+                                  command=lambda sid=scan_session_id, did=doc_id: self._on_send_scan_to_inbound(sid, did))
+            send_btn.pack(side="left")
+
         # 클릭/우클릭 이벤트 (카드 + 모든 자식 위젯에 바인딩)
         def on_click(e):
             self._open_report_detail(doc_id)
@@ -8432,6 +8472,63 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 widget.after(700, toggle)
             except: pass
         toggle()
+
+    # ========== [추가] 스캔 데이터 입고탭으로 보내기 ==========
+    def _on_send_scan_to_inbound(self, scan_session_id, report_doc_id):
+        """[추가] 스캔 카드의 '입고탭으로 보내기' 버튼 클릭 핸들러.
+        - Firestore scan_sessions에서 박스 데이터 가져옴
+        - 입고 탭으로 자동 전환
+        - 박스 데이터를 스캔 칸에 자동 박음 (다음 단계 구현)
+        """
+        if not scan_session_id:
+            messagebox.showwarning("오류", "스캔 세션 ID가 없습니다.")
+            return
+
+        try:
+            # Firestore에서 세션 데이터 가져오기
+            session_ref = self.db.collection('scan_sessions').document(scan_session_id)
+            session_doc = session_ref.get()
+            if not session_doc.exists:
+                messagebox.showwarning("오류", "스캔 세션이 이미 삭제되었거나 없습니다.")
+                return
+
+            session_data = session_doc.to_dict()
+            items = session_data.get('items', [])
+            work_type = session_data.get('work_type', '매입')
+            quality = session_data.get('quality', 'normal')
+            label = session_data.get('label', '')
+            worker = session_data.get('user', '')
+            item_count = len(items)
+
+            if item_count == 0:
+                messagebox.showwarning("오류", "스캔 박스 데이터가 비어있습니다.")
+                return
+
+            # 미리보기 확인 다이얼로그
+            quality_text = "🟢 정상" if quality == 'normal' else "🔴 불량"
+            preview_text = (
+                f"📦 스캔 데이터를 입고 탭으로 가져올까요?\n\n"
+                f"작업자: {worker}\n"
+                f"작업명: {label}\n"
+                f"종류: {work_type} / {quality_text}\n"
+                f"박스 수: {item_count}개\n\n"
+                f"※ 입고 탭으로 전환하고 스캔 데이터가 자동으로 박힙니다.\n"
+                f"  (다음 단계에서 구현 - 현재는 미리보기만)"
+            )
+            if not messagebox.askyesno("📥 입고탭으로 보내기", preview_text):
+                return
+
+            # TODO: 다음 단계에서 구현
+            # 1. 입고 탭으로 전환 (self.nb.select(self.t_in))
+            # 2. 스캔 칸에 박스 자동 박음
+            # 3. 정상/불량 모드 설정
+            # 4. 작업명/브랜드 자동 매칭
+            messagebox.showinfo("준비 중",
+                f"📦 {item_count}개 박스 가져오기 준비됨.\n\n"
+                f"다음 단계에서 입고 탭에 자동으로 박는 기능 구현 예정.")
+        except Exception as e:
+            messagebox.showerror("오류", f"스캔 데이터 로드 실패:\n{e}")
+            print(f"❌ 스캔 데이터 로드 오류: {e}")
 
     def _open_report_detail(self, doc_id):
         """카드 더블클릭 시 상세 팝업 열기 - 기존 on_message_double_click 호환"""
