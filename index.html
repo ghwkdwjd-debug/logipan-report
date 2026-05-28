@@ -256,6 +256,14 @@
             background: #1877F2; color: white; border: none; border-radius: 8px;
             padding: 0 14px; font-size: 13px; font-weight: bold; cursor: pointer;
         }
+        .pda-manual-toggle {
+            background: transparent; border: 1px solid #ddd;
+            color: #888; padding: 6px 12px; border-radius: 14px;
+            font-size: 12px; cursor: pointer;
+        }
+        .pda-manual-toggle.open {
+            background: #f5f6f8; color: #444; border-color: #bbb;
+        }
 
         .scan-toggle {
             display: inline-flex; align-items: center; gap: 4px;
@@ -481,15 +489,19 @@
             <span id="pda-status-text">스캐너 대기 중 · 바코드를 쏘세요</span>
         </div>
 
-        <!-- 음성/진동 토글 -->
-        <div style="display:flex; gap:8px; margin-top:10px;">
+        <!-- 음성/진동/역순보정 토글 -->
+        <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">
             <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊 음성</span>
             <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳 진동</span>
+            <span class="scan-toggle on" id="toggle-reverse" onclick="togglePdaReverse()" title="PDA가 거꾸로 출력하는 바코드 자동 보정">↔️ 역순보정</span>
         </div>
 
-        <!-- 수동 입력 (PDA 안 될 때 백업) -->
-        <div class="pda-manual-row">
-            <input type="text" id="manual-barcode-input" placeholder="스캐너 안 될 때 직접 입력" autocomplete="off">
+        <!-- 수동 입력 (PDA 안 될 때 백업) - 평소엔 접혀있음 -->
+        <div style="margin-top:10px; text-align:right;">
+            <button class="pda-manual-toggle" onclick="togglePdaManual()" id="pda-manual-toggle-btn">⌨️ 수동입력</button>
+        </div>
+        <div class="pda-manual-row" id="pda-manual-panel" style="display:none;">
+            <input type="text" id="manual-barcode-input" placeholder="바코드/로케 직접 입력 후 Enter" autocomplete="off">
             <button class="pda-manual-btn" onclick="submitManualBarcode()">입력</button>
         </div>
 
@@ -1585,6 +1597,7 @@
     const SCAN_DRAFT_KEY = "logipan_scan_draft_v1";
     const SCAN_SOUND_KEY = "logipan_scan_sound";
     const SCAN_VIBRATE_KEY = "logipan_scan_vibrate";
+    const SCAN_REVERSE_KEY = "logipan_scan_reverse";  // [추가] PDA 역순 보정 설정
 
     let scanState = {
         mode: 'inbound',        // inbound | move | audit
@@ -1602,6 +1615,9 @@
 
     let soundEnabled = localStorage.getItem(SCAN_SOUND_KEY) !== 'off';
     let vibrateEnabled = localStorage.getItem(SCAN_VIBRATE_KEY) !== 'off';
+    // [추가] PDA 역순 보정 - 기본 ON (이 PDA가 거꾸로 출력하므로)
+    // 사용자가 '소리/진동' 옆 ↔ 토글로 끌 수 있음
+    let pdaReverseEnabled = localStorage.getItem(SCAN_REVERSE_KEY) !== 'off';
 
     // ─── 로케 바코드 자동 판별 ─────────────────────────
     // 무신사 로케 형식: AA-00-00-00 (영문2 + 숫자2 + 숫자2 + 숫자2, 하이픈 3개)
@@ -1627,6 +1643,21 @@
         el.className = 'scan-toggle ' + (vibrateEnabled ? 'on' : 'off');
         el.innerText = vibrateEnabled ? '📳 진동 ON' : '📴 진동 OFF';
     }
+    // [추가] PDA 역순 보정 토글
+    function togglePdaReverse() {
+        pdaReverseEnabled = !pdaReverseEnabled;
+        localStorage.setItem(SCAN_REVERSE_KEY, pdaReverseEnabled ? 'on' : 'off');
+        const el = document.getElementById('toggle-reverse');
+        if (!el) return;
+        el.className = 'scan-toggle ' + (pdaReverseEnabled ? 'on' : 'off');
+        el.innerText = pdaReverseEnabled ? '↔️ 역순보정 ON' : '↔️ 역순보정 OFF';
+        // 사용자에게 짧게 알림
+        if (typeof showToast === 'function') {
+            showToast(pdaReverseEnabled
+                ? '✅ PDA가 거꾸로 출력하는 바코드를 자동으로 뒤집습니다'
+                : '⚠️ 역순 보정 OFF - 들어오는 그대로 등록합니다');
+        }
+    }
     function initScanSettingsUI() {
         const sEl = document.getElementById('toggle-sound');
         if (sEl) {
@@ -1637,6 +1668,12 @@
         if (vEl) {
             vEl.className = 'scan-toggle ' + (vibrateEnabled ? 'on' : 'off');
             vEl.innerText = vibrateEnabled ? '📳 진동 ON' : '📴 진동 OFF';
+        }
+        // [추가] 역순 보정 토글 UI
+        const rEl = document.getElementById('toggle-reverse');
+        if (rEl) {
+            rEl.className = 'scan-toggle ' + (pdaReverseEnabled ? 'on' : 'off');
+            rEl.innerText = pdaReverseEnabled ? '↔️ 역순보정 ON' : '↔️ 역순보정 OFF';
         }
     }
 
@@ -1862,7 +1899,7 @@
                 e.preventDefault();
                 const raw = pdaInput.value.trim();
                 pdaInput.value = '';  // 즉시 비움
-                if (raw) processPdaScan(raw);
+                if (raw) processPdaScan(raw, true);  // true = PDA로 들어옴 → 역순 보정 대상
             }
         });
 
@@ -1894,15 +1931,37 @@
             });
         }
 
+        // 수동 입력칸에서 Enter 치면 등록
+        const manualInput = document.getElementById('manual-barcode-input');
+        if (manualInput) {
+            manualInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submitManualBarcode();
+                }
+            });
+        }
+
         console.log('✅ PDA 스캐너 입력 활성화');
     }
 
     // ─── 스캔 분기 처리 ─────────────────────────
     // 입력값이 로케 패턴이면 로케 등록, 아니면 바코드로 처리
-    function processPdaScan(raw) {
+    // fromPda: true면 PDA로 들어온 값 (역순 보정 적용 대상)
+    //         false면 사용자가 직접 친 값 (보정 안 함)
+    function processPdaScan(raw, fromPda) {
         if (!raw) return;
-        const value = raw.trim();
+        let value = raw.trim();
         if (!value) return;
+
+        // [역순 보정] PDA가 바코드를 거꾸로 출력하는 경우 자동 뒤집기
+        // - 로케 바코드(AA-00-00-00 패턴)는 뒤집으면 깨지므로 제외
+        // - 수동 입력은 그대로
+        // - 토글로 켜고/끌 수 있음 (localStorage)
+        if (fromPda && pdaReverseEnabled && !isLocationBarcode(value)) {
+            value = value.split('').reverse().join('');
+            console.log('[PDA 역순 보정]', raw, '→', value);
+        }
 
         // [디바운스] PDA가 같은 바코드를 너무 빠르게 두 번 보내는 경우 (트리거 꾹 누름)
         // 200ms 안에 동일 값 들어오면 무시. 의도적 중복(같은 박스 두 번 찍기)은 200ms 넘게 걸림.
@@ -1975,6 +2034,29 @@
         const cEl = document.getElementById('pda-cnt-cur');
         if (tEl) tEl.textContent = total;
         if (cEl) cEl.textContent = cur;
+    }
+
+    // ─── 수동 입력 패널 토글 ─────────────────────────
+    function togglePdaManual() {
+        const panel = document.getElementById('pda-manual-panel');
+        const btn = document.getElementById('pda-manual-toggle-btn');
+        if (!panel || !btn) return;
+        const isOpen = panel.style.display !== 'none';
+        if (isOpen) {
+            panel.style.display = 'none';
+            btn.classList.remove('open');
+            btn.textContent = '⌨️ 수동입력';
+            keepPdaFocus();
+        } else {
+            panel.style.display = 'flex';
+            btn.classList.add('open');
+            btn.textContent = '✕ 수동입력 닫기';
+            // 패널 열면 수동 입력칸으로 포커스
+            setTimeout(() => {
+                const inp = document.getElementById('manual-barcode-input');
+                if (inp) inp.focus();
+            }, 50);
+        }
     }
 
     // ─── 수동 입력 (스캐너 안 될 때) ─────────────────────────
