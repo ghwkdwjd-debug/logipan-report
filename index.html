@@ -2318,29 +2318,32 @@
             auditState.sessionId = sessionId;
             auditState.sessionMeta = meta;
 
-            // 2) 마스터 - 캐시 먼저 확인
+            // 2) 마스터 다운로드
+            // 캐시가 있어도 항상 최신 데이터 다운로드 (다른 작업자의 차감 반영을 위해)
+            // 캐시는 "빠른 첫 화면 표시"용으로만 사용
             progressEl.textContent = '캐시 확인 중...';
             const cached = await loadMasterFromCache(sessionId);
             let master = null;
 
             if (cached && cached.cached_at) {
-                // 캐시 사용 (간단히 항상 사용 - 향후 갱신 옵션 추가 가능)
+                // 캐시 빠르게 보여주고 → 백그라운드에서 최신 받아서 덮어씀
                 master = cached.items;
-                console.log(`✅ 마스터 캐시 사용 (${Object.keys(master).length}개 항목)`);
-                progressEl.textContent = `캐시에서 ${Object.keys(master).length.toLocaleString()}개 항목 로드됨`;
+                console.log(`📦 캐시 1차 사용 (${Object.keys(master).length}개)`);
+                progressEl.textContent = `최신 데이터 동기화 중...`;
             } else {
-                // 캐시 없음 → 다운로드
                 progressEl.textContent = `마스터 다운로드 중... (${(meta.total_rows || 0).toLocaleString()}개)`;
-                const itemsSnap = await rtdb.ref(`stocktake_data/${sessionId}/items`).once('value');
-                master = itemsSnap.val() || {};
-                console.log(`✅ 마스터 다운로드 완료 (${Object.keys(master).length}개 항목)`);
-                // 캐시 저장
-                progressEl.textContent = '캐시 저장 중...';
-                await saveMasterToCache(sessionId, {
-                    cached_at: Date.now(),
-                    items: master,
-                });
             }
+
+            // 항상 최신 다운로드 (캐시 있든 없든)
+            const itemsSnap = await rtdb.ref(`stocktake_data/${sessionId}/items`).once('value');
+            master = itemsSnap.val() || {};
+            console.log(`✅ 마스터 최신 다운로드 완료 (${Object.keys(master).length}개 항목)`);
+
+            // 캐시 갱신
+            await saveMasterToCache(sessionId, {
+                cached_at: Date.now(),
+                items: master,
+            });
 
             auditState.master = master;
 
@@ -2370,6 +2373,10 @@
             renderAuditLog();
             updateAuditTotalProgress();
 
+            // ═══ 실시간 동기화 리스너 부착 ═══
+            // 다른 작업자/관리자가 차감하면 자동으로 내 마스터 갱신
+            attachAuditRealtimeListener(sessionId);
+
             showToast(`✅ ${meta.title} 세션 로드 완료`);
         } catch (e) {
             console.error('세션 선택 실패:', e);
@@ -2382,11 +2389,20 @@
 
     // ─── 세션 나가기 ─────────────────────────
     function exitAuditSession() {
-        // 리스너 해제 (2-3 단계에서 추가될 예정)
+        // 실시간 동기화 리스너 해제 (ref.off()는 모든 이벤트 해제)
         if (auditState.listenerRef) {
             try { auditState.listenerRef.off(); } catch (e) {}
             auditState.listenerRef = null;
         }
+
+        // 종료 전에 현재 마스터 상태를 캐시에 저장 (다음 진입 시 빠르게)
+        if (auditState.sessionId && auditState.master) {
+            saveMasterToCache(auditState.sessionId, {
+                cached_at: Date.now(),
+                items: auditState.master,
+            }).catch(e => console.warn('나갈 때 캐시 저장 실패:', e));
+        }
+
         // 상태 초기화 (마스터 데이터는 메모리에서 비움)
         auditState.sessionId = null;
         auditState.sessionMeta = null;
@@ -2559,8 +2575,22 @@
                 speak('등록');
             }
 
-            // 6) 로그 추가
+            // 6) 로컬 로그 추가 (화면 표시용)
             addAuditLog(loc, bc);
+
+            // 7) RTDB scan_log에도 저장 (관리자가 엑셀로 받을 수 있게)
+            //    push()로 자동 ID 생성 → 비동기, 실패해도 차감은 이미 됐으니 무시
+            try {
+                const worker = localStorage.getItem('logipan_user_name') || '?';
+                rtdb.ref(`stocktake_data/${auditState.sessionId}/scan_log`).push({
+                    worker: worker,
+                    loc: loc,
+                    bc: bc,
+                    ts: Date.now()
+                }).catch(e => console.warn('scan_log 저장 실패:', e));
+            } catch (e) {
+                console.warn('scan_log push 오류:', e);
+            }
 
         } catch (e) {
             console.error('DB 차감 실패:', e);
@@ -2715,6 +2745,89 @@
         }
         input.value = '';
         processPdaScan(v, false);  // fromPda=false → 역순 보정 안 함
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ─── [재고조사] 실시간 동기화 ───
+    // ═══════════════════════════════════════════════════════════════════
+    // 다른 작업자/관리자가 차감하면 내 화면도 자동 갱신.
+    //
+    // on('child_changed')로 items 노드를 listen → 어떤 항목이 변경됐는지만 받음
+    // (전체 4만 row를 다시 받는 게 아니라 변경된 row만 받음 → 비용 최소)
+    //
+    // 자기 자신이 차감한 것도 콜백이 오지만, 이미 로컬에 반영되어 있어서 멱등.
+    // ═══════════════════════════════════════════════════════════════════
+
+    function attachAuditRealtimeListener(sessionId) {
+        // 기존 리스너 있으면 해제
+        if (auditState.listenerRef) {
+            try { auditState.listenerRef.off(); } catch (e) {}
+            auditState.listenerRef = null;
+        }
+
+        const itemsRef = rtdb.ref(`stocktake_data/${sessionId}/items`);
+        auditState.listenerRef = itemsRef;
+
+        // 마지막으로 봤던 값과 비교해서 진짜 바뀐 것만 처리 (자기 차감 echo 무시)
+        itemsRef.on('child_changed', (snap) => {
+            const key = snap.key;
+            const newVal = snap.val();
+            if (!newVal || !auditState.master) return;
+
+            const old = auditState.master[key];
+            if (!old) {
+                // 마스터에 없었는데 추가됨 → 그냥 반영
+                auditState.master[key] = newVal;
+            } else if (old.remaining === newVal.remaining) {
+                // 변경 없음 (자기 차감 echo 또는 다른 필드 변경)
+                return;
+            } else {
+                // 다른 사람이 차감 (또는 출고)
+                const diff = old.remaining - newVal.remaining;
+                auditState.master[key] = newVal;
+
+                // 알림 표시 (차감이 일어났을 때만, 증가는 무시)
+                if (diff > 0) {
+                    console.log(`[동기화] ${key}: ${old.remaining} → ${newVal.remaining} (-${diff})`);
+                }
+            }
+
+            // UI 갱신
+            // - 현재 보고 있는 로케면 해당 항목 리스트 다시 그림
+            // - 전체 진행률은 항상 갱신
+            if (auditState.currentLoc && newVal.loc === auditState.currentLoc) {
+                renderAuditLocItems(getCurrentLocItems());
+            }
+            updateAuditTotalProgress();
+        });
+
+        // child_added: 관리자가 새 항목 추가하는 경우 (드물지만)
+        itemsRef.on('child_added', (snap) => {
+            const key = snap.key;
+            // 이미 마스터에 있으면 무시 (초기 다운로드 시점 데이터)
+            if (auditState.master && auditState.master[key]) return;
+            const newVal = snap.val();
+            if (!newVal || !auditState.master) return;
+            auditState.master[key] = newVal;
+            if (auditState.currentLoc && newVal.loc === auditState.currentLoc) {
+                renderAuditLocItems(getCurrentLocItems());
+            }
+            updateAuditTotalProgress();
+        });
+
+        // child_removed: 관리자가 항목 삭제하는 경우 (거의 없음)
+        itemsRef.on('child_removed', (snap) => {
+            const key = snap.key;
+            if (auditState.master && auditState.master[key]) {
+                delete auditState.master[key];
+                if (auditState.currentLoc) {
+                    renderAuditLocItems(getCurrentLocItems());
+                }
+                updateAuditTotalProgress();
+            }
+        });
+
+        console.log('✅ 재고조사 실시간 동기화 리스너 부착');
     }
 
 
