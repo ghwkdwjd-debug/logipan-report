@@ -858,8 +858,17 @@
                 <!-- 스캔 로그 (최근 10건) -->
                 <div class="audit-log">
                     <div class="header">
-                        <span>📜 내 스캔 기록</span>
-                        <span id="audit-log-count">0건</span>
+                        <span>📜 내 스캔 기록 (<span id="audit-log-count">0건</span>)</span>
+                        <span>
+                            <button onclick="toggleAuditLogExpanded()" id="audit-log-expand-btn"
+                                    style="background:none; border:none; color:#1877F2; font-size:11px; font-weight:bold; cursor:pointer; padding:0 4px;">
+                                더보기
+                            </button>
+                            <button onclick="clearAuditLog()"
+                                    style="background:none; border:none; color:#dc2626; font-size:11px; font-weight:bold; cursor:pointer; padding:0 4px;">
+                                비우기
+                            </button>
+                        </span>
                     </div>
                     <div class="items" id="audit-log-items">
                         <div class="empty">아직 스캔한 게 없어요</div>
@@ -2196,14 +2205,19 @@
     // IndexedDB 헬퍼 (마스터 캐시용)
     const AUDIT_DB_NAME = 'logipan_audit';
     const AUDIT_STORE = 'masters';
+    const AUDIT_LOG_STORE = 'scan_logs';  // [추가] 세션별 스캔 로그
+    const AUDIT_DB_VERSION = 2;  // [변경] 새 store 추가하면서 버전업
 
     function openAuditDB() {
         return new Promise((resolve, reject) => {
-            const req = indexedDB.open(AUDIT_DB_NAME, 1);
+            const req = indexedDB.open(AUDIT_DB_NAME, AUDIT_DB_VERSION);
             req.onupgradeneeded = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains(AUDIT_STORE)) {
                     db.createObjectStore(AUDIT_STORE);  // key = sessionId
+                }
+                if (!db.objectStoreNames.contains(AUDIT_LOG_STORE)) {
+                    db.createObjectStore(AUDIT_LOG_STORE);  // key = sessionId, value = [{loc, bc, time, ts}, ...]
                 }
             };
             req.onsuccess = (e) => resolve(e.target.result);
@@ -2237,6 +2251,50 @@
             });
         } catch (e) {
             console.warn('IndexedDB 캐시 저장 실패:', e);
+        }
+    }
+
+    // [추가] 스캔 로그 IndexedDB 저장/로드 - 세션별로 보관
+    // 큰 값(전체 배열)을 매번 통째 저장하므로 throttle 처리 (스캔할 때마다 X)
+    let _logSaveTimer = null;
+    function scheduleSaveAuditLog(sessionId) {
+        if (_logSaveTimer) clearTimeout(_logSaveTimer);
+        _logSaveTimer = setTimeout(() => {
+            saveAuditLog(sessionId).catch(e => console.warn('로그 저장 실패:', e));
+            _logSaveTimer = null;
+        }, 500);  // 500ms 디바운스 - 연속 스캔 중엔 1번만 저장
+    }
+
+    async function saveAuditLog(sessionId) {
+        if (!sessionId) return;
+        try {
+            const db = await openAuditDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(AUDIT_LOG_STORE, 'readwrite');
+                // 최근 500건만 저장 (메모리 절약)
+                const logsToSave = auditScanLog.slice(0, 500);
+                tx.objectStore(AUDIT_LOG_STORE).put(logsToSave, sessionId);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        } catch (e) {
+            console.warn('스캔 로그 저장 실패:', e);
+        }
+    }
+
+    async function loadAuditLog(sessionId) {
+        if (!sessionId) return [];
+        try {
+            const db = await openAuditDB();
+            return new Promise((resolve) => {
+                const tx = db.transaction(AUDIT_LOG_STORE, 'readonly');
+                const req = tx.objectStore(AUDIT_LOG_STORE).get(sessionId);
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => resolve([]);
+            });
+        } catch (e) {
+            console.warn('스캔 로그 로드 실패:', e);
+            return [];
         }
     }
 
@@ -2378,7 +2436,11 @@
                 recent.querySelector('.sub').textContent = '';
             }
             document.getElementById('audit-loc-progress').style.display = 'none';
-            auditScanLog = [];
+            // 스캔 로그: IndexedDB에서 복구 (없으면 빈 배열)
+            auditScanLog = await loadAuditLog(sessionId);
+            if (auditScanLog.length > 0) {
+                console.log(`📜 스캔 로그 ${auditScanLog.length}건 복구됨`);
+            }
             renderAuditLog();
             updateAuditTotalProgress();
 
@@ -2410,6 +2472,10 @@
                 cached_at: Date.now(),
                 items: auditState.master,
             }).catch(e => console.warn('나갈 때 캐시 저장 실패:', e));
+        }
+        // 스캔 로그도 마지막으로 한 번 더 저장 (디바운스 대기 중인 거 강제 flush)
+        if (auditState.sessionId && auditScanLog.length > 0) {
+            saveAuditLog(auditState.sessionId).catch(e => console.warn('로그 저장 실패:', e));
         }
 
         // 상태 초기화 (마스터 데이터는 메모리에서 비움)
@@ -2697,30 +2763,62 @@
     function addAuditLog(loc, bc) {
         const now = new Date();
         const timeStr = now.toLocaleTimeString('ko-KR', { hour12: false });
-        auditScanLog.unshift({ loc, bc, time: timeStr });
-        if (auditScanLog.length > 50) auditScanLog.pop();
+        auditScanLog.unshift({ loc, bc, time: timeStr, ts: now.getTime() });
+        // 메모리 한도 500건 (이전 50건 → 500건으로 확장)
+        if (auditScanLog.length > 500) auditScanLog.pop();
         renderAuditLog();
+        // IndexedDB 저장 (디바운스로 연속 스캔 시 1번만 저장)
+        if (auditState.sessionId) {
+            scheduleSaveAuditLog(auditState.sessionId);
+        }
     }
+
+    let _auditLogExpanded = false;
 
     function renderAuditLog() {
         const box = document.getElementById('audit-log-items');
         const count = document.getElementById('audit-log-count');
+        const expandBtn = document.getElementById('audit-log-expand-btn');
         if (!box) return;
 
-        count.textContent = `${auditScanLog.length}건`;
+        if (count) count.textContent = `${auditScanLog.length}건`;
 
         if (auditScanLog.length === 0) {
             box.innerHTML = '<div class="empty">아직 스캔한 게 없어요</div>';
+            if (expandBtn) expandBtn.style.display = 'none';
             return;
         }
 
-        box.innerHTML = auditScanLog.slice(0, 10).map(log =>
+        // 표시 개수: 접힘 10건, 펼침 100건
+        const showCount = _auditLogExpanded ? Math.min(auditScanLog.length, 100) : 10;
+        const hasMore = auditScanLog.length > 10;
+        if (expandBtn) {
+            expandBtn.style.display = hasMore ? 'inline' : 'none';
+            expandBtn.textContent = _auditLogExpanded ? '접기' : `더보기 (전체 ${auditScanLog.length}건)`;
+        }
+
+        box.innerHTML = auditScanLog.slice(0, showCount).map(log =>
             `<div class="audit-log-row">
                 <span class="time">${log.time}</span>
                 <span class="loc">${escapeHtml(log.loc)}</span>
                 <span class="bc">${escapeHtml(log.bc)}</span>
             </div>`
         ).join('');
+    }
+
+    function toggleAuditLogExpanded() {
+        _auditLogExpanded = !_auditLogExpanded;
+        renderAuditLog();
+    }
+
+    async function clearAuditLog() {
+        if (auditScanLog.length === 0) return;
+        if (!confirm(`스캔 기록 ${auditScanLog.length}건을 모두 지울까요?\n\n※ 화면 기록만 지워지고, 이미 차감된 재고는 그대로입니다.`)) return;
+        auditScanLog = [];
+        renderAuditLog();
+        if (auditState.sessionId) {
+            await saveAuditLog(auditState.sessionId);
+        }
     }
 
     // ─── 수동 입력 토글 (재고조사 모드용) ─────────────────────────
