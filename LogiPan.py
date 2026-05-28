@@ -9596,7 +9596,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         out_file_label.pack(fill="x", pady=(0, 6), ipady=3)
 
         # 출고 파일 상태
-        out_state = {"df": None, "path": None,
+        out_state = {"df": None, "valid_df": None, "path": None,
                      "col_loc": "", "col_bc": "", "col_qty": ""}
 
         def choose_outbound_file():
@@ -9634,15 +9634,36 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             out_state["col_bc"] = find_col(["바코드", "barcode", "코드", "code", "품번"])
             out_state["col_qty"] = find_col(["수량", "qty", "출고"])
 
-            # 미리보기
+            # 미리보기 - 유효한 행만 카운트 (로케/바코드/수량 모두 있는 행)
             try:
-                qty_series = pd.to_numeric(df[out_state["col_qty"]], errors="coerce").fillna(0).astype(int)
+                col_loc = out_state["col_loc"]
+                col_bc = out_state["col_bc"]
+                col_qty = out_state["col_qty"]
+
+                # 유효 행: 로케 + 바코드 + 수량(>0) 모두 있는 행만
+                valid_df = df.copy()
+                if col_loc:
+                    valid_df = valid_df[valid_df[col_loc].astype(str).str.strip() != ""]
+                if col_bc:
+                    valid_df = valid_df[valid_df[col_bc].astype(str).str.strip() != ""]
+
+                qty_series = pd.to_numeric(valid_df[col_qty], errors="coerce").fillna(0).astype(int)
+                valid_df = valid_df[qty_series > 0]
+                qty_series = qty_series[qty_series > 0]
+
+                total_rows_raw = len(df)
+                valid_rows = len(valid_df)
+                skipped = total_rows_raw - valid_rows
                 total_qty = int(qty_series.sum())
+
+                skip_msg = f" (합계행 등 {skipped}건 자동제외)" if skipped > 0 else ""
                 out_preview.config(
-                    text=f"📊 출고 행 수: {len(df):,}건 / 총 출고 수량: {total_qty:,}개\n"
+                    text=f"📊 유효 출고: {valid_rows:,}건 / 총 {total_qty:,}개{skip_msg}\n"
                          f"매핑: 로케={out_state['col_loc']} / 바코드={out_state['col_bc']} / 수량={out_state['col_qty']}",
                     fg="#065F46"
                 )
+                # 유효 데이터프레임을 따로 저장 (차감 시 사용)
+                out_state["valid_df"] = valid_df
                 btn_apply_out.config(state="normal")
             except Exception as e:
                 out_preview.config(text=f"⚠️ 미리보기 실패: {e}", fg="#DC2626")
@@ -9813,7 +9834,10 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         # ═══ 출고 차감 적용 ═══
         def apply_outbound():
-            df = out_state["df"]
+            # 유효 데이터프레임 우선 (미리보기에서 합계행 등 자동제외된 것)
+            df = out_state.get("valid_df")
+            if df is None or len(df) == 0:
+                df = out_state["df"]
             if df is None:
                 return
             col_loc = out_state["col_loc"]
@@ -9823,8 +9847,15 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 messagebox.showwarning("컬럼 매핑", "로케/바코드/수량 컬럼이 모두 매핑되어야 합니다", parent=win)
                 return
 
+            # 출고 총량 미리 계산 (확인 다이얼로그에 표시)
+            try:
+                preview_total_qty = int(pd.to_numeric(df[col_qty], errors="coerce").fillna(0).sum())
+            except Exception:
+                preview_total_qty = 0
+
             if not messagebox.askyesno("출고 차감 확인",
-                f"출고 {len(df):,}건을 마스터에서 차감합니다.\n\n"
+                f"출고 {len(df):,}건 / 총 {preview_total_qty:,}개를\n"
+                f"마스터에서 차감합니다.\n\n"
                 f"이 작업은 되돌릴 수 없습니다.\n진행할까요?", parent=win):
                 return
 
@@ -9918,6 +9949,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
                 # 출고 파일 상태 초기화
                 out_state["df"] = None
+                out_state["valid_df"] = None
                 out_state["path"] = None
                 out_file_label.config(text="(파일 선택 안 됨)", fg="#6B7280")
                 out_preview.config(text="파일 선택 후 미리보기가 표시됩니다", fg="#6B7280")
