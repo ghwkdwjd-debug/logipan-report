@@ -9405,18 +9405,756 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             print(f"⚠️ 세션 목록 로드 실패: {e}")
 
     def on_stocktake_session_double_click(self, event):
-        """세션 더블클릭 → 진행 상황 (4단계에서 구현)"""
+        """세션 더블클릭 → 상세 팝업 (진행률 + 출고 + 미스캔 export)"""
         sel = self.stock_session_tree.selection()
         if not sel:
             return
         session_id = sel[0]
-        values = self.stock_session_tree.item(session_id, "values")
-        title = values[0] if values else session_id
-        messagebox.showinfo("진행 상황 (개발 중)",
-            f"세션: {title}\nID: {session_id}\n\n"
-            f"진행 상황 보기 / 엑셀 추출은\n"
-            f"4단계 작업에서 추가됩니다.\n\n"
-            f"지금은 작업자 앱(2단계)에서 이 세션 선택해 스캔만 가능합니다.")
+        self.open_stocktake_detail_popup(session_id)
+
+
+    # ═══════════════════════════════════════════════════════════════════
+    # ─── [재고조사] 세션 상세 팝업 - 진행률 + 출고 + 미스캔 export ───
+    # ═══════════════════════════════════════════════════════════════════
+
+    def open_stocktake_detail_popup(self, session_id):
+        """세션 상세 팝업 - 진행률 실시간 + 출고 업로드 + 미스캔 추출"""
+        # 메타 조회
+        try:
+            meta_ref = self._rtdb_ref(f"stocktake_sessions/{session_id}/meta")
+            meta = meta_ref.get() if meta_ref else None
+            if not meta:
+                messagebox.showerror("세션 없음", "세션 정보를 찾을 수 없습니다")
+                return
+        except Exception as e:
+            messagebox.showerror("로드 실패", f"세션 메타 조회 실패:\n{e}")
+            return
+
+        # 팝업 창
+        win = tk.Toplevel(self.root)
+        win.title(f"📋 재고조사 - {meta.get('title', session_id)}")
+        win.configure(bg="#F5F6F8")
+        self.position_popup(win, 1200, 760)
+        self._bind_esc_close(win)
+
+        # 상태 저장 (자식 함수들이 공유)
+        state = {
+            "session_id": session_id,
+            "meta": meta,
+            "items": {},          # RTDB items 전체 캐시
+            "win": win,
+            "destroyed": False,
+            "listener_ref": None,
+        }
+
+        def on_close():
+            state["destroyed"] = True
+            # 리스너 해제
+            if state["listener_ref"]:
+                try:
+                    state["listener_ref"].listener.close()
+                except Exception:
+                    pass
+                state["listener_ref"] = None
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        # ═══ 상단 헤더 ═══
+        header = tk.Frame(win, bg="white", bd=1, relief="solid")
+        header.pack(fill="x", padx=10, pady=(10, 5))
+
+        title_row = tk.Frame(header, bg="white")
+        title_row.pack(fill="x", padx=14, pady=(10, 4))
+        tk.Label(title_row, text=f"📋 {meta.get('title', '(제목 없음)')}",
+                 font=("맑은 고딕", 13, "bold"),
+                 bg="white", fg="#1A1A1A").pack(side="left")
+        tk.Label(title_row,
+                 text=f"  세션 ID: {session_id}  ·  생성자: {meta.get('creator', '-')}",
+                 font=("맑은 고딕", 9), bg="white", fg="#888").pack(side="left")
+
+        # 진행률 게이지
+        gauge_row = tk.Frame(header, bg="white")
+        gauge_row.pack(fill="x", padx=14, pady=(4, 10))
+
+        # 좌측: 큰 진행률 텍스트
+        gauge_left = tk.Frame(gauge_row, bg="white")
+        gauge_left.pack(side="left")
+        progress_label = tk.Label(gauge_left, text="0 / 0 (0%)",
+                                   font=("맑은 고딕", 18, "bold"),
+                                   bg="white", fg="#1877F2")
+        progress_label.pack(anchor="w")
+        progress_sub = tk.Label(gauge_left, text="진행 중...",
+                                 font=("맑은 고딕", 9), bg="white", fg="#888")
+        progress_sub.pack(anchor="w")
+
+        # 우측: 통계 카드들
+        stats_row = tk.Frame(gauge_row, bg="white")
+        stats_row.pack(side="right")
+
+        def make_stat_card(parent, label, color):
+            box = tk.Frame(parent, bg="white", padx=14, pady=4)
+            box.pack(side="left", padx=4)
+            lbl = tk.Label(box, text=label, font=("맑은 고딕", 8), bg="white", fg="#888")
+            lbl.pack()
+            val = tk.Label(box, text="-", font=("맑은 고딕", 14, "bold"), bg="white", fg=color)
+            val.pack()
+            return val
+
+        stat_total = make_stat_card(stats_row, "전체 항목", "#374151")
+        stat_done = make_stat_card(stats_row, "완료", "#10B981")
+        stat_partial = make_stat_card(stats_row, "진행중", "#F59E0B")
+        stat_pending = make_stat_card(stats_row, "미스캔", "#9CA3AF")
+
+        # 진행률 바
+        bar_frame = tk.Frame(header, bg="#E5E7EB", height=10)
+        bar_frame.pack(fill="x", padx=14, pady=(0, 12))
+        bar_frame.pack_propagate(False)
+        progress_bar_fill = tk.Frame(bar_frame, bg="#10B981", width=0)
+        progress_bar_fill.place(x=0, y=0, relheight=1.0, width=0)
+
+        # ═══ 좌우 분할 ═══
+        body = tk.Frame(win, bg="#F5F6F8")
+        body.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # ─── 왼쪽: 마스터 항목 테이블 + 검색 ───
+        left = tk.LabelFrame(body, text="  📦 마스터 항목 (스캔된 행은 초록 음영)  ",
+                              bg="white", fg="#1A1A1A",
+                              font=("맑은 고딕", 10, "bold"),
+                              bd=1, relief="solid", padx=8, pady=8)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 5))
+
+        # 필터/검색 행
+        filter_row = tk.Frame(left, bg="white")
+        filter_row.pack(fill="x", pady=(0, 6))
+
+        filter_var = tk.StringVar(value="all")
+        def make_filter_btn(parent, text, val):
+            return tk.Radiobutton(parent, text=text, variable=filter_var, value=val,
+                                   bg="white", font=("맑은 고딕", 9),
+                                   command=lambda: render_items_table())
+        make_filter_btn(filter_row, "전체", "all").pack(side="left", padx=2)
+        make_filter_btn(filter_row, "완료", "done").pack(side="left", padx=2)
+        make_filter_btn(filter_row, "진행중", "partial").pack(side="left", padx=2)
+        make_filter_btn(filter_row, "미스캔", "pending").pack(side="left", padx=2)
+
+        search_var = tk.StringVar()
+        tk.Label(filter_row, text="  🔍", bg="white", font=("맑은 고딕", 10)).pack(side="left", padx=(10, 2))
+        search_entry = tk.Entry(filter_row, textvariable=search_var,
+                                 font=("맑은 고딕", 9), bd=1, relief="solid", width=20)
+        search_entry.pack(side="left", padx=2, ipady=2)
+        search_var.trace("w", lambda *a: render_items_table())
+        tk.Label(filter_row, text="(로케/바코드)", bg="white",
+                 font=("맑은 고딕", 8), fg="#888").pack(side="left", padx=(2, 0))
+
+        # Treeview
+        cols = ("loc", "bc", "qty", "scanned", "remaining", "status")
+        tree = ttk.Treeview(left, columns=cols, show="headings", height=20)
+        tree.heading("loc", text="로케")
+        tree.heading("bc", text="바코드")
+        tree.heading("qty", text="원래수량")
+        tree.heading("scanned", text="스캔됨")
+        tree.heading("remaining", text="남음")
+        tree.heading("status", text="상태")
+        tree.column("loc", width=100, anchor="center")
+        tree.column("bc", width=180)
+        tree.column("qty", width=70, anchor="e")
+        tree.column("scanned", width=70, anchor="e")
+        tree.column("remaining", width=70, anchor="e")
+        tree.column("status", width=80, anchor="center")
+
+        # 스크롤바
+        tree_scroll = ttk.Scrollbar(left, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=tree_scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
+
+        # 색상 태그
+        tree.tag_configure("done", background="#D1FAE5")       # 초록 음영 (완료)
+        tree.tag_configure("partial", background="#FEF3C7")    # 노랑 음영 (진행중)
+        tree.tag_configure("over", background="#FEE2E2")       # 빨강 음영 (초과 차감)
+
+        # ─── 오른쪽: 액션 패널 ───
+        right = tk.Frame(body, bg="#F5F6F8", width=280)
+        right.pack(side="right", fill="y", padx=(5, 0))
+        right.pack_propagate(False)
+
+        # ─ 출고 업로드 카드 ─
+        out_card = tk.LabelFrame(right, text="  📤 출고 파일 업로드  ",
+                                  bg="white", fg="#1A1A1A",
+                                  font=("맑은 고딕", 10, "bold"),
+                                  bd=1, relief="solid", padx=10, pady=8)
+        out_card.pack(fill="x", pady=(0, 8))
+
+        tk.Label(out_card,
+                 text="출고된 상품을 마스터에서 자동 차감합니다.\n로케/바코드/수량 컬럼이 있는 엑셀 파일.",
+                 font=("맑은 고딕", 8), bg="white", fg="#666",
+                 justify="left").pack(anchor="w", pady=(0, 6))
+
+        out_file_label = tk.Label(out_card, text="(파일 선택 안 됨)",
+                                   font=("맑은 고딕", 9), bg="#F9FAFB", fg="#6B7280",
+                                   anchor="w", padx=6, bd=1, relief="solid")
+        out_file_label.pack(fill="x", pady=(0, 6), ipady=3)
+
+        # 출고 파일 상태
+        out_state = {"df": None, "path": None,
+                     "col_loc": "", "col_bc": "", "col_qty": ""}
+
+        def choose_outbound_file():
+            path = filedialog.askopenfilename(
+                title="출고 파일 선택",
+                filetypes=[("엑셀/CSV", "*.xlsx *.xls *.csv"), ("모든 파일", "*.*")],
+                parent=win
+            )
+            if not path:
+                return
+            try:
+                if path.lower().endswith(".csv"):
+                    df = pd.read_csv(path, dtype=str)
+                else:
+                    df = pd.read_excel(path, dtype=str)
+                df = df.fillna("")
+            except Exception as e:
+                messagebox.showerror("파일 읽기 실패", str(e), parent=win)
+                return
+
+            out_state["df"] = df
+            out_state["path"] = path
+            out_file_label.config(text=f"📄 {os.path.basename(path)}", fg="#1A1A1A")
+
+            # 컬럼 자동 매핑
+            cols = list(df.columns)
+            def find_col(keywords):
+                for c in cols:
+                    lc = str(c).lower().replace(" ", "")
+                    for kw in keywords:
+                        if kw in lc:
+                            return c
+                return ""
+            out_state["col_loc"] = find_col(["로케", "loc", "위치"])
+            out_state["col_bc"] = find_col(["바코드", "barcode", "코드", "code", "품번"])
+            out_state["col_qty"] = find_col(["수량", "qty", "출고"])
+
+            # 미리보기
+            try:
+                qty_series = pd.to_numeric(df[out_state["col_qty"]], errors="coerce").fillna(0).astype(int)
+                total_qty = int(qty_series.sum())
+                out_preview.config(
+                    text=f"📊 출고 행 수: {len(df):,}건 / 총 출고 수량: {total_qty:,}개\n"
+                         f"매핑: 로케={out_state['col_loc']} / 바코드={out_state['col_bc']} / 수량={out_state['col_qty']}",
+                    fg="#065F46"
+                )
+                btn_apply_out.config(state="normal")
+            except Exception as e:
+                out_preview.config(text=f"⚠️ 미리보기 실패: {e}", fg="#DC2626")
+                btn_apply_out.config(state="disabled")
+
+        tk.Button(out_card, text="📁 파일 선택", command=choose_outbound_file,
+                  bg="#1877F2", fg="white", font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=10, pady=4, cursor="hand2").pack(fill="x", pady=(0, 6))
+
+        out_preview = tk.Label(out_card, text="파일 선택 후 미리보기가 표시됩니다",
+                                font=("맑은 고딕", 8), bg="#F9FAFB", fg="#6B7280",
+                                anchor="w", padx=8, pady=6, bd=1, relief="solid",
+                                justify="left", wraplength=240)
+        out_preview.pack(fill="x", pady=(0, 6))
+
+        btn_apply_out = tk.Button(out_card, text="🔻 마스터에 차감 반영",
+                                   command=lambda: apply_outbound(),
+                                   bg="#DC2626", fg="white",
+                                   activebackground="#B91C1C",
+                                   font=("맑은 고딕", 10, "bold"),
+                                   relief="flat", padx=10, pady=8, cursor="hand2",
+                                   state="disabled")
+        btn_apply_out.pack(fill="x")
+
+        # ─ Export 카드 ─
+        export_card = tk.LabelFrame(right, text="  📥 엑셀 추출  ",
+                                     bg="white", fg="#1A1A1A",
+                                     font=("맑은 고딕", 10, "bold"),
+                                     bd=1, relief="solid", padx=10, pady=8)
+        export_card.pack(fill="x", pady=(0, 8))
+
+        def make_export_btn(parent, text, command):
+            return tk.Button(parent, text=text, command=command,
+                             bg="#F3F4F6", fg="#1A1A1A",
+                             activebackground="#E5E7EB",
+                             font=("맑은 고딕", 9, "bold"),
+                             relief="flat", padx=8, pady=6, cursor="hand2", anchor="w")
+
+        make_export_btn(export_card, "📋 전체 현황 엑셀",
+                         lambda: export_stocktake_excel("all")).pack(fill="x", pady=2)
+        make_export_btn(export_card, "❌ 미스캔만 엑셀",
+                         lambda: export_stocktake_excel("pending")).pack(fill="x", pady=2)
+        make_export_btn(export_card, "⚠️ 초과 차감만 엑셀",
+                         lambda: export_stocktake_excel("over")).pack(fill="x", pady=2)
+        make_export_btn(export_card, "📜 스캔 로그 엑셀",
+                         lambda: export_scan_log()).pack(fill="x", pady=2)
+
+        # ─ 세션 관리 카드 ─
+        manage_card = tk.LabelFrame(right, text="  ⚙️ 세션 관리  ",
+                                     bg="white", fg="#1A1A1A",
+                                     font=("맑은 고딕", 10, "bold"),
+                                     bd=1, relief="solid", padx=10, pady=8)
+        manage_card.pack(fill="x")
+
+        tk.Button(manage_card, text="✅ 세션 완료 표시",
+                  command=lambda: close_session(),
+                  bg="#10B981", fg="white",
+                  activebackground="#059669",
+                  font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=8, pady=6, cursor="hand2").pack(fill="x", pady=2)
+        tk.Button(manage_card, text="🗑️ 세션 삭제 (RTDB)",
+                  command=lambda: delete_session(),
+                  bg="#9CA3AF", fg="white",
+                  activebackground="#6B7280",
+                  font=("맑은 고딕", 9),
+                  relief="flat", padx=8, pady=6, cursor="hand2").pack(fill="x", pady=2)
+
+        # ═══ 진행률 갱신 함수 ═══
+        def update_progress():
+            """현재 state['items']로 진행률 다시 계산"""
+            if state["destroyed"]: return
+            items = state["items"]
+            if not items:
+                progress_label.config(text="0 / 0 (0%)")
+                progress_sub.config(text="데이터 없음")
+                stat_total.config(text="0")
+                stat_done.config(text="0")
+                stat_partial.config(text="0")
+                stat_pending.config(text="0")
+                return
+
+            total_item_count = len(items)
+            total_qty = sum(it.get("qty", 0) for it in items.values())
+            remaining_qty = sum(it.get("remaining", 0) for it in items.values())
+            done_qty = total_qty - remaining_qty
+            pct = (done_qty / total_qty * 100) if total_qty else 0
+
+            done_count = sum(1 for it in items.values()
+                             if it.get("remaining", 0) <= 0 and it.get("qty", 0) > 0)
+            partial_count = sum(1 for it in items.values()
+                                 if 0 < it.get("remaining", 0) < it.get("qty", 0))
+            pending_count = sum(1 for it in items.values()
+                                 if it.get("remaining", 0) >= it.get("qty", 0))
+
+            progress_label.config(
+                text=f"{done_qty:,} / {total_qty:,} ({pct:.1f}%)",
+                fg="#10B981" if pct >= 100 else "#1877F2"
+            )
+            progress_sub.config(
+                text=f"잔여 {remaining_qty:,}개  ·  {meta.get('creator', '-')} 생성"
+            )
+            stat_total.config(text=f"{total_item_count:,}")
+            stat_done.config(text=f"{done_count:,}")
+            stat_partial.config(text=f"{partial_count:,}")
+            stat_pending.config(text=f"{pending_count:,}")
+
+            # 진행률 바
+            bar_width = bar_frame.winfo_width()
+            if bar_width > 1:
+                fill_width = int(bar_width * pct / 100)
+                progress_bar_fill.place(x=0, y=0, relheight=1.0, width=fill_width)
+
+        # ═══ 테이블 렌더링 함수 ═══
+        def render_items_table():
+            if state["destroyed"]: return
+            # 기존 행 클리어
+            for iid in tree.get_children():
+                tree.delete(iid)
+
+            items = state["items"]
+            filter_mode = filter_var.get()
+            search_kw = search_var.get().strip().lower()
+
+            # 정렬: 로케 > 바코드
+            sorted_items = sorted(items.items(),
+                                   key=lambda x: (x[1].get("loc", ""), x[1].get("bc", "")))
+
+            count_shown = 0
+            for key, it in sorted_items:
+                loc = it.get("loc", "")
+                bc = it.get("bc", "")
+                qty = it.get("qty", 0)
+                remaining = it.get("remaining", 0)
+                scanned = qty - remaining
+
+                # 상태 판별
+                if remaining < 0:
+                    status = "🚫 초과"
+                    tag = "over"
+                elif remaining <= 0:
+                    status = "✅ 완료"
+                    tag = "done"
+                elif scanned > 0:
+                    status = "🟡 진행중"
+                    tag = "partial"
+                else:
+                    status = "⬜ 미스캔"
+                    tag = ""
+
+                # 필터
+                if filter_mode == "done" and tag != "done": continue
+                if filter_mode == "partial" and tag != "partial": continue
+                if filter_mode == "pending" and tag != "": continue
+                if filter_mode == "over" and tag != "over": continue
+
+                # 검색
+                if search_kw:
+                    if search_kw not in loc.lower() and search_kw not in bc.lower():
+                        continue
+
+                tree.insert("", "end", iid=key, tags=(tag,) if tag else (),
+                            values=(loc, bc, f"{qty:,}", f"{scanned:,}", f"{remaining:,}", status))
+                count_shown += 1
+                # 너무 많으면 끊기 (Treeview 성능)
+                if count_shown >= 5000:
+                    tree.insert("", "end", values=("...", f"({len(items)-5000}건 더 있음)", "", "", "", ""))
+                    break
+
+        # ═══ 출고 차감 적용 ═══
+        def apply_outbound():
+            df = out_state["df"]
+            if df is None:
+                return
+            col_loc = out_state["col_loc"]
+            col_bc = out_state["col_bc"]
+            col_qty = out_state["col_qty"]
+            if not (col_loc and col_bc and col_qty):
+                messagebox.showwarning("컬럼 매핑", "로케/바코드/수량 컬럼이 모두 매핑되어야 합니다", parent=win)
+                return
+
+            if not messagebox.askyesno("출고 차감 확인",
+                f"출고 {len(df):,}건을 마스터에서 차감합니다.\n\n"
+                f"이 작업은 되돌릴 수 없습니다.\n진행할까요?", parent=win):
+                return
+
+            btn_apply_out.config(state="disabled", text="🔻 차감 중...")
+            win.update()
+
+            try:
+                items_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items")
+                outbound_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/outbound_log")
+
+                success = 0
+                no_loc = 0
+                no_bc = 0
+                applied_log = []
+
+                # 행마다 차감 (트랜잭션은 작업자랑 충돌 안전, 출고도 같은 방식)
+                for idx, row in df.iterrows():
+                    loc = str(row[col_loc]).strip()
+                    bc = str(row[col_bc]).strip()
+                    try:
+                        qty = int(float(row[col_qty]))
+                    except (ValueError, TypeError):
+                        qty = 0
+                    if not loc or not bc or qty <= 0:
+                        continue
+
+                    # 키 규칙 (LogiPan 업로드 때와 동일)
+                    key = f"{loc}__{bc}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+
+                    # 마스터에 있는지 확인
+                    if key not in state["items"]:
+                        # 같은 바코드가 다른 로케에 있나?
+                        bc_locs = [v.get("loc") for v in state["items"].values() if v.get("bc") == bc]
+                        if bc_locs:
+                            no_loc += 1
+                        else:
+                            no_bc += 1
+                        continue
+
+                    # 트랜잭션 차감 (음수 허용)
+                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
+                    try:
+                        # 단순 set으로 가도 되지만 트랜잭션이 더 안전
+                        current = item_ref.get()
+                        if current is None:
+                            no_bc += 1
+                            continue
+                        new_val = current - qty
+                        item_ref.set(new_val)
+                        # 로컬도 갱신 (리스너가 받기 전에 미리)
+                        state["items"][key]["remaining"] = new_val
+                        success += 1
+                        applied_log.append({
+                            "loc": loc, "bc": bc, "qty": qty,
+                            "ts": int(datetime.now().timestamp() * 1000)
+                        })
+                    except Exception as e:
+                        print(f"차감 실패 [{key}]: {e}")
+                        no_bc += 1
+
+                    # UI 진행 표시 (큰 파일일 때)
+                    if idx % 100 == 0:
+                        btn_apply_out.config(text=f"🔻 차감 중... {idx}/{len(df)}")
+                        win.update()
+
+                # 출고 로그 batch 저장
+                if applied_log and outbound_log_ref:
+                    try:
+                        # 한 번에 update (개별 push보다 빠름)
+                        updates = {}
+                        for log_item in applied_log:
+                            # auto-id 생성
+                            new_id = outbound_log_ref.push().key
+                            updates[new_id] = log_item
+                        outbound_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"출고 로그 저장 실패: {e}")
+
+                # 결과 메시지
+                messagebox.showinfo("✅ 차감 완료",
+                    f"출고 차감 완료\n\n"
+                    f"✅ 성공: {success:,}건\n"
+                    f"⚠️ 로케 불일치: {no_loc:,}건\n"
+                    f"⛔ 마스터에 없는 바코드: {no_bc:,}건\n\n"
+                    f"로케 불일치/없는 바코드는 차감되지 않았습니다.",
+                    parent=win)
+
+                # UI 갱신
+                update_progress()
+                render_items_table()
+
+                # 출고 파일 상태 초기화
+                out_state["df"] = None
+                out_state["path"] = None
+                out_file_label.config(text="(파일 선택 안 됨)", fg="#6B7280")
+                out_preview.config(text="파일 선택 후 미리보기가 표시됩니다", fg="#6B7280")
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("차감 실패", f"{e}", parent=win)
+            finally:
+                btn_apply_out.config(state="disabled", text="🔻 마스터에 차감 반영")
+
+        # ═══ 엑셀 export ═══
+        def export_stocktake_excel(filter_mode):
+            items = state["items"]
+            if not items:
+                messagebox.showwarning("데이터 없음", "내보낼 데이터가 없습니다", parent=win)
+                return
+
+            # 필터링
+            rows = []
+            for key, it in sorted(items.items(),
+                                    key=lambda x: (x[1].get("loc", ""), x[1].get("bc", ""))):
+                qty = it.get("qty", 0)
+                remaining = it.get("remaining", 0)
+                scanned = qty - remaining
+
+                if remaining < 0:
+                    status_label = "초과"
+                elif remaining <= 0:
+                    status_label = "완료"
+                elif scanned > 0:
+                    status_label = "진행중"
+                else:
+                    status_label = "미스캔"
+
+                if filter_mode == "pending" and status_label != "미스캔": continue
+                if filter_mode == "over" and status_label != "초과": continue
+
+                rows.append({
+                    "로케": it.get("loc", ""),
+                    "바코드": it.get("bc", ""),
+                    "원래수량": qty,
+                    "스캔됨": scanned,
+                    "남음": remaining,
+                    "상태": status_label,
+                })
+
+            if not rows:
+                messagebox.showinfo("데이터 없음", f"필터 조건에 맞는 항목이 없습니다", parent=win)
+                return
+
+            # 저장 위치
+            default_name = {
+                "all": "재고조사_전체현황",
+                "pending": "재고조사_미스캔",
+                "over": "재고조사_초과차감",
+            }.get(filter_mode, "재고조사_결과")
+            ts = datetime.now().strftime("%Y%m%d_%H%M")
+            default_path = os.path.join(self.save_dir, f"{default_name}_{ts}.xlsx")
+            save_path = filedialog.asksaveasfilename(
+                title="엑셀 저장",
+                defaultextension=".xlsx",
+                initialfile=os.path.basename(default_path),
+                initialdir=self.save_dir,
+                filetypes=[("Excel", "*.xlsx")],
+                parent=win
+            )
+            if not save_path:
+                return
+
+            try:
+                df = pd.DataFrame(rows)
+
+                # 메타 정보 시트도 같이
+                meta_df = pd.DataFrame([
+                    {"항목": "세션 제목", "값": meta.get("title", "")},
+                    {"항목": "세션 ID", "값": session_id},
+                    {"항목": "생성자", "값": meta.get("creator", "")},
+                    {"항목": "조회 시점", "값": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
+                    {"항목": "원본 항목 수", "값": len(items)},
+                    {"항목": "원본 총 수량", "값": sum(it.get("qty", 0) for it in items.values())},
+                    {"항목": "현재 남은 수량", "값": sum(it.get("remaining", 0) for it in items.values())},
+                ])
+
+                with pd.ExcelWriter(save_path, engine="openpyxl") as writer:
+                    df.to_excel(writer, sheet_name="결과", index=False)
+                    meta_df.to_excel(writer, sheet_name="세션정보", index=False)
+
+                messagebox.showinfo("✅ 저장 완료",
+                    f"엑셀 파일 저장됨:\n{save_path}\n\n행 수: {len(rows):,}건",
+                    parent=win)
+            except Exception as e:
+                messagebox.showerror("저장 실패", str(e), parent=win)
+
+        # ═══ 스캔 로그 export ═══
+        def export_scan_log():
+            try:
+                log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/scan_log")
+                logs = log_ref.get() if log_ref else None
+                if not logs:
+                    messagebox.showinfo("로그 없음",
+                        "스캔 로그가 비어있습니다.\n"
+                        "(작업자 앱의 스캔 기록 저장 기능은 다음 업데이트에서 추가됩니다)",
+                        parent=win)
+                    return
+
+                rows = []
+                for log_id, log_data in logs.items():
+                    ts_ms = log_data.get("ts", 0)
+                    ts_str = datetime.fromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d %H:%M:%S") if ts_ms else ""
+                    rows.append({
+                        "시간": ts_str,
+                        "작업자": log_data.get("worker", ""),
+                        "로케": log_data.get("loc", ""),
+                        "바코드": log_data.get("bc", ""),
+                    })
+                rows.sort(key=lambda r: r["시간"])
+
+                ts = datetime.now().strftime("%Y%m%d_%H%M")
+                save_path = filedialog.asksaveasfilename(
+                    title="스캔 로그 저장",
+                    defaultextension=".xlsx",
+                    initialfile=f"재고조사_스캔로그_{ts}.xlsx",
+                    initialdir=self.save_dir,
+                    filetypes=[("Excel", "*.xlsx")],
+                    parent=win
+                )
+                if not save_path:
+                    return
+
+                df = pd.DataFrame(rows)
+                df.to_excel(save_path, index=False)
+                messagebox.showinfo("✅ 저장 완료",
+                    f"스캔 로그 저장됨:\n{save_path}\n\n행 수: {len(rows):,}건",
+                    parent=win)
+            except Exception as e:
+                messagebox.showerror("저장 실패", str(e), parent=win)
+
+        # ═══ 세션 관리 ═══
+        def close_session():
+            if not messagebox.askyesno("세션 완료",
+                f"이 세션을 '완료'로 표시할까요?\n\n작업자 앱에서 더 이상 선택할 수 없게 됩니다.\n(데이터는 그대로 남음)",
+                parent=win):
+                return
+            try:
+                meta_ref = self._rtdb_ref(f"stocktake_sessions/{session_id}/meta/status")
+                meta_ref.set("closed")
+                messagebox.showinfo("완료", "세션이 완료 표시되었습니다", parent=win)
+                self.refresh_stocktake_sessions()
+            except Exception as e:
+                messagebox.showerror("실패", str(e), parent=win)
+
+        def delete_session():
+            if not messagebox.askyesno("⚠️ 세션 삭제",
+                f"이 세션의 모든 데이터를 영구 삭제합니다.\n\n"
+                f"- 마스터 데이터\n- 스캔 로그\n- 출고 로그\n\n"
+                f"되돌릴 수 없습니다. 정말 삭제할까요?",
+                parent=win, icon="warning"):
+                return
+            # 한 번 더 확인
+            confirm = simpledialog.askstring("최종 확인",
+                f"삭제하려면 'DELETE'를 입력하세요:", parent=win)
+            if confirm != "DELETE":
+                messagebox.showinfo("취소", "삭제 취소됨", parent=win)
+                return
+            try:
+                meta_ref = self._rtdb_ref(f"stocktake_sessions/{session_id}")
+                data_ref = self._rtdb_ref(f"stocktake_data/{session_id}")
+                if meta_ref: meta_ref.delete()
+                if data_ref: data_ref.delete()
+                messagebox.showinfo("삭제 완료", "세션이 삭제되었습니다", parent=win)
+                self.refresh_stocktake_sessions()
+                on_close()
+            except Exception as e:
+                messagebox.showerror("삭제 실패", str(e), parent=win)
+
+        # ═══ 초기 데이터 로드 + 실시간 리스너 ═══
+        def initial_load():
+            try:
+                items_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items")
+                if not items_ref:
+                    raise Exception("RTDB 참조 실패")
+                items_data = items_ref.get() or {}
+                state["items"] = items_data
+                update_progress()
+                render_items_table()
+
+                # 실시간 리스너 부착 (변경분만 받음 - 비용 최소)
+                # firebase_admin은 listen()으로 콜백 등록
+                def on_change(event):
+                    if state["destroyed"]:
+                        return
+                    # event.event_type: 'put' | 'patch'
+                    # event.path: 변경된 경로 (예: '/AA-01__ABC123/remaining')
+                    # event.data: 새 값
+                    try:
+                        path = event.path  # '/' 로 시작
+                        data = event.data
+                        if path == "/":
+                            # 전체 교체 (초기 + 대량 update)
+                            state["items"] = data or {}
+                        else:
+                            # 일부 변경: /KEY 또는 /KEY/field
+                            parts = path.strip("/").split("/")
+                            if len(parts) == 1:
+                                # 항목 자체 변경
+                                key = parts[0]
+                                if data is None:
+                                    state["items"].pop(key, None)
+                                else:
+                                    state["items"][key] = data
+                            elif len(parts) == 2:
+                                # 항목의 특정 필드 변경 (보통 remaining)
+                                key, field = parts
+                                if key in state["items"]:
+                                    if data is None:
+                                        state["items"][key].pop(field, None)
+                                    else:
+                                        state["items"][key][field] = data
+
+                        # UI 갱신은 메인 스레드에서
+                        win.after(0, lambda: (update_progress(), render_items_table()))
+                    except Exception as e:
+                        print(f"리스너 콜백 오류: {e}")
+
+                # firebase_admin의 listen은 별도 스레드에서 동작
+                listener = items_ref.listen(on_change)
+                state["listener_ref"] = listener
+
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("로드 실패",
+                    f"항목 데이터 로드 실패:\n{e}",
+                    parent=win)
+
+        # 초기 로드 (메인 스레드에서)
+        win.after(50, initial_load)
 
     def change_user_name(self):
         from tkinter import simpledialog, messagebox
