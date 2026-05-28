@@ -9,7 +9,7 @@ import re
 import urllib.request
 import urllib.error
 import firebase_admin
-from firebase_admin import credentials, firestore, messaging
+from firebase_admin import credentials, firestore, messaging, storage, db as rtdb
 
 # [부트스트랩] slack_integration.py 모듈 자동 다운로드
 # 구버전 updater.py가 이 파일을 못 받았을 때를 대비한 안전장치.
@@ -90,11 +90,46 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             base_path = os.path.dirname(os.path.abspath(__file__))
             key_path = os.path.join(base_path, "key.json")
 
+            # [추가] key.json에서 project_id 읽어서 Storage 버킷명 + Realtime DB URL 만들기
+            storage_bucket_name = None
+            project_id = ""
+            try:
+                with open(key_path, "r", encoding="utf-8") as f:
+                    key_data = json.load(f)
+                    project_id = key_data.get("project_id", "")
+                    if project_id:
+                        storage_bucket_name = f"{project_id}.appspot.com"
+            except Exception as e:
+                print(f"⚠️ project_id 추출 실패: {e}")
+
+            # [추가] Realtime DB URL - 직접 박음 (사용자가 알려준 URL)
+            # 나중에 다른 프로젝트 쓰게 되면 여기만 바꾸면 됨
+            rtdb_url = "https://logipan-2026-default-rtdb.asia-southeast1.firebasedatabase.app"
+            self._rtdb_url = rtdb_url
+            self._rtdb_project_id = project_id
+
             # 이미 초기화된 경우 재초기화하지 않음 (중복 init 방지)
             if not firebase_admin._apps:
                 cred = credentials.Certificate(key_path)
-                firebase_admin.initialize_app(cred)
+                init_options = {}
+                if storage_bucket_name:
+                    init_options["storageBucket"] = storage_bucket_name
+                if rtdb_url:
+                    init_options["databaseURL"] = rtdb_url
+                firebase_admin.initialize_app(cred, init_options)
             self.db = firestore.client()
+            # [추가] Storage 버킷 핸들 (재고조사용 - 백업/내보내기)
+            try:
+                self.bucket = storage.bucket()
+                print(f"✅ Storage 버킷 연결: {storage_bucket_name}")
+            except Exception as e:
+                self.bucket = None
+                print(f"⚠️ Storage 버킷 연결 실패: {e}")
+            # [추가] Realtime DB 참조 (실제 연결 시도는 첫 사용 시)
+            if rtdb_url:
+                print(f"✅ Realtime DB URL 설정: {rtdb_url}")
+            else:
+                print("⚠️ Realtime DB URL 없음 - 재고조사 사용 시 설정 필요")
             print("✅ 구글 비밀기지 연결 성공!")
         except Exception as e:
             print(f"❌ 연결 실패: {e}")
@@ -208,6 +243,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🆕 마스터")
         self.t_rt = ttk.Frame(self.nb); self.nb.add(self.t_rt, text="🔄 RT입고")
         self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍 재고파악")
+        self.t_stock = ttk.Frame(self.nb); self.nb.add(self.t_stock, text="📋 재고조사")
         self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
         self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
         self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊 마감재고")
@@ -219,6 +255,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.setup_rt_inbound()
         self.setup_closing_stock()
         self.setup_inventory_check_v95()
+        self.setup_stocktake()
         self.setup_field_comm(self.t_field)
         self.setup_board_system(self.t_board)
 
@@ -8888,6 +8925,498 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         # 우선 chat_tree 없으면 동작 안 하니 selected_id만 _direct_selected_id에 저장하고
         # on_message_double_click을 살짝 바꿔서 _direct_selected_id 우선 사용하게 함
         self.on_message_double_click(None)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # ─── [재고조사] 탭 - 마스터 업로드 & 세션 관리 ───
+    # ═══════════════════════════════════════════════════════════════════
+    # 개요:
+    #  1. 엑셀 파일 받음 (로케 / 바코드 / 수량)
+    #  2. master.json으로 변환 → Firebase Storage에 업로드
+    #     경로: stocktake/<session_id>/master.json
+    #  3. Firestore에 세션 메타 1건 저장 (제목/생성자/생성일시/통계)
+    #  4. 작업자 PWA가 그 master.json 다운로드해서 휴대폰에 캐시
+    #  5. 작업자 스캔 결과는 stocktake/<session_id>/scans/<worker>_<n>.json 로 누적
+    #  6. 관리자는 새로고침 시 그 폴더 listAll() → 합쳐서 진행률 표시
+    #
+    # Firestore 사용:
+    #  - 세션 메타데이터만 (쓰기 1회/세션, 읽기 1회/조회)
+    #  - 스캔은 Storage에 누적 → Firestore 비용 0
+    # ═══════════════════════════════════════════════════════════════════
+
+    def setup_stocktake(self):
+        """재고조사 탭 - 마스터 업로드, 세션 관리, 진행률 확인"""
+        container = tk.Frame(self.t_stock, bg="#F5F6F8")
+        container.pack(fill="both", expand=True)
+
+        # ========== [상단 헤더] ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="📋", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+    # ═══════════════════════════════════════════════════════════════════
+    # ─── [재고조사] 탭 - Realtime Database 기반 ───
+    # ═══════════════════════════════════════════════════════════════════
+    # 구조:
+    #   RTDB 트리:
+    #     /stocktake_sessions/<sid>/
+    #         meta: {title, creator, created_at, status, total_rows, total_qty}
+    #     /stocktake_data/<sid>/
+    #         items/<key>: {loc, bc, qty, remaining}
+    #         scan_log/<auto_id>: {worker, bc, loc, ts}
+    #         outbound_log/<auto_id>: {bc, loc, qty, ts}
+    #
+    # 분리 이유:
+    #   - sessions(메타)는 항상 listAll 하니까 가볍게 유지
+    #   - data(items/log)는 세션 열 때만 다운로드 (큰 데이터)
+    #
+    # 키 형식: <loc>__<bc>  (로케+바코드 조합이 고유)
+    # ═══════════════════════════════════════════════════════════════════
+
+    def setup_stocktake(self):
+        """재고조사 탭 - 마스터 업로드, 세션 관리"""
+        container = tk.Frame(self.t_stock, bg="#F5F6F8")
+        container.pack(fill="both", expand=True)
+
+        # ========== 상단 헤더 ==========
+        header_frame = tk.Frame(container, bg="#F5F6F8")
+        header_frame.pack(side="top", fill="x", padx=24, pady=(16, 8))
+        title_left = tk.Frame(header_frame, bg="#F5F6F8")
+        title_left.pack(side="left")
+        tk.Label(title_left, text="📋", font=("맑은 고딕", 22),
+                 bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        title_text_box = tk.Frame(title_left, bg="#F5F6F8")
+        title_text_box.pack(side="left")
+        tk.Label(title_text_box, text="재고조사",
+                 font=("맑은 고딕", 15, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(anchor="w")
+        tk.Label(title_text_box, text="마스터 업로드 → 작업자 스캔 → 실시간 진행 → 미스캔 추출",
+                 font=("맑은 고딕", 8),
+                 bg="#F5F6F8", fg="#888").pack(anchor="w")
+
+        # 우측 새로고침
+        tk.Button(header_frame, text="🔄 세션목록 새로고침",
+                  command=self.refresh_stocktake_sessions,
+                  bg="#F3F4F6", fg="#374151",
+                  activebackground="#E5E7EB",
+                  font=("맑은 고딕", 9),
+                  relief="flat", padx=10, pady=5,
+                  cursor="hand2").pack(side="right", anchor="se")
+
+        # ========== 좌우 분할 ==========
+        main_pane = tk.Frame(container, bg="#F5F6F8")
+        main_pane.pack(fill="both", expand=True, padx=18, pady=(6, 14))
+
+        # ─── 왼쪽: 새 세션 만들기 ───
+        left_card = tk.LabelFrame(main_pane, text="  ➕ 새 재고조사 세션 만들기  ",
+                                   bg="white", fg="#1A1A1A",
+                                   font=("맑은 고딕", 10, "bold"),
+                                   bd=1, relief="solid", padx=12, pady=10)
+        left_card.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        tk.Label(left_card, text="📌 세션 제목 (예: 2025년 5월 정기조사)",
+                 font=("맑은 고딕", 9), bg="white", fg="#374151").pack(anchor="w", pady=(2, 2))
+        self.stock_session_title = tk.Entry(left_card, font=("맑은 고딕", 10), bd=1, relief="solid")
+        self.stock_session_title.pack(fill="x", pady=(0, 8), ipady=4)
+
+        tk.Label(left_card, text="📂 마스터 재고 파일 (엑셀/CSV)",
+                 font=("맑은 고딕", 9), bg="white", fg="#374151").pack(anchor="w", pady=(2, 2))
+        file_row = tk.Frame(left_card, bg="white")
+        file_row.pack(fill="x", pady=(0, 8))
+        self.stock_file_label = tk.Label(file_row, text="(파일 선택 안 됨)",
+                                          font=("맑은 고딕", 9), bg="#F9FAFB", fg="#6B7280",
+                                          anchor="w", padx=8, bd=1, relief="solid")
+        self.stock_file_label.pack(side="left", fill="x", expand=True, ipady=4)
+        tk.Button(file_row, text="📁 찾기", command=self.choose_stock_master_file,
+                  bg="#1877F2", fg="white", font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=12, pady=4, cursor="hand2").pack(side="left", padx=(4, 0))
+
+        # 컬럼 매핑
+        map_frame = tk.LabelFrame(left_card, text="  컬럼 매핑 (자동 감지됨)  ",
+                                   bg="white", fg="#6B7280",
+                                   font=("맑은 고딕", 8), bd=1, relief="solid", padx=8, pady=6)
+        map_frame.pack(fill="x", pady=(4, 8))
+
+        def make_map_row(parent, label, var_attr):
+            row = tk.Frame(parent, bg="white")
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=label, font=("맑은 고딕", 9), bg="white",
+                     fg="#374151", width=10, anchor="w").pack(side="left")
+            cb = ttk.Combobox(row, font=("맑은 고딕", 9), state="readonly")
+            cb.pack(side="left", fill="x", expand=True)
+            setattr(self, var_attr, cb)
+
+        make_map_row(map_frame, "로케 컬럼", "stock_col_loc")
+        make_map_row(map_frame, "바코드 컬럼", "stock_col_bc")
+        make_map_row(map_frame, "수량 컬럼", "stock_col_qty")
+
+        # 미리보기
+        self.stock_preview_label = tk.Label(left_card,
+                                             text="📊 파일 분석 결과가 여기 표시됩니다",
+                                             font=("맑은 고딕", 9), bg="#F9FAFB", fg="#6B7280",
+                                             anchor="w", padx=10, pady=8, bd=1, relief="solid",
+                                             justify="left")
+        self.stock_preview_label.pack(fill="x", pady=(0, 10))
+
+        # 세션 시작 버튼
+        self.stock_create_btn = tk.Button(left_card,
+                                           text="🚀 세션 시작 (Realtime DB 업로드)",
+                                           command=self.create_stocktake_session,
+                                           bg="#10B981", fg="white",
+                                           activebackground="#059669",
+                                           font=("맑은 고딕", 11, "bold"),
+                                           relief="flat", padx=14, pady=10, cursor="hand2",
+                                           state="disabled")
+        self.stock_create_btn.pack(fill="x")
+
+        # ─── 오른쪽: 활성 세션 목록 ───
+        right_card = tk.LabelFrame(main_pane, text="  📂 활성 세션 목록  ",
+                                    bg="white", fg="#1A1A1A",
+                                    font=("맑은 고딕", 10, "bold"),
+                                    bd=1, relief="solid", padx=12, pady=10)
+        right_card.pack(side="left", fill="both", expand=True, padx=(8, 0))
+
+        cols = ("title", "creator", "created", "items", "status")
+        self.stock_session_tree = ttk.Treeview(right_card, columns=cols, show="headings", height=12)
+        self.stock_session_tree.heading("title", text="세션 제목")
+        self.stock_session_tree.heading("creator", text="생성자")
+        self.stock_session_tree.heading("created", text="생성일시")
+        self.stock_session_tree.heading("items", text="항목수")
+        self.stock_session_tree.heading("status", text="상태")
+        self.stock_session_tree.column("title", width=180)
+        self.stock_session_tree.column("creator", width=70, anchor="center")
+        self.stock_session_tree.column("created", width=130, anchor="center")
+        self.stock_session_tree.column("items", width=60, anchor="e")
+        self.stock_session_tree.column("status", width=60, anchor="center")
+        self.stock_session_tree.pack(fill="both", expand=True, pady=(0, 6))
+        self.stock_session_tree.bind("<Double-1>", self.on_stocktake_session_double_click)
+
+        # 하단 액션 행
+        tk.Label(right_card,
+                 text="💡 세션 더블클릭 → 상세보기 (다음 단계에서 진행률/엑셀)",
+                 font=("맑은 고딕", 8), bg="white", fg="#9CA3AF").pack(anchor="w")
+
+        # 내부 상태
+        self._stocktake_loaded_df = None
+        self._stocktake_file_path = None
+
+        # 초기 세션 목록 로드
+        try:
+            self.refresh_stocktake_sessions()
+        except Exception as e:
+            print(f"⚠️ 세션 목록 초기 로드 실패: {e}")
+
+    # ─── RTDB 참조 유틸 ─────────────────────────
+    def _rtdb_ref(self, path):
+        """Realtime DB 참조 얻기. URL 없으면 None 반환."""
+        if not getattr(self, "_rtdb_url", None):
+            return None
+        try:
+            return rtdb.reference(path, url=self._rtdb_url)
+        except Exception as e:
+            print(f"⚠️ RTDB 참조 실패: {e}")
+            return None
+
+    def choose_stock_master_file(self):
+        """마스터 파일 선택 + 자동 분석"""
+        path = filedialog.askopenfilename(
+            title="재고 마스터 파일 선택",
+            filetypes=[("엑셀/CSV", "*.xlsx *.xls *.csv"), ("모든 파일", "*.*")]
+        )
+        if not path:
+            return
+
+        self._stocktake_file_path = path
+        fname = os.path.basename(path)
+        self.stock_file_label.config(text=f"📄 {fname}", fg="#1A1A1A")
+
+        try:
+            if path.lower().endswith(".csv"):
+                df = pd.read_csv(path, dtype=str)
+            else:
+                df = pd.read_excel(path, dtype=str)
+            df = df.fillna("")
+        except Exception as e:
+            messagebox.showerror("파일 읽기 실패", f"파일을 열 수 없습니다:\n{e}")
+            self._stocktake_loaded_df = None
+            self.stock_create_btn.config(state="disabled")
+            return
+
+        self._stocktake_loaded_df = df
+
+        cols = list(df.columns)
+        for cb in (self.stock_col_loc, self.stock_col_bc, self.stock_col_qty):
+            cb["values"] = cols
+            cb.set("")
+
+        def find_col(keywords):
+            for c in cols:
+                lc = str(c).lower().replace(" ", "")
+                for kw in keywords:
+                    if kw in lc:
+                        return c
+            return ""
+
+        loc_col = find_col(["로케", "loc", "위치", "location"])
+        bc_col = find_col(["바코드", "barcode", "코드", "code", "품번"])
+        qty_col = find_col(["수량", "qty", "재고", "stock"])
+
+        if loc_col: self.stock_col_loc.set(loc_col)
+        if bc_col: self.stock_col_bc.set(bc_col)
+        if qty_col: self.stock_col_qty.set(qty_col)
+
+        self._update_stock_preview()
+        for cb in (self.stock_col_loc, self.stock_col_bc, self.stock_col_qty):
+            cb.bind("<<ComboboxSelected>>", lambda e: self._update_stock_preview())
+
+    def _update_stock_preview(self):
+        df = self._stocktake_loaded_df
+        if df is None:
+            return
+        loc_col = self.stock_col_loc.get()
+        bc_col = self.stock_col_bc.get()
+        qty_col = self.stock_col_qty.get()
+        if not (loc_col and bc_col and qty_col):
+            self.stock_preview_label.config(
+                text="⚠️ 로케/바코드/수량 컬럼을 모두 선택하세요", fg="#DC2626")
+            self.stock_create_btn.config(state="disabled")
+            return
+        try:
+            qty_series = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
+            total_rows = len(df)
+            total_qty = int(qty_series.sum())
+            unique_loc = df[loc_col].astype(str).str.strip().replace("", pd.NA).dropna().nunique()
+            unique_bc = df[bc_col].astype(str).str.strip().replace("", pd.NA).dropna().nunique()
+            preview_text = (
+                f"📊 분석 결과\n"
+                f"  • 행 수: {total_rows:,}건\n"
+                f"  • 총 수량: {total_qty:,}개\n"
+                f"  • 로케 수: {unique_loc:,}개\n"
+                f"  • 바코드 종류: {unique_bc:,}개"
+            )
+            self.stock_preview_label.config(text=preview_text, fg="#065F46")
+            self.stock_create_btn.config(state="normal")
+        except Exception as e:
+            self.stock_preview_label.config(text=f"⚠️ 미리보기 실패: {e}", fg="#DC2626")
+            self.stock_create_btn.config(state="disabled")
+
+    def create_stocktake_session(self):
+        """세션 시작 - 마스터를 Realtime DB에 통째 업로드"""
+        if not getattr(self, "_rtdb_url", None):
+            messagebox.showerror("Realtime DB 미설정",
+                "Firebase Realtime Database URL이 설정되지 않았습니다.\n"
+                "코드 상단의 rtdb_url 값을 확인하세요.")
+            return
+
+        df = self._stocktake_loaded_df
+        if df is None:
+            messagebox.showwarning("파일 없음", "먼저 마스터 파일을 선택하세요")
+            return
+
+        title = self.stock_session_title.get().strip()
+        if not title:
+            messagebox.showwarning("제목 없음", "세션 제목을 입력하세요")
+            self.stock_session_title.focus_set()
+            return
+
+        loc_col = self.stock_col_loc.get()
+        bc_col = self.stock_col_bc.get()
+        qty_col = self.stock_col_qty.get()
+
+        # 데이터 변환
+        items = {}
+        try:
+            for _, row in df.iterrows():
+                loc = str(row[loc_col]).strip()
+                bc = str(row[bc_col]).strip()
+                qty_raw = row[qty_col]
+                try:
+                    qty = int(float(qty_raw))
+                except (ValueError, TypeError):
+                    qty = 0
+                if not bc or qty <= 0:
+                    continue
+                # RTDB 키 규칙: $#[]/. 사용 불가 → 안전한 문자로 치환
+                # 로케+바코드 조합 키. 같은 로케+바코드가 여러 행이면 수량 합산.
+                key = f"{loc}__{bc}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+                if key in items:
+                    items[key]["qty"] += qty
+                    items[key]["remaining"] += qty
+                else:
+                    items[key] = {
+                        "loc": loc,
+                        "bc": bc,
+                        "qty": qty,
+                        "remaining": qty,
+                    }
+        except Exception as e:
+            messagebox.showerror("변환 실패", f"마스터 데이터 변환 실패:\n{e}")
+            return
+
+        if not items:
+            messagebox.showwarning("데이터 없음", "유효한 마스터 데이터가 없습니다")
+            return
+
+        total_rows = len(items)
+        total_qty = sum(it["qty"] for it in items.values())
+
+        if not messagebox.askyesno("세션 시작 확인",
+            f"📋 재고조사 세션을 시작합니다.\n\n"
+            f"제목: {title}\n"
+            f"항목 수: {total_rows:,}개\n"
+            f"총 수량: {total_qty:,}개\n\n"
+            f"※ Realtime DB에 업로드합니다 (약 5~30초 소요)\n"
+            f"진행할까요?"):
+            return
+
+        # 세션 ID 생성
+        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        creator = getattr(self, "current_user", "관리자")
+
+        # 진행 메시지
+        self.stock_create_btn.config(state="disabled", text="📤 업로드 중...")
+        self.root.update()
+
+        try:
+            # 1) 메타데이터 먼저 (작은 데이터)
+            meta_ref = self._rtdb_ref(f"stocktake_sessions/{session_id}/meta")
+            if not meta_ref:
+                raise Exception("RTDB 참조 실패")
+            meta_ref.set({
+                "title": title,
+                "creator": creator,
+                "created_at": int(datetime.now().timestamp() * 1000),  # ms
+                "status": "active",
+                "total_rows": total_rows,
+                "total_qty": total_qty,
+            })
+            print(f"✅ 메타 업로드 완료: stocktake_sessions/{session_id}/meta")
+
+            # 2) items 업로드 (큰 데이터)
+            # 한 번에 다 쓰면 RTDB가 거부할 수 있으므로 5000건씩 청크로 나눠서 update
+            items_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items")
+            if not items_ref:
+                raise Exception("items 참조 실패")
+            CHUNK = 5000
+            keys = list(items.keys())
+            uploaded = 0
+            for i in range(0, len(keys), CHUNK):
+                chunk_keys = keys[i:i+CHUNK]
+                chunk_data = {k: items[k] for k in chunk_keys}
+                items_ref.update(chunk_data)
+                uploaded += len(chunk_data)
+                # 진행 표시
+                self.stock_create_btn.config(text=f"📤 업로드 중... {uploaded:,}/{total_rows:,}")
+                self.root.update()
+            print(f"✅ items 업로드 완료: {uploaded:,}건")
+
+            # 3) Firestore에도 메타데이터 미러링 (세션 목록 빠른 조회용)
+            # → 안 하기로 함. RTDB에서 직접 읽음. Firestore 비용 절약.
+
+            messagebox.showinfo("✅ 세션 시작 완료",
+                f"재고조사 세션이 시작되었습니다.\n\n"
+                f"세션 ID: {session_id}\n"
+                f"제목: {title}\n"
+                f"항목: {total_rows:,}건 / 수량 {total_qty:,}개\n\n"
+                f"작업자 앱에서 이 세션을 선택해 스캔을 시작하세요.")
+
+            # 입력 초기화
+            self.stock_session_title.delete(0, tk.END)
+            self.stock_file_label.config(text="(파일 선택 안 됨)", fg="#6B7280")
+            self._stocktake_loaded_df = None
+            self._stocktake_file_path = None
+            for cb in (self.stock_col_loc, self.stock_col_bc, self.stock_col_qty):
+                cb.set("")
+                cb["values"] = []
+            self.stock_preview_label.config(
+                text="📊 파일 분석 결과가 여기 표시됩니다", fg="#6B7280")
+
+            self.refresh_stocktake_sessions()
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            messagebox.showerror("업로드 실패",
+                f"Realtime DB 업로드 실패:\n{e}\n\n"
+                f"확인 사항:\n"
+                f"1) Firebase 콘솔에서 Realtime Database 활성화 됐는지\n"
+                f"2) key.json의 서비스 계정에 DB 쓰기 권한 있는지\n"
+                f"3) URL 정확한지: {self._rtdb_url}")
+        finally:
+            self.stock_create_btn.config(state="normal", text="🚀 세션 시작 (Realtime DB 업로드)")
+
+    def refresh_stocktake_sessions(self):
+        """Realtime DB에서 활성 세션 목록 가져와 Treeview에 그리기"""
+        if not hasattr(self, "stock_session_tree"):
+            return
+
+        # 기존 항목 클리어
+        for iid in self.stock_session_tree.get_children():
+            self.stock_session_tree.delete(iid)
+
+        if not getattr(self, "_rtdb_url", None):
+            print("⚠️ RTDB URL 없음 - 세션 목록 로드 스킵")
+            return
+
+        try:
+            # /stocktake_sessions 전체 한 번에 받기 (메타만이라 가벼움)
+            sessions_ref = self._rtdb_ref("stocktake_sessions")
+            if not sessions_ref:
+                return
+            sessions = sessions_ref.get() or {}
+
+            # 생성일시 내림차순 정렬
+            session_list = []
+            for sid, sdata in sessions.items():
+                meta = (sdata or {}).get("meta", {})
+                if not meta:
+                    continue
+                session_list.append((sid, meta))
+            session_list.sort(key=lambda x: x[1].get("created_at", 0), reverse=True)
+
+            for sid, meta in session_list[:50]:  # 최근 50개만
+                created_at_ms = meta.get("created_at", 0)
+                if created_at_ms:
+                    try:
+                        created_str = datetime.fromtimestamp(created_at_ms / 1000).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        created_str = ""
+                else:
+                    created_str = ""
+                status = meta.get("status", "active")
+                status_label = {"active": "🟢 진행중", "closed": "✓ 완료"}.get(status, status)
+                self.stock_session_tree.insert(
+                    "", "end",
+                    iid=sid,
+                    values=(
+                        meta.get("title", ""),
+                        meta.get("creator", ""),
+                        created_str,
+                        f"{meta.get('total_rows', 0):,}",
+                        status_label,
+                    )
+                )
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            print(f"⚠️ 세션 목록 로드 실패: {e}")
+
+    def on_stocktake_session_double_click(self, event):
+        """세션 더블클릭 → 진행 상황 (4단계에서 구현)"""
+        sel = self.stock_session_tree.selection()
+        if not sel:
+            return
+        session_id = sel[0]
+        values = self.stock_session_tree.item(session_id, "values")
+        title = values[0] if values else session_id
+        messagebox.showinfo("진행 상황 (개발 중)",
+            f"세션: {title}\nID: {session_id}\n\n"
+            f"진행 상황 보기 / 엑셀 추출은\n"
+            f"4단계 작업에서 추가됩니다.\n\n"
+            f"지금은 작업자 앱(2단계)에서 이 세션 선택해 스캔만 가능합니다.")
 
     def change_user_name(self):
         from tkinter import simpledialog, messagebox
