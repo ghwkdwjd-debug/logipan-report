@@ -10165,42 +10165,44 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 messagebox.showerror("삭제 실패", str(e), parent=win)
 
         # ═══ 초기 데이터 로드 + 실시간 리스너 ═══
+        # [최적화] get()으로 한 번 받고 listen()으로 또 받는 중복 다운로드 제거.
+        #         listen()의 초기 스냅샷(event.path == "/")이 그 역할을 함.
         def initial_load():
             try:
                 items_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items")
                 if not items_ref:
                     raise Exception("RTDB 참조 실패")
-                items_data = items_ref.get() or {}
-                state["items"] = items_data
-                update_progress()
-                render_items_table()
 
-                # 실시간 리스너 부착 (변경분만 받음 - 비용 최소)
-                # firebase_admin은 listen()으로 콜백 등록
+                # 초기 상태: 빈 dict로 시작 → listen이 초기 스냅샷을 보내주면 채움
+                state["items"] = {}
+                update_progress()  # 0/0 표시
+                # render_items_table은 데이터 받은 후에 호출 (빈 테이블 그릴 필요 없음)
+
+                # 실시간 리스너 부착 (초기 스냅샷 + 이후 변경분 모두 받음)
                 def on_change(event):
                     if state["destroyed"]:
                         return
                     # event.event_type: 'put' | 'patch'
-                    # event.path: 변경된 경로 (예: '/AA-01__ABC123/remaining')
+                    # event.path: 변경된 경로 (예: '/' 또는 '/AA-01__ABC123/remaining')
                     # event.data: 새 값
                     try:
-                        path = event.path  # '/' 로 시작
+                        path = event.path
                         data = event.data
-                        if path == "/":
-                            # 전체 교체 (초기 + 대량 update)
+                        is_initial = (path == "/")
+
+                        if is_initial:
+                            # 초기 스냅샷 (또는 전체 교체)
                             state["items"] = data or {}
                         else:
                             # 일부 변경: /KEY 또는 /KEY/field
                             parts = path.strip("/").split("/")
                             if len(parts) == 1:
-                                # 항목 자체 변경
                                 key = parts[0]
                                 if data is None:
                                     state["items"].pop(key, None)
                                 else:
                                     state["items"][key] = data
                             elif len(parts) == 2:
-                                # 항목의 특정 필드 변경 (보통 remaining)
                                 key, field = parts
                                 if key in state["items"]:
                                     if data is None:
@@ -10216,6 +10218,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 # firebase_admin의 listen은 별도 스레드에서 동작
                 listener = items_ref.listen(on_change)
                 state["listener_ref"] = listener
+                print(f"✅ 세션 {session_id} 리스너 부착 (초기 스냅샷 대기 중)")
 
             except Exception as e:
                 import traceback
