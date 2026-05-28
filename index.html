@@ -2318,32 +2318,41 @@
             auditState.sessionId = sessionId;
             auditState.sessionMeta = meta;
 
-            // 2) 마스터 다운로드
-            // 캐시가 있어도 항상 최신 데이터 다운로드 (다른 작업자의 차감 반영을 위해)
-            // 캐시는 "빠른 첫 화면 표시"용으로만 사용
+            // 2) 마스터 다운로드 [최적화]
+            // - 캐시가 신선하면(2시간 이내) 그대로 사용 + 리스너로 변경분만 받음
+            // - 캐시가 오래됐거나 없으면 통째 다운로드
+            // - 어차피 RTDB 리스너가 변경분 자동 동기화하므로 캐시 약간 오래된 건 OK
+            const CACHE_FRESH_MS = 2 * 60 * 60 * 1000;  // 2시간
             progressEl.textContent = '캐시 확인 중...';
             const cached = await loadMasterFromCache(sessionId);
             let master = null;
+            let usedCache = false;
 
-            if (cached && cached.cached_at) {
-                // 캐시 빠르게 보여주고 → 백그라운드에서 최신 받아서 덮어씀
+            const cacheAge = cached ? (Date.now() - (cached.cached_at || 0)) : Infinity;
+            if (cached && cacheAge < CACHE_FRESH_MS) {
+                // 신선한 캐시 사용 (다운로드 안 함)
                 master = cached.items;
-                console.log(`📦 캐시 1차 사용 (${Object.keys(master).length}개)`);
-                progressEl.textContent = `최신 데이터 동기화 중...`;
+                usedCache = true;
+                const ageMin = Math.round(cacheAge / 60000);
+                console.log(`📦 캐시 사용 (${Object.keys(master).length}개, ${ageMin}분 전)`);
+                progressEl.textContent = `캐시에서 ${Object.keys(master).length.toLocaleString()}개 로드`;
             } else {
+                // 캐시 만료 또는 없음 → 다운로드
+                if (cached) {
+                    const ageMin = Math.round(cacheAge / 60000);
+                    console.log(`⚠️ 캐시 만료 (${ageMin}분 전) → 다시 다운로드`);
+                }
                 progressEl.textContent = `마스터 다운로드 중... (${(meta.total_rows || 0).toLocaleString()}개)`;
+                const itemsSnap = await rtdb.ref(`stocktake_data/${sessionId}/items`).once('value');
+                master = itemsSnap.val() || {};
+                console.log(`✅ 마스터 최신 다운로드 완료 (${Object.keys(master).length}개)`);
+
+                // 캐시 갱신
+                await saveMasterToCache(sessionId, {
+                    cached_at: Date.now(),
+                    items: master,
+                });
             }
-
-            // 항상 최신 다운로드 (캐시 있든 없든)
-            const itemsSnap = await rtdb.ref(`stocktake_data/${sessionId}/items`).once('value');
-            master = itemsSnap.val() || {};
-            console.log(`✅ 마스터 최신 다운로드 완료 (${Object.keys(master).length}개 항목)`);
-
-            // 캐시 갱신
-            await saveMasterToCache(sessionId, {
-                cached_at: Date.now(),
-                items: master,
-            });
 
             auditState.master = master;
 
@@ -2768,7 +2777,10 @@
         const itemsRef = rtdb.ref(`stocktake_data/${sessionId}/items`);
         auditState.listenerRef = itemsRef;
 
-        // 마지막으로 봤던 값과 비교해서 진짜 바뀐 것만 처리 (자기 차감 echo 무시)
+        // [최적화] child_changed만 부착 (child_added는 부착 시 4만건 통째 다시 받음 → 비용 폭증)
+        // 관리자가 마스터에 항목을 새로 추가하는 경우는 드물고, 그 땐 사용자가 새로고침하면 됨.
+        // child_removed도 마찬가지로 거의 없는 케이스라 제외.
+
         itemsRef.on('child_changed', (snap) => {
             const key = snap.key;
             const newVal = snap.val();
@@ -2785,49 +2797,19 @@
                 // 다른 사람이 차감 (또는 출고)
                 const diff = old.remaining - newVal.remaining;
                 auditState.master[key] = newVal;
-
-                // 알림 표시 (차감이 일어났을 때만, 증가는 무시)
                 if (diff > 0) {
                     console.log(`[동기화] ${key}: ${old.remaining} → ${newVal.remaining} (-${diff})`);
                 }
             }
 
             // UI 갱신
-            // - 현재 보고 있는 로케면 해당 항목 리스트 다시 그림
-            // - 전체 진행률은 항상 갱신
             if (auditState.currentLoc && newVal.loc === auditState.currentLoc) {
                 renderAuditLocItems(getCurrentLocItems());
             }
             updateAuditTotalProgress();
         });
 
-        // child_added: 관리자가 새 항목 추가하는 경우 (드물지만)
-        itemsRef.on('child_added', (snap) => {
-            const key = snap.key;
-            // 이미 마스터에 있으면 무시 (초기 다운로드 시점 데이터)
-            if (auditState.master && auditState.master[key]) return;
-            const newVal = snap.val();
-            if (!newVal || !auditState.master) return;
-            auditState.master[key] = newVal;
-            if (auditState.currentLoc && newVal.loc === auditState.currentLoc) {
-                renderAuditLocItems(getCurrentLocItems());
-            }
-            updateAuditTotalProgress();
-        });
-
-        // child_removed: 관리자가 항목 삭제하는 경우 (거의 없음)
-        itemsRef.on('child_removed', (snap) => {
-            const key = snap.key;
-            if (auditState.master && auditState.master[key]) {
-                delete auditState.master[key];
-                if (auditState.currentLoc) {
-                    renderAuditLocItems(getCurrentLocItems());
-                }
-                updateAuditTotalProgress();
-            }
-        });
-
-        console.log('✅ 재고조사 실시간 동기화 리스너 부착');
+        console.log('✅ 재고조사 실시간 동기화 리스너 부착 (child_changed만)');
     }
 
 
