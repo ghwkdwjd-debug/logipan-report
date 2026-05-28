@@ -9595,9 +9595,72 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                    anchor="w", padx=6, bd=1, relief="solid")
         out_file_label.pack(fill="x", pady=(0, 6), ipady=3)
 
+        # 컬럼 매핑 (자동 감지 + 수정 가능)
+        out_map_frame = tk.LabelFrame(out_card, text="  컬럼 매핑 (수정 가능)  ",
+                                       bg="white", fg="#6B7280",
+                                       font=("맑은 고딕", 8), bd=1, relief="solid", padx=6, pady=4)
+        out_map_frame.pack(fill="x", pady=(0, 6))
+
+        def make_out_map_row(parent, label):
+            row = tk.Frame(parent, bg="white")
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=label, font=("맑은 고딕", 8), bg="white",
+                     fg="#374151", width=8, anchor="w").pack(side="left")
+            cb = ttk.Combobox(row, font=("맑은 고딕", 8), state="readonly")
+            cb.pack(side="left", fill="x", expand=True)
+            return cb
+
+        out_loc_cb = make_out_map_row(out_map_frame, "로케")
+        out_bc_cb = make_out_map_row(out_map_frame, "바코드")
+        out_qty_cb = make_out_map_row(out_map_frame, "수량")
+
+        # 콤보박스 변경 시 out_state 갱신 + 미리보기 다시 계산
+        def on_out_map_change(*args):
+            out_state["col_loc"] = out_loc_cb.get()
+            out_state["col_bc"] = out_bc_cb.get()
+            out_state["col_qty"] = out_qty_cb.get()
+            if out_state["df"] is not None:
+                # 미리보기만 다시 계산 (파일 재선택은 안 함)
+                refresh_out_preview()
+        out_loc_cb.bind("<<ComboboxSelected>>", on_out_map_change)
+        out_bc_cb.bind("<<ComboboxSelected>>", on_out_map_change)
+        out_qty_cb.bind("<<ComboboxSelected>>", on_out_map_change)
+
         # 출고 파일 상태
         out_state = {"df": None, "valid_df": None, "path": None,
                      "col_loc": "", "col_bc": "", "col_qty": ""}
+
+        def refresh_out_preview():
+            """매핑 변경 시 미리보기 재계산"""
+            df = out_state["df"]
+            if df is None: return
+            col_loc = out_state["col_loc"]
+            col_bc = out_state["col_bc"]
+            col_qty = out_state["col_qty"]
+            if not (col_loc and col_bc and col_qty):
+                out_preview.config(text="⚠️ 로케/바코드/수량 컬럼을 모두 선택하세요", fg="#DC2626")
+                btn_apply_out.config(state="disabled")
+                return
+            try:
+                valid_df = df.copy()
+                valid_df = valid_df[valid_df[col_loc].astype(str).str.strip() != ""]
+                valid_df = valid_df[valid_df[col_bc].astype(str).str.strip() != ""]
+                qty_series = pd.to_numeric(valid_df[col_qty], errors="coerce").fillna(0).astype(int)
+                valid_df = valid_df[qty_series > 0]
+                qty_series = qty_series[qty_series > 0]
+                skipped = len(df) - len(valid_df)
+                total_qty = int(qty_series.sum())
+                skip_msg = f" (합계행 등 {skipped}건 자동제외)" if skipped > 0 else ""
+                out_preview.config(
+                    text=f"📊 유효 출고: {len(valid_df):,}건 / 총 {total_qty:,}개{skip_msg}\n"
+                         f"매핑: 로케={col_loc} / 바코드={col_bc} / 수량={col_qty}",
+                    fg="#065F46"
+                )
+                out_state["valid_df"] = valid_df
+                btn_apply_out.config(state="normal")
+            except Exception as e:
+                out_preview.config(text=f"⚠️ 미리보기 실패: {e}", fg="#DC2626")
+                btn_apply_out.config(state="disabled")
 
         def choose_outbound_file():
             path = filedialog.askopenfilename(
@@ -9623,51 +9686,27 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
             # 컬럼 자동 매핑
             cols = list(df.columns)
+            # 키워드 우선순위로 검색 (앞쪽 키워드가 더 우선)
+            # 예: '바코드' 컬럼이 있으면 '상품코드'보다 먼저 매칭
             def find_col(keywords):
-                for c in cols:
-                    lc = str(c).lower().replace(" ", "")
-                    for kw in keywords:
+                for kw in keywords:
+                    for c in cols:
+                        lc = str(c).lower().replace(" ", "")
                         if kw in lc:
                             return c
                 return ""
             out_state["col_loc"] = find_col(["로케", "loc", "위치"])
-            out_state["col_bc"] = find_col(["바코드", "barcode", "코드", "code", "품번"])
-            out_state["col_qty"] = find_col(["수량", "qty", "출고"])
+            # 바코드: '바코드' > 'barcode' > '품번' > '상품코드' > 'code' 순서
+            out_state["col_bc"] = find_col(["바코드", "barcode", "품번", "상품코드", "code"])
+            out_state["col_qty"] = find_col(["배정수량", "출고수량", "수량", "qty", "출고"])
 
-            # 미리보기 - 유효한 행만 카운트 (로케/바코드/수량 모두 있는 행)
-            try:
-                col_loc = out_state["col_loc"]
-                col_bc = out_state["col_bc"]
-                col_qty = out_state["col_qty"]
+            # 컬럼 매핑 콤보박스 갱신 (사용자가 수정 가능)
+            for cb, attr in [(out_loc_cb, "col_loc"), (out_bc_cb, "col_bc"), (out_qty_cb, "col_qty")]:
+                cb["values"] = cols
+                cb.set(out_state[attr] or "")
 
-                # 유효 행: 로케 + 바코드 + 수량(>0) 모두 있는 행만
-                valid_df = df.copy()
-                if col_loc:
-                    valid_df = valid_df[valid_df[col_loc].astype(str).str.strip() != ""]
-                if col_bc:
-                    valid_df = valid_df[valid_df[col_bc].astype(str).str.strip() != ""]
-
-                qty_series = pd.to_numeric(valid_df[col_qty], errors="coerce").fillna(0).astype(int)
-                valid_df = valid_df[qty_series > 0]
-                qty_series = qty_series[qty_series > 0]
-
-                total_rows_raw = len(df)
-                valid_rows = len(valid_df)
-                skipped = total_rows_raw - valid_rows
-                total_qty = int(qty_series.sum())
-
-                skip_msg = f" (합계행 등 {skipped}건 자동제외)" if skipped > 0 else ""
-                out_preview.config(
-                    text=f"📊 유효 출고: {valid_rows:,}건 / 총 {total_qty:,}개{skip_msg}\n"
-                         f"매핑: 로케={out_state['col_loc']} / 바코드={out_state['col_bc']} / 수량={out_state['col_qty']}",
-                    fg="#065F46"
-                )
-                # 유효 데이터프레임을 따로 저장 (차감 시 사용)
-                out_state["valid_df"] = valid_df
-                btn_apply_out.config(state="normal")
-            except Exception as e:
-                out_preview.config(text=f"⚠️ 미리보기 실패: {e}", fg="#DC2626")
-                btn_apply_out.config(state="disabled")
+            # 미리보기 (refresh_out_preview 사용 - 매핑 변경 시에도 동일 함수 사용)
+            refresh_out_preview()
 
         tk.Button(out_card, text="📁 파일 선택", command=choose_outbound_file,
                   bg="#1877F2", fg="white", font=("맑은 고딕", 9, "bold"),
