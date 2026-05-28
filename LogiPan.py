@@ -10165,33 +10165,38 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 messagebox.showerror("삭제 실패", str(e), parent=win)
 
         # ═══ 초기 데이터 로드 + 실시간 리스너 ═══
-        # [최적화] get()으로 한 번 받고 listen()으로 또 받는 중복 다운로드 제거.
-        #         listen()의 초기 스냅샷(event.path == "/")이 그 역할을 함.
+        # [최적화] get() 1회로 초기 데이터 받고, listener는 변경분(child)만 처리.
+        #         listener의 초기 스냅샷(path == "/")은 무시 → 중복 다운로드 방지
         def initial_load():
             try:
                 items_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items")
                 if not items_ref:
                     raise Exception("RTDB 참조 실패")
 
-                # 초기 상태: 빈 dict로 시작 → listen이 초기 스냅샷을 보내주면 채움
-                state["items"] = {}
-                update_progress()  # 0/0 표시
-                # render_items_table은 데이터 받은 후에 호출 (빈 테이블 그릴 필요 없음)
+                # 1회 get() — 4만건 받는 비용 1번 발생 (필수)
+                items_data = items_ref.get() or {}
+                state["items"] = items_data
+                update_progress()
+                render_items_table()
+                print(f"✅ 초기 로드 완료 ({len(items_data)}개 항목)")
 
-                # 실시간 리스너 부착 (초기 스냅샷 + 이후 변경분 모두 받음)
+                # 실시간 리스너 부착 — 변경분만 처리, 초기 스냅샷은 스킵
+                listener_state = {"initial_skipped": False}
+
                 def on_change(event):
                     if state["destroyed"]:
                         return
-                    # event.event_type: 'put' | 'patch'
-                    # event.path: 변경된 경로 (예: '/' 또는 '/AA-01__ABC123/remaining')
-                    # event.data: 새 값
                     try:
                         path = event.path
                         data = event.data
                         is_initial = (path == "/")
 
+                        # [중요] 초기 스냅샷은 무시 (이미 get()으로 받음, 중복 비용 방지)
+                        if is_initial and not listener_state["initial_skipped"]:
+                            listener_state["initial_skipped"] = True
+                            return
                         if is_initial:
-                            # 초기 스냅샷 (또는 전체 교체)
+                            # 전체 교체 (드물지만 — 관리자가 통째 갈아엎은 경우)
                             state["items"] = data or {}
                         else:
                             # 일부 변경: /KEY 또는 /KEY/field
@@ -10215,10 +10220,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     except Exception as e:
                         print(f"리스너 콜백 오류: {e}")
 
-                # firebase_admin의 listen은 별도 스레드에서 동작
                 listener = items_ref.listen(on_change)
                 state["listener_ref"] = listener
-                print(f"✅ 세션 {session_id} 리스너 부착 (초기 스냅샷 대기 중)")
 
             except Exception as e:
                 import traceback
