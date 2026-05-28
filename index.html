@@ -12,41 +12,8 @@
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
-    <!-- [추가] 바코드 디코더
-         메인: ZBar WASM (C 네이티브, 1D 바코드 강력) + zxing-wasm (C++ WASM)
-         백업: ZXing JS, Quagga
-         OCR: Tesseract.js (바코드 안 잡힐 때 텍스트로 우회)
-         + 이미지 전처리로 빛 번짐 대응 -->
-    <script type="module">
-        // ZBar WASM은 ES module - 글로벌로 노출
-        try {
-            const zbar = await import("https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.10.1/+esm");
-            window.zbarScanImageData = zbar.scanImageData;
-            window.zbarReady = true;
-            console.log("✅ ZBar WASM 준비 완료");
-        } catch (e) {
-            console.error("ZBar WASM 로드 실패:", e);
-            window.zbarReady = false;
-        }
-    </script>
-    <script type="module">
-        // zxing-wasm은 ES module - 글로벌로 노출
-        import { readBarcodes, prepareZXingModule } from "https://cdn.jsdelivr.net/npm/zxing-wasm@2.1.5/+esm";
-        // WASM 미리 로드
-        try {
-            await prepareZXingModule();
-            window.zxingWasmReady = true;
-            window.zxingReadBarcodes = readBarcodes;
-            console.log("✅ zxing-wasm 준비 완료");
-        } catch (e) {
-            console.error("zxing-wasm 로드 실패:", e);
-            window.zxingWasmReady = false;
-        }
-    </script>
-    <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
-    <!-- [추가] OCR - 바코드 밑 텍스트 인식 (Tesseract.js, 영문+숫자만이라 가볍게) -->
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+    <!-- [PDA 전용 모드] 바코드 디코더 라이브러리 제거됨.
+         PDA/USB 스캐너는 키보드 입력으로 바코드를 전송하므로 별도 디코더 불필요. -->
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
@@ -175,38 +142,6 @@
         .msg-toast .title { font-weight: bold; margin-bottom: 4px; font-size: 13px; }
         .msg-toast .preview { font-size: 13px; opacity: 0.95; }
 
-        /* [추가] 입력 필드 흔들림 (검증 실패 시각 강조) */
-        @keyframes shakeInput {
-            0%, 100% { transform: translateX(0); }
-            20%, 60% { transform: translateX(-5px); }
-            40%, 80% { transform: translateX(5px); }
-        }
-
-        /* [추가] 스캔 탭 작은 토글 버튼들 (작업 종류 + 정상/불량 공용) */
-        .scan-mini-row {
-            display: flex; gap: 6px; margin-top: 6px;
-        }
-        .scan-mini-btn {
-            flex: 1; padding: 10px 6px;
-            border: 1.5px solid #e0e0e0; background: #f5f6f8; color: #888;
-            border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer;
-            transition: all 0.15s;
-        }
-        .scan-mini-btn:hover { background: #ebebeb; }
-        .scan-mini-btn.active {
-            background: #222; color: white; border-color: #222;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-        }
-        /* 정상/불량은 활성 시 색상 다르게 */
-        #quality-btn-normal.active {
-            background: #16A34A; color: white; border-color: #16A34A;
-            box-shadow: 0 2px 6px rgba(22,163,74,0.3);
-        }
-        #quality-btn-defect.active {
-            background: #DC2626; color: white; border-color: #DC2626;
-            box-shadow: 0 2px 6px rgba(220,38,38,0.3);
-        }
-
         /* ===== [추가] 📦 스캔 탭 전용 스타일 ===== */
         .scan-mode-row { display: flex; gap: 6px; margin: 10px 0 14px; }
         .scan-mode-btn {
@@ -223,334 +158,105 @@
             opacity: 0.4; cursor: not-allowed; background: #f0f0f0;
         }
 
-        /* 로케 입력 + 카메라 버튼 */
-        .loc-input-row {
-            display: flex; gap: 8px; align-items: stretch;
-        }
-        .loc-input-row input {
-            flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 8px;
-            font-size: 15px; outline: none; box-sizing: border-box;
-            font-family: monospace; letter-spacing: 1px; font-weight: bold;
-        }
-        .loc-cam-btn {
-            width: 52px; flex-shrink: 0;
-            background: #fbc02d; color: #333; border: none; border-radius: 8px;
-            font-size: 22px; cursor: pointer;
-            box-shadow: 0 2px 6px rgba(251,192,45,0.3);
-            display: flex; align-items: center; justify-content: center;
-        }
-        .loc-cam-btn:active { transform: scale(0.96); background: #f9a825; }
-
-        /* 큰 상품 스캔 버튼 */
-        .product-scan-btn {
-            width: 100%; margin-top: 18px;
+        /* ── [PDA 전용] 로케 표시 박스 ── */
+        .loc-display {
+            margin-top: 6px;
             background: linear-gradient(135deg, #1877F2 0%, #4285F4 100%);
-            color: white; border: none; border-radius: 14px;
-            padding: 22px 18px; cursor: pointer;
-            display: flex; align-items: center; gap: 14px;
-            box-shadow: 0 4px 14px rgba(24,119,242,0.3);
-            transition: transform 0.1s;
+            color: white;
+            padding: 16px 18px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(24,119,242,0.25);
+            transition: background 0.2s;
         }
-        .product-scan-btn:active { transform: scale(0.98); }
-        .product-scan-btn .icon { font-size: 32px; }
-        .product-scan-btn .text { display: flex; flex-direction: column; align-items: flex-start; flex:1; }
-        .product-scan-btn .title { font-size: 17px; font-weight: bold; margin-bottom: 2px; }
-        .product-scan-btn .sub { font-size: 12px; opacity: 0.9; }
+        .loc-display.empty { background: #cbd5e1; color: #475569; box-shadow: none; }
+        .loc-display .lbl { font-size: 11px; opacity: 0.9; letter-spacing: 1.5px; margin-bottom: 4px; }
+        .loc-display .val {
+            font-size: 26px; font-weight: bold;
+            font-family: 'Consolas', monospace; letter-spacing: 2px;
+        }
+        .loc-display.empty .val { font-size: 15px; letter-spacing: 0; font-family: 'Malgun Gothic', sans-serif; }
 
-        /* 카메라 모달 (작은 영역) */
-        .camera-modal {
-            display: none;
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.7); z-index: 2000;
-            justify-content: center; align-items: center; padding: 16px;
-            box-sizing: border-box;
-        }
-        .camera-modal.open { display: flex; }
-        .camera-modal-card {
-            background: white; border-radius: 16px;
-            width: 100%; max-width: 420px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.4);
-            overflow: hidden;
-            animation: modalIn 0.2s ease-out;
-        }
-        @keyframes modalIn {
-            from { opacity: 0; transform: scale(0.95); }
-            to { opacity: 1; transform: scale(1); }
-        }
-        .camera-modal-header {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 14px 16px; border-bottom: 1px solid #eee;
-        }
-        .camera-modal-title {
-            font-size: 16px; font-weight: bold; color: #333;
-        }
-        .camera-modal-close {
-            background: #f5f6f8; border: none; border-radius: 50%;
-            width: 32px; height: 32px; font-size: 16px; cursor: pointer;
-            color: #666;
-        }
-        .camera-modal-info {
-            text-align: center; padding: 8px 16px;
-            font-size: 12px; color: #999;
-        }
-        .camera-modal-viewport {
-            position: relative;
-            background: #000; margin: 0 14px;
-            border-radius: 10px; overflow: hidden;
-            min-height: 180px;
-            max-height: 220px;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer;
-        }
-        #scan-reader { width: 100%; height: 100%; }
-        #scan-reader video {
-            width: 100% !important;
-            height: 100% !important;
-            object-fit: cover;
-            display: block;
-        }
-        .camera-guide-box {
-            position: absolute;
-            top: 50%; left: 50%;
-            width: 90%; height: 50%;
-            transform: translate(-50%, -50%);
-            border: 2px solid rgba(255,255,255,0.5);
-            border-radius: 4px;
-            pointer-events: none;
-            box-shadow: 0 0 0 9999px rgba(0,0,0,0.25);
-        }
-        /* [추가] 빨간 인식선 - PDA 레이저처럼 */
-        .scan-laser-line {
-            position: absolute;
-            top: 50%; left: 50%;
-            width: 86%; height: 2px;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(to right,
-                transparent,
-                rgba(255, 50, 50, 0.9) 10%,
-                rgba(255, 50, 50, 0.95) 50%,
-                rgba(255, 50, 50, 0.9) 90%,
-                transparent);
-            pointer-events: none;
-            box-shadow: 0 0 8px rgba(255, 50, 50, 0.6);
-            animation: laserPulse 2s ease-in-out infinite;
-        }
-        @keyframes laserPulse {
-            0%, 100% { opacity: 0.85; }
-            50% { opacity: 1; }
-        }
-        .focus-hint {
-            position: absolute; bottom: 6px; left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0,0,0,0.6); color: white;
-            padding: 3px 10px; border-radius: 10px;
-            font-size: 10px; pointer-events: none;
-            opacity: 0.7;
-        }
-        .focus-ring {
-            position: absolute;
-            width: 60px; height: 60px;
-            border: 2px solid #ffeb3b;
-            border-radius: 50%;
-            pointer-events: none;
-            transform: translate(-50%, -50%);
-            animation: focusPulse 0.5s ease-out forwards;
-        }
-        @keyframes focusPulse {
-            0% { transform: translate(-50%, -50%) scale(1.5); opacity: 1; }
-            100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
-        }
-
-        /* [추가] 스캔 성공 시 화면 전체 플래시 + 값 표시 */
-        .scan-flash {
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(76, 175, 80, 0.85);
-            display: flex; align-items: center; justify-content: center;
-            z-index: 100;
-            pointer-events: none;
-            animation: flashFade 0.7s ease-out forwards;
-            border-radius: 10px;
-        }
-        .scan-flash.loc { background: rgba(251, 192, 45, 0.9); }
-        .scan-flash.error { background: rgba(220, 38, 38, 0.85); }
-        @keyframes flashFade {
-            0% { opacity: 0; }
-            15% { opacity: 1; }
-            70% { opacity: 1; }
-            100% { opacity: 0; }
-        }
-        .scan-flash .flash-content {
-            color: white; text-align: center; padding: 12px;
-            max-width: 90%;
-        }
-        .scan-flash .flash-icon {
-            font-size: 36px; margin-bottom: 4px;
-            animation: flashIconPop 0.4s ease-out;
-        }
-        @keyframes flashIconPop {
-            0% { transform: scale(0.3); opacity: 0; }
-            70% { transform: scale(1.15); }
-            100% { transform: scale(1); opacity: 1; }
-        }
-        .scan-flash .flash-label {
-            font-size: 13px; font-weight: bold; opacity: 0.95;
-            margin-bottom: 4px;
-        }
-        .scan-flash .flash-value {
-            font-size: 16px; font-family: monospace;
-            background: rgba(0,0,0,0.25);
-            padding: 4px 10px; border-radius: 6px;
-            display: inline-block;
-            word-break: break-all;
-        }
-
-        /* [추가] PDA 확인 오버레이 - 스캔 후 사용자가 ✓ 누르기 전까지 멈춤 */
-        .scan-confirm {
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(10, 30, 10, 0.92);
-            display: none;
-            flex-direction: column;
-            align-items: center; justify-content: center;
-            z-index: 200;
-            border-radius: 10px;
-            padding: 16px;
-        }
-        .scan-confirm.open { display: flex; animation: confirmIn 0.15s ease-out; }
-        .scan-confirm.kind-loc { background: rgba(40, 30, 0, 0.92); }
-        .scan-confirm.kind-error { background: rgba(50, 10, 10, 0.92); }
-        @keyframes confirmIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        .scan-confirm .confirm-banner {
-            background: #16A34A; color: white;
-            padding: 8px 22px; border-radius: 20px;
-            font-size: 14px; font-weight: bold;
-            margin-bottom: 14px;
-        }
-        .scan-confirm.kind-loc .confirm-banner { background: #fbc02d; color: #333; }
-        .scan-confirm.kind-error .confirm-banner { background: #DC2626; color: white; }
-        .scan-confirm .confirm-value-box {
-            background: rgba(255,255,255,0.12);
-            border-radius: 10px;
+        /* ── [PDA 전용] 최근 스캔 결과 큰 표시 ── */
+        .pda-recent {
+            margin-top: 12px;
+            background: #222;
+            color: white;
             padding: 14px 16px;
+            border-radius: 10px;
             text-align: center;
-            margin-bottom: 18px;
-            max-width: 90%;
+            transition: background 0.15s;
         }
-        .scan-confirm .confirm-label {
-            font-size: 11px; color: rgba(255,255,255,0.7);
-            margin-bottom: 6px;
+        .pda-recent.idle { background: #6b7280; }
+        .pda-recent.success { background: #16a34a; }
+        .pda-recent.duplicate { background: #f57c00; }
+        .pda-recent.error { background: #dc2626; animation: pda-shake 0.3s; }
+        .pda-recent.loc { background: #1877F2; }
+        @keyframes pda-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-6px); }
+            75% { transform: translateX(6px); }
         }
-        .scan-confirm .confirm-value {
-            font-family: monospace; color: white;
-            font-size: 18px; font-weight: bold;
+        .pda-recent .top { font-size: 11px; opacity: 0.8; letter-spacing: 1px; margin-bottom: 3px; }
+        .pda-recent .bc {
+            font-size: 20px; font-weight: bold;
+            font-family: 'Consolas', monospace; letter-spacing: 1px;
             word-break: break-all;
-            letter-spacing: 1px;
         }
-        .scan-confirm .confirm-btns {
-            display: flex; gap: 10px;
-            width: 100%; max-width: 320px;
-        }
-        .scan-confirm .confirm-btn {
-            flex: 1; padding: 14px 8px;
-            border: none; border-radius: 10px;
-            font-size: 15px; font-weight: bold;
-            cursor: pointer;
-        }
-        .scan-confirm .confirm-btn.ok {
-            background: #16A34A; color: white;
-            box-shadow: 0 2px 8px rgba(22,163,74,0.4);
-        }
-        .scan-confirm .confirm-btn.ok:active { background: #15803D; }
-        .scan-confirm .confirm-btn.cancel {
-            background: rgba(255,255,255,0.15); color: white;
-            border: 1px solid rgba(255,255,255,0.3);
-        }
-        .scan-confirm .confirm-btn.cancel:active { background: rgba(255,255,255,0.25); }
+        .pda-recent .sub { font-size: 11px; opacity: 0.85; margin-top: 3px; }
+        .pda-recent.idle .bc { font-size: 14px; opacity: 0.7; }
 
-        .camera-engine-info {
-            text-align: center;
-            font-size: 11px; color: #999;
-            padding: 4px;
+        /* ── [PDA 전용] 카운터 ── */
+        .pda-counter-row { display: flex; gap: 8px; margin-top: 12px; }
+        .pda-counter {
+            flex: 1; background: #f5f6f8; border-radius: 10px;
+            padding: 10px 6px; text-align: center;
         }
-        /* [추가] OCR 실시간 디버그 - OCR이 뭘 읽고 있는지 보여줌 */
-        .ocr-debug {
-            margin: 0 16px 6px;
-            padding: 6px 10px;
-            background: #f5f6f8;
-            border-radius: 6px;
-            font-size: 11px;
-            color: #666;
-            font-family: monospace;
-            min-height: 18px;
-            display: flex; align-items: center; gap: 6px;
-            transition: all 0.2s;
-        }
-        .ocr-debug.matched {
-            background: #e8f5e9;
-            color: #2e7d32;
-            border-left: 3px solid #16A34A;
-        }
-        .ocr-debug.no-match {
-            background: #fff3e0;
-            color: #e65100;
-        }
-        .ocr-debug .ocr-label {
-            font-weight: bold;
-            color: #555;
-        }
-        .ocr-debug.matched .ocr-label { color: #2e7d32; }
-        .ocr-debug.no-match .ocr-label { color: #e65100; }
+        .pda-counter .n { font-size: 22px; font-weight: bold; color: #222; }
+        .pda-counter .l { font-size: 11px; color: #888; margin-top: 1px; }
+        .pda-counter.total .n { color: #1877F2; }
+        .pda-counter.cur .n { color: #16a34a; }
 
-        .focus-btn {
-            background: #fff3e0; color: #e65100;
-            border: 1px solid #ffcc80; border-radius: 14px;
-            padding: 6px 12px; font-size: 13px; cursor: pointer;
-            font-weight: bold;
-        }
-        .focus-btn:active { background: #ffcc80; }
-
-        .zoom-control {
-            display: flex; align-items: center; gap: 4px;
-            background: #f5f6f8; border-radius: 14px;
-            padding: 4px 6px;
-        }
-        .zoom-btn {
-            width: 26px; height: 26px;
-            border: none; background: white; border-radius: 50%;
-            font-size: 12px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        .zoom-btn:active { background: #e0e0e0; }
-        .zoom-label {
-            font-size: 12px; font-weight: bold; color: #555;
-            min-width: 32px; text-align: center;
-        }
-
-        .manual-input-row {
-            display: flex; gap: 6px;
-            padding: 8px 16px 4px;
-        }
-        .manual-input-row input {
-            flex: 1; padding: 10px 12px;
-            border: 1px solid #ddd; border-radius: 8px;
-            font-size: 14px; outline: none;
-            font-family: monospace;
-        }
-        .manual-input-btn {
-            background: #1877F2; color: white;
-            border: none; border-radius: 8px;
-            padding: 0 16px; font-weight: bold;
-            cursor: pointer; font-size: 14px;
-        }
-        .camera-modal-footer {
+        /* ── [PDA 전용] 상태 배지 ── */
+        .pda-status {
             display: flex; align-items: center; gap: 8px;
-            padding: 12px 16px;
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: #fff9c4;
+            border-left: 4px solid #fbc02d;
+            border-radius: 8px;
+            font-size: 13px; font-weight: bold; color: #555;
         }
+        .pda-status .dot {
+            width: 9px; height: 9px; border-radius: 50%;
+            background: #16a34a;
+            animation: pda-pulse 1.2s infinite;
+        }
+        @keyframes pda-pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.4); opacity: 0.5; }
+        }
+        .pda-status.warn { background: #ffebee; border-left-color: #dc2626; color: #b71c1c; }
+        .pda-status.warn .dot { background: #dc2626; }
+
+        /* ── [PDA 전용] 숨겨진 스캐너 입력 ── */
+        .pda-hidden-input {
+            position: fixed; left: -9999px; top: -9999px;
+            opacity: 0; width: 1px; height: 1px;
+            pointer-events: none;
+        }
+
+        /* ── [PDA 전용] 수동 입력 (백업) ── */
+        .pda-manual-row { display: flex; gap: 6px; margin-top: 10px; }
+        .pda-manual-row input {
+            flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px;
+            font-size: 14px; outline: none; font-family: monospace;
+        }
+        .pda-manual-btn {
+            background: #1877F2; color: white; border: none; border-radius: 8px;
+            padding: 0 14px; font-size: 13px; font-weight: bold; cursor: pointer;
+        }
+
         .scan-toggle {
             display: inline-flex; align-items: center; gap: 4px;
             padding: 6px 12px; background: #f5f6f8; border-radius: 14px;
@@ -727,7 +433,7 @@
 
     <!-- ===== [추가] 📦 스캔 탭 ===== -->
     <div id="section-scan" style="display:none;">
-        <h2>📦 카메라 스캔</h2>
+        <h2>📦 PDA 스캔</h2>
 
         <!-- 모드 선택 -->
         <div class="scan-mode-row">
@@ -740,36 +446,55 @@
         <label>📌 작업명</label>
         <input type="text" id="scan-label" placeholder="예: ADIDAS26_3월1주차">
 
-        <!-- [추가] 작업 종류 (필수, 기본 미선택) -->
-        <label>🏷️ 작업 종류 <span style="color:#ff4d4f;">*</span></label>
-        <div class="scan-mini-row">
-            <button type="button" class="scan-mini-btn" data-work="매입" onclick="selectWorkType('매입')">매입</button>
-            <button type="button" class="scan-mini-btn" data-work="위탁" onclick="selectWorkType('위탁')">위탁</button>
-            <button type="button" class="scan-mini-btn" data-work="기타" onclick="selectWorkType('기타')">기타</button>
-        </div>
-
-        <!-- [추가] 정상/불량 (필수, 기본 미선택) -->
-        <label>🏷️ 정상/불량 <span style="color:#ff4d4f;">*</span></label>
-        <div class="scan-mini-row">
-            <button type="button" class="scan-mini-btn" id="quality-btn-normal" onclick="selectQuality('normal')">🟢 정상</button>
-            <button type="button" class="scan-mini-btn" id="quality-btn-defect" onclick="selectQuality('defect')">🔴 불량</button>
-        </div>
-
-        <!-- 현재 로케이션 (📷 버튼 포함) -->
+        <!-- 현재 로케이션 (스캐너 또는 수동 입력 후 Enter) -->
         <label>📍 현재 로케이션</label>
-        <div class="loc-input-row">
-            <input type="text" id="scan-loc-input" placeholder="로케 바코드 또는 직접 입력" autocomplete="off">
-            <button class="loc-cam-btn" onclick="openCameraModal('location')" title="로케 카메라 스캔">📷</button>
+        <input type="text" id="scan-loc-input" placeholder="로케 스캔하거나 직접 입력 후 Enter" autocomplete="off" style="text-transform: uppercase; font-family: monospace; letter-spacing: 1px; font-weight: bold;">
+
+        <!-- 현재 로케 큰 표시 -->
+        <div class="loc-display empty" id="pda-loc-display">
+            <div class="lbl">CURRENT LOCATION</div>
+            <div class="val" id="pda-loc-value">로케를 먼저 스캔하세요</div>
         </div>
 
-        <!-- 상품 스캔 큰 버튼 -->
-        <button class="product-scan-btn" onclick="openCameraModal('product')">
-            <span class="icon">📷</span>
-            <span class="text">
-                <span class="title">상품 바코드 스캔</span>
-                <span class="sub">탭하면 카메라가 켜집니다</span>
-            </span>
-        </button>
+        <!-- 카운터 -->
+        <div class="pda-counter-row">
+            <div class="pda-counter total">
+                <div class="n" id="pda-cnt-total">0</div>
+                <div class="l">전체 박스</div>
+            </div>
+            <div class="pda-counter cur">
+                <div class="n" id="pda-cnt-cur">0</div>
+                <div class="l">현재 로케</div>
+            </div>
+        </div>
+
+        <!-- 최근 스캔 결과 큰 표시 -->
+        <div class="pda-recent idle" id="pda-recent">
+            <div class="top">최근 스캔</div>
+            <div class="bc">아직 스캔 안 함</div>
+            <div class="sub"></div>
+        </div>
+
+        <!-- 스캐너 대기 상태 -->
+        <div class="pda-status" id="pda-status">
+            <div class="dot"></div>
+            <span id="pda-status-text">스캐너 대기 중 · 바코드를 쏘세요</span>
+        </div>
+
+        <!-- 음성/진동 토글 -->
+        <div style="display:flex; gap:8px; margin-top:10px;">
+            <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊 음성</span>
+            <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳 진동</span>
+        </div>
+
+        <!-- 수동 입력 (PDA 안 될 때 백업) -->
+        <div class="pda-manual-row">
+            <input type="text" id="manual-barcode-input" placeholder="스캐너 안 될 때 직접 입력" autocomplete="off">
+            <button class="pda-manual-btn" onclick="submitManualBarcode()">입력</button>
+        </div>
+
+        <!-- 피드백 -->
+        <div class="scan-feedback" id="scan-feedback" style="margin: 10px 0 0;"></div>
 
         <!-- 스캔 목록 -->
         <div style="margin-top:14px;">
@@ -792,61 +517,9 @@
     </div>
 </div>
 
-<!-- ===== [추가] 카메라 모달 (작은 영역, 풀스크린 X) ===== -->
-<div id="camera-modal" class="camera-modal">
-    <div class="camera-modal-card">
-        <div class="camera-modal-header">
-            <div class="camera-modal-title" id="camera-modal-title">📷 스캔</div>
-            <button class="camera-modal-close" onclick="closeCameraModal()" aria-label="닫기">✕</button>
-        </div>
-        <div class="camera-modal-info" id="camera-modal-info">
-            바코드를 카메라에 비추세요
-        </div>
-        <div class="camera-modal-viewport" id="camera-viewport">
-            <div id="scan-reader"></div>
-            <div class="camera-guide-box"></div>
-            <!-- [추가] 빨간 인식선 - 바코드 정조준 가이드 -->
-            <div class="scan-laser-line"></div>
-            <div class="focus-hint">탭하면 초점</div>
-            <!-- [추가] PDA 확인 오버레이 - 스캔 후 사용자가 ✓ 누르기 전까지 멈춤 -->
-            <div class="scan-confirm" id="scan-confirm">
-                <div class="confirm-banner" id="scan-confirm-banner">✓ 스캔 완료</div>
-                <div class="confirm-value-box">
-                    <div class="confirm-label" id="scan-confirm-label">바코드</div>
-                    <div class="confirm-value" id="scan-confirm-value">-</div>
-                </div>
-                <div class="confirm-btns">
-                    <button class="confirm-btn cancel" onclick="cancelPendingScan()">✗ 다시</button>
-                    <button class="confirm-btn ok" onclick="acceptPendingScan()">✓ 추가하고 계속</button>
-                </div>
-            </div>
-        </div>
-        <div class="camera-engine-info" id="camera-engine-info">엔진: 확인 중...</div>
-        <!-- [추가] OCR 디버그 영역 - OCR이 뭘 읽고 있는지 실시간 확인 -->
-        <div class="ocr-debug" id="ocr-debug">
-            <span class="ocr-label">📝 OCR</span>
-            <span id="ocr-debug-text">대기 중...</span>
-        </div>
-        <div class="camera-modal-footer">
-            <span class="scan-toggle on" id="toggle-sound" onclick="toggleSound()">🔊</span>
-            <span class="scan-toggle on" id="toggle-vibrate" onclick="toggleVibrate()">📳</span>
-            <button class="focus-btn" onclick="triggerFocus()" title="초점 다시">🎯 초점</button>
-            <div class="zoom-control" id="zoom-control" style="display:none;">
-                <button class="zoom-btn" onclick="adjustZoom(-1)" title="축소">➖</button>
-                <span class="zoom-label" id="zoom-label">1.0x</span>
-                <button class="zoom-btn" onclick="adjustZoom(1)" title="확대">➕</button>
-            </div>
-            <span id="camera-modal-status" style="margin-left:auto; font-size:12px; color:#666;"></span>
-        </div>
-        <!-- 수동 입력 fallback -->
-        <div class="manual-input-row">
-            <input type="text" id="manual-barcode-input" placeholder="안 잡히면 직접 입력" autocomplete="off">
-            <button class="manual-input-btn" onclick="submitManualBarcode()">입력</button>
-        </div>
-        <!-- 피드백 메시지 (모달 내부) -->
-        <div class="scan-feedback" id="scan-feedback"></div>
-    </div>
-</div>
+<!-- [PDA 전용] 숨겨진 스캐너 입력 - PDA가 키보드 이벤트로 바코드 전송 -->
+<input type="text" id="pda-scanner-input" class="pda-hidden-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+
 
 <script>
     const firebaseConfig = {
@@ -940,15 +613,13 @@
             loadNotice();
             loadMyBoardPosts();
         } else if (type === 'scan') {
-            // [추가] 스캔 탭 들어가면 카메라 정리 안 함 (사용자가 직접 시작)
-            // 다른 탭으로 나가면 카메라 끔
+            // [PDA 전용] 스캔 탭 들어가면 PDA 입력 받을 준비
+            setTimeout(() => {
+                if (typeof keepPdaFocus === 'function') keepPdaFocus();
+            }, 100);
         } else {
             localStorage.setItem(LAST_SEEN_REPORT_KEY, Date.now().toString());
             document.getElementById('dot-report').style.display = 'none';
-        }
-        // [추가] 스캔 탭 아닌 데로 이동하면 카메라 자동 정지
-        if (type !== 'scan' && typeof stopScanner === 'function') {
-            stopScanner();
         }
     }
 
@@ -1918,19 +1589,15 @@
     let scanState = {
         mode: 'inbound',        // inbound | move | audit
         label: '',
-        workType: null,         // [추가] 매입 | 위탁 | 기타 (필수, 기본 미선택)
-        quality: null,          // [수정] normal | defect (필수, 기본 미선택)
         currentLoc: '',         // 입고/조사용 현재 로케
         fromLoc: '',            // 재고이동: 출발
         toLoc: '',              // 재고이동: 도착
         moveFocus: 'from',      // 재고이동: 다음에 어디 채울지 (from→to)
-        items: []               // [{barcode, qty, location, ts}, ...]
+        items: []               // [{barcode, qty, location, fromLoc, toLoc, ts}, ...]
     };
 
-    let scannerRunning = false;
-    let scanPaused = false;        // [추가] PDA 확인 모드 - true면 디코더 일시정지
-    let pendingScan = null;        // [추가] 확인 대기 중인 스캔 결과
-    let lastScanText = '';       // 직전 스캔 (디바운스용)
+    // [PDA 전용] 직전 스캔값 (수동 디바운스용 - PDA가 같은 바코드를 너무 빠르게 두 번 보내는 경우 대비)
+    let lastScanText = '';
     let lastScanAt = 0;
 
     let soundEnabled = localStorage.getItem(SCAN_SOUND_KEY) !== 'off';
@@ -2074,32 +1741,10 @@
         speak("전송 완료");
     }
 
-    // [추가] 화면 플래시 - 무음모드에서도 시각으로 인지
+    // [PDA 전용] 카메라 viewport 플래시 → 사용 안 함 (pda-recent로 대체).
+    // 다른 코드에서 호출해도 에러 안 나게 빈 함수만 남겨둠.
     function showScanFlash(kind, value) {
-        const viewport = document.getElementById('camera-viewport');
-        if (!viewport || !viewport.offsetParent) return;  // 모달 안 열려있으면 skip
-
-        // 기존 플래시 있으면 제거 (연속 스캔 시 깔끔하게)
-        viewport.querySelectorAll('.scan-flash').forEach(el => el.remove());
-
-        const flash = document.createElement('div');
-        flash.className = 'scan-flash ' + (kind === 'loc' ? 'loc' : kind === 'error' ? 'error' : '');
-
-        let icon = '✓', label = '스캔';
-        if (kind === 'loc') { icon = '📍'; label = '로케 변경'; }
-        else if (kind === 'error') { icon = '⚠️'; label = '오류'; }
-
-        const safeValue = (value || '').toString().slice(0, 30);
-        flash.innerHTML = `
-            <div class="flash-content">
-                <div class="flash-icon">${icon}</div>
-                <div class="flash-label">${escapeHtml(label)}</div>
-                <div class="flash-value">${escapeHtml(safeValue)}</div>
-            </div>
-        `;
-        viewport.appendChild(flash);
-        // 0.7초 후 자동 제거
-        setTimeout(() => flash.remove(), 700);
+        // no-op: PDA 모드에서는 showPdaRecent()가 같은 역할을 함
     }
     // ─── 모드 전환 ─────────────────────────
     function selectScanMode(mode) {
@@ -2112,36 +1757,6 @@
             b.classList.toggle('active', b.dataset.mode === mode);
         });
         saveScanDraft();
-    }
-
-    // [추가] 작업 종류 선택 (필수, 기본 미선택)
-    function selectWorkType(type) {
-        scanState.workType = type;
-        document.querySelectorAll('.scan-mini-btn[data-work]').forEach(b => {
-            b.classList.toggle('active', b.dataset.work === type);
-        });
-        saveScanDraft();
-        vibrate(20);
-    }
-
-    // [추가] 정상/불량 선택 (필수, 기본 미선택)
-    // 세션 단위 - 작업자가 선택한 게 그 세션 전체에 적용
-    function selectQuality(q) {
-        scanState.quality = q;
-        const normalBtn = document.getElementById('quality-btn-normal');
-        const defectBtn = document.getElementById('quality-btn-defect');
-        if (q === 'normal') {
-            normalBtn.classList.add('active');
-            defectBtn.classList.remove('active');
-        } else if (q === 'defect') {
-            normalBtn.classList.remove('active');
-            defectBtn.classList.add('active');
-        } else {
-            normalBtn.classList.remove('active');
-            defectBtn.classList.remove('active');
-        }
-        saveScanDraft();
-        vibrate(20);
     }
 
     // ─── localStorage 저장/복원 ─────────────────────────
@@ -2162,14 +1777,6 @@
                 if (scanState.currentLoc) {
                     updateLocUI(scanState.currentLoc);
                 }
-                // [추가] 작업 종류 복원
-                if (scanState.workType) {
-                    selectWorkType(scanState.workType);
-                }
-                // [추가] 정상/불량 복원
-                if (scanState.quality) {
-                    selectQuality(scanState.quality);
-                }
                 renderScanList();
             }
         } catch(e) {
@@ -2188,1230 +1795,236 @@
         }
     }
 
-    // ─── 카메라 모달 (작은 영역) ─────────────────────────
-    // scanCameraMode: 'product' (연속 스캔) | 'location' (1회 스캔 후 자동 닫힘)
-    let scanCameraMode = 'product';
+    // ════════════════════════════════════════════════════════════════
+    // ─── [PDA 전용] 스캐너 입력 처리 ───
+    // ════════════════════════════════════════════════════════════════
+    // 동작 원리:
+    //  1. PDA/USB 스캐너가 바코드를 읽으면 키보드처럼 텍스트 + Enter 전송
+    //  2. 화면의 hidden input(#pda-scanner-input)에 그게 들어옴
+    //  3. Enter 잡아서 값 분석 → 로케/바코드 구분 후 처리
+    //  4. 즉시 input 비우고 재포커스 → 다음 스캔 대기 (삑삑삑 연속 가능)
+    //
+    // 포커스 유지가 핵심임. 다른 input 클릭하면 그쪽으로 가지만,
+    // 화면 빈 곳 누르거나 스캔 탭 재진입하면 다시 포커스 잡힘.
+    // ════════════════════════════════════════════════════════════════
 
-    // 카메라 자원
-    let cameraStream = null;        // MediaStream
-    let cameraTrack = null;         // [추가] 비디오 트랙 - 줌/포커스 조작용
-    let cameraZoomCaps = null;      // [추가] 줌 capability (min/max/step)
-    let currentZoom = 1.0;          // [추가] 현재 줌 값
-    let videoEl = null;             // <video>
-    let barcodeDetector = null;     // 네이티브 BarcodeDetector (지원 시)
-    let detectLoopId = null;        // requestAnimationFrame ID
-    let zxingScanner = null;        // ZXing fallback
-    let usingEngine = '';           // 'native' | 'zxing'
+    // 로케이션 판별은 기존 isLocationBarcode() 함수 재사용 (위에서 정의됨)
+    // 패턴 바꿀 일 있으면 isLocationBarcode() 한 곳만 수정하면 됨.
 
-    async function openCameraModal(mode) {
-        if (mode === 'product') {
-            const labelEl = document.getElementById('scan-label');
-            const label = (labelEl.value || '').trim();
-            if (!label) {
-                // [패치] 모달 안 열리니까 토스트로 알림 + 입력 칸 흔들기 + 포커스
-                showToast("⚠️ 작업명을 먼저 입력하세요");
-                labelEl.focus();
-                // 시각적 강조 - 빨간 테두리 + 흔들림 효과 1초
-                labelEl.style.transition = 'all 0.2s';
-                labelEl.style.border = '2px solid #DC2626';
-                labelEl.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.2)';
-                labelEl.style.animation = 'shakeInput 0.4s';
-                setTimeout(() => {
-                    labelEl.style.border = '';
-                    labelEl.style.boxShadow = '';
-                    labelEl.style.animation = '';
-                }, 1500);
-                return;
-            }
-            scanState.label = label;
-            saveScanDraft();
+    // ─── 포커스 유지 ─────────────────────────
+    // PDA 입력을 받으려면 hidden input이 항상 포커스되어 있어야 함.
+    // 다만 작업명/로케/수동입력 input에 사용자가 직접 타이핑할 때는 예외.
+    function keepPdaFocus() {
+        // 스캔 탭이 안 열려있으면 동작 안 함
+        const scanSection = document.getElementById('section-scan');
+        if (!scanSection || scanSection.style.display === 'none') return;
 
-            const inputLoc = document.getElementById('scan-loc-input').value.trim();
-            if (inputLoc && inputLoc !== scanState.currentLoc) {
-                scanState.currentLoc = inputLoc.toUpperCase();
-                saveScanDraft();
-            }
-            if (!scanState.currentLoc) {
-                // [패치] 로케 비어있을 때도 동일
-                const locEl = document.getElementById('scan-loc-input');
-                showToast("⚠️ 먼저 로케이션을 입력하거나 📷로 스캔하세요");
-                locEl.focus();
-                locEl.style.transition = 'all 0.2s';
-                locEl.style.border = '2px solid #DC2626';
-                locEl.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.2)';
-                locEl.style.animation = 'shakeInput 0.4s';
-                setTimeout(() => {
-                    locEl.style.border = '';
-                    locEl.style.boxShadow = '';
-                    locEl.style.animation = '';
-                }, 1500);
-                return;
-            }
+        const active = document.activeElement;
+        // 사용자가 타이핑 중인 input은 건드리지 않음
+        const userInputs = ['scan-label', 'scan-loc-input', 'manual-barcode-input'];
+        if (active && userInputs.includes(active.id)) return;
+        // 버튼 클릭 직후 포커스도 건드리지 않음 (confirm 다이얼로그 등)
+        if (active && active.tagName === 'BUTTON') return;
+
+        const pdaInput = document.getElementById('pda-scanner-input');
+        if (pdaInput && active !== pdaInput) {
+            pdaInput.focus();
         }
+    }
 
-        if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
-            feedbackError("HTTPS 환경에서만 카메라 사용 가능");
+    // 주기적 포커스 체크 (다른 곳 클릭 후 자동 복귀)
+    setInterval(keepPdaFocus, 1500);
+
+    // 빈 영역 클릭 시 포커스 복귀
+    document.addEventListener('click', (e) => {
+        const tag = e.target.tagName;
+        // input/textarea/button/checkbox 등은 자기 처리
+        if (['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT', 'LABEL'].includes(tag)) return;
+        setTimeout(keepPdaFocus, 50);
+    });
+
+    // 페이지 다시 보이면 포커스 복귀
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) setTimeout(keepPdaFocus, 200);
+    });
+
+    // ─── PDA 입력 핸들러 ─────────────────────────
+    // 페이지 로드 후 hidden input에 keydown 이벤트 연결
+    function initPdaScanner() {
+        const pdaInput = document.getElementById('pda-scanner-input');
+        if (!pdaInput) {
+            console.warn('PDA 스캐너 input 없음');
             return;
         }
 
-        scanCameraMode = mode;
-        const modal = document.getElementById('camera-modal');
-        const title = document.getElementById('camera-modal-title');
-        const info = document.getElementById('camera-modal-info');
-        const status = document.getElementById('camera-modal-status');
+        pdaInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const raw = pdaInput.value.trim();
+                pdaInput.value = '';  // 즉시 비움
+                if (raw) processPdaScan(raw);
+            }
+        });
 
-        if (mode === 'location') {
-            title.innerText = '📍 로케 스캔';
-            info.innerText = '로케 바코드를 비추세요 (1회 스캔)';
-            status.innerText = '';
+        // 로케 input에서 Enter 치면 로케 등록 후 PDA 입력으로 포커스 이동
+        const locInput = document.getElementById('scan-loc-input');
+        if (locInput) {
+            locInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const v = locInput.value.trim().toUpperCase();
+                    if (v) {
+                        processPdaScan(v);  // 로케 등록 경로로
+                    }
+                    keepPdaFocus();
+                }
+            });
+        }
+
+        // 작업명에서 Enter 치면 PDA 입력으로 포커스 이동
+        const labelInput = document.getElementById('scan-label');
+        if (labelInput) {
+            labelInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    scanState.label = labelInput.value.trim();
+                    saveScanDraft();
+                    keepPdaFocus();
+                }
+            });
+        }
+
+        console.log('✅ PDA 스캐너 입력 활성화');
+    }
+
+    // ─── 스캔 분기 처리 ─────────────────────────
+    // 입력값이 로케 패턴이면 로케 등록, 아니면 바코드로 처리
+    function processPdaScan(raw) {
+        if (!raw) return;
+        const value = raw.trim();
+        if (!value) return;
+
+        // [디바운스] PDA가 같은 바코드를 너무 빠르게 두 번 보내는 경우 (트리거 꾹 누름)
+        // 200ms 안에 동일 값 들어오면 무시. 의도적 중복(같은 박스 두 번 찍기)은 200ms 넘게 걸림.
+        const now = Date.now();
+        if (value === lastScanText && (now - lastScanAt) < 200) {
+            console.log('[PDA] 디바운스로 무시:', value);
+            return;
+        }
+        lastScanText = value;
+        lastScanAt = now;
+
+        // 로케 패턴이면 로케 등록 (대문자 변환)
+        if (isLocationBarcode(value)) {
+            registerPdaLocation(value.toUpperCase());
+            return;
+        }
+
+        // 그 외는 바코드로 처리
+        handleProductScan(value);
+    }
+
+    // ─── 로케 등록 ─────────────────────────
+    function registerPdaLocation(loc) {
+        scanState.currentLoc = loc;
+        updateLocUI(loc);
+        updatePdaLocDisplay(loc);
+        saveScanDraft();
+        showPdaRecent('loc', loc, '로케 변경됨');
+        updatePdaCounters();
+        feedbackLocChanged(loc);
+    }
+
+    // ─── 로케 큰 표시 갱신 ─────────────────────────
+    function updatePdaLocDisplay(loc) {
+        const box = document.getElementById('pda-loc-display');
+        const val = document.getElementById('pda-loc-value');
+        if (!box || !val) return;
+        if (loc) {
+            box.classList.remove('empty');
+            val.textContent = loc;
         } else {
-            title.innerText = '📦 상품 스캔';
-            info.innerText = `📍 ${scanState.currentLoc} · 연속 스캔`;
-            status.innerText = `${scanState.items.length}건`;
-        }
-
-        modal.classList.add('open');
-        try { getAudioCtx()?.resume?.(); } catch(e) {}
-
-        // 수동 입력칸 초기화
-        const manual = document.getElementById('manual-barcode-input');
-        if (manual) manual.value = '';
-
-        await startCameraInModal();
-    }
-
-    function closeCameraModal() {
-        const modal = document.getElementById('camera-modal');
-        modal.classList.remove('open');
-        // 확인 오버레이도 정리
-        const confirm = document.getElementById('scan-confirm');
-        if (confirm) confirm.classList.remove('open');
-        pendingScan = null;
-        scanPaused = false;
-        stopCamera();
-        const fb = document.getElementById('scan-feedback');
-        if (fb) fb.style.display = 'none';
-    }
-
-    async function startCameraInModal() {
-        const engineInfo = document.getElementById('camera-engine-info');
-        try {
-            // <video> 생성
-            videoEl = document.getElementById('scan-video');
-            if (!videoEl) {
-                videoEl = document.createElement('video');
-                videoEl.id = 'scan-video';
-                videoEl.setAttribute('playsinline', 'true');
-                videoEl.setAttribute('autoplay', 'true');
-                videoEl.muted = true;
-                videoEl.style.width = '100%';
-                videoEl.style.height = '100%';
-                videoEl.style.objectFit = 'cover';
-                document.getElementById('scan-reader').appendChild(videoEl);
-            }
-
-            // 카메라 권한 + 스트림 - 최대 해상도 요청
-            const constraints = {
-                video: {
-                    facingMode: { ideal: "environment" },
-                    width: { ideal: 1920, min: 1280 },
-                    height: { ideal: 1080, min: 720 },
-                    frameRate: { ideal: 30 }
-                },
-                audio: false
-            };
-
-            cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-            videoEl.srcObject = cameraStream;
-            await videoEl.play();
-
-            // 비디오 트랙 정보 + 줌 적용 시도
-            const track = cameraStream.getVideoTracks()[0];
-            let zoomApplied = '';
-            cameraTrack = track;  // 줌 버튼 등에서 사용
-            try {
-                if (track.getCapabilities) {
-                    const caps = track.getCapabilities();
-                    const advanced = [];
-                    // 연속 자동 초점
-                    if (caps.focusMode && caps.focusMode.includes('continuous')) {
-                        advanced.push({ focusMode: 'continuous' });
-                    }
-                    // [패치] 줌 기본값 1.0x - 19자리 바코드 다 들어오게
-                    // 작업자가 필요하면 + 버튼으로 확대
-                    if (caps.zoom) {
-                        cameraZoomCaps = caps.zoom;
-                        currentZoom = Math.max(caps.zoom.min, 1.0);
-                        advanced.push({ zoom: currentZoom });
-                        zoomApplied = ` z${currentZoom}x`;
-                        // 줌 버튼 표시
-                        const zoomUI = document.getElementById('zoom-control');
-                        if (zoomUI) zoomUI.style.display = 'flex';
-                        updateZoomUI();
-                    } else {
-                        // 줌 미지원이면 UI 숨김
-                        const zoomUI = document.getElementById('zoom-control');
-                        if (zoomUI) zoomUI.style.display = 'none';
-                    }
-                    if (advanced.length > 0) {
-                        await track.applyConstraints({ advanced });
-                    }
-                }
-            } catch (e) {
-                console.warn("카메라 capability 적용 일부 실패:", e);
-            }
-
-            // 비디오 실제 해상도
-            const settings = track.getSettings ? track.getSettings() : {};
-            const realW = settings.width || 'unknown';
-            const realH = settings.height || 'unknown';
-
-            // ─── 디코더 동시 가동 ─────────────
-            // 메인: ZBar WASM (1D 최강) + zxing-wasm (C++) - 둘 다 전처리 적용
-            // 백업: Quagga (1D 보조), ZXing JS (QR/2D 보조)
-            // OCR: 바코드 안 잡힐 때 텍스트로 우회 (1초에 1번, 보조)
-            startZbarDetector(videoEl, realW, realH, zoomApplied);
-            startZxingWasmDetector(videoEl, realW, realH, zoomApplied);
-            startQuaggaDetector(videoEl, realW, realH, zoomApplied);
-            startZxingBackupDetector(videoEl);
-            startOcrDetector(videoEl, realW, realH, zoomApplied);
-
-            // 탭 초점
-            const viewport = document.getElementById('camera-viewport');
-            viewport.onclick = handleViewportTap;
-
-            scannerRunning = true;
-        } catch(e) {
-            console.error("카메라 시작 실패:", e);
-            feedbackError("카메라 접근 실패: " + (e.message || e));
-            engineInfo.innerText = "❌ 카메라 실패";
+            box.classList.add('empty');
+            val.textContent = '로케를 먼저 스캔하세요';
         }
     }
 
-    // ─── 이미지 전처리 (빛 번짐 + 흐림 대응) ─────────────────────────
-    // 캔버스의 ImageData를 그레이스케일 + 명암 강조 + 샤프닝으로 처리
-    // 빛 번짐(글레어)이 있는 라벨도 디코더가 잘 잡게 보정
-    function preprocessImageData(imageData) {
-        const data = imageData.data;
-        const w = imageData.width;
-        const h = imageData.height;
-        const len = data.length;
-
-        // 1단계: 그레이스케일 + 명암 강조 (contrast +50%)
-        // 빛 번짐 부분(흰색)은 더 흰색으로, 어두운 부분은 더 어둡게
-        const contrast = 1.5;
-        const intercept = 128 * (1 - contrast);
-        for (let i = 0; i < len; i += 4) {
-            // 그레이스케일 (luminance 공식)
-            const gray = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
-            // 명암 강조
-            let v = gray * contrast + intercept;
-            v = Math.max(0, Math.min(255, v));
-            data[i] = data[i+1] = data[i+2] = v;
-        }
-        return imageData;
+    // ─── 최근 스캔 결과 큰 표시 ─────────────────────────
+    function showPdaRecent(type, code, sub) {
+        const el = document.getElementById('pda-recent');
+        if (!el) return;
+        el.className = 'pda-recent ' + type;
+        const topMap = {
+            success: '✅ 등록 성공',
+            duplicate: '🔁 중복 수량 추가',
+            error: '⛔ 오류',
+            loc: '📍 로케이션 변경'
+        };
+        el.querySelector('.top').textContent = topMap[type] || '최근 스캔';
+        el.querySelector('.bc').textContent = code;
+        el.querySelector('.sub').textContent = sub || '';
     }
 
-    // 더 강한 전처리 - 적응형 이진화 (threshold) 적용
-    // 빛 번짐 심한 경우용
-    function preprocessImageDataStrong(imageData) {
-        const data = imageData.data;
-        const w = imageData.width;
-        const h = imageData.height;
-        const len = data.length;
-
-        // 1단계: 그레이스케일로 변환
-        const gray = new Uint8Array(w * h);
-        for (let i = 0, j = 0; i < len; i += 4, j++) {
-            gray[j] = data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114;
-        }
-
-        // 2단계: 평균값 계산 (전체 또는 영역별)
-        let sum = 0;
-        for (let i = 0; i < gray.length; i++) sum += gray[i];
-        const avg = sum / gray.length;
-        // threshold = 평균값 (이보다 어두우면 0, 밝으면 255)
-        const threshold = avg;
-
-        // 3단계: 이진화 + RGBA로 복원
-        for (let j = 0, i = 0; j < gray.length; j++, i += 4) {
-            const v = gray[j] > threshold ? 255 : 0;
-            data[i] = data[i+1] = data[i+2] = v;
-        }
-        return imageData;
+    // ─── 카운터 업데이트 ─────────────────────────
+    function updatePdaCounters() {
+        const total = scanState.items.reduce((s, it) => s + (it.qty || 1), 0);
+        const cur = scanState.items
+            .filter(it => it.location === scanState.currentLoc)
+            .reduce((s, it) => s + (it.qty || 1), 0);
+        const tEl = document.getElementById('pda-cnt-total');
+        const cEl = document.getElementById('pda-cnt-cur');
+        if (tEl) tEl.textContent = total;
+        if (cEl) cEl.textContent = cur;
     }
 
-    // ─── ZBar WASM 디코더 (C 네이티브, 1D 바코드 최강) ─────────────────────────
-    let zbarCanvas = null;
-    let zbarCtx = null;
-    let zbarLoopId = null;
-
-    async function startZbarDetector(videoElement, w, h, zoomInfo) {
-        const engineInfo = document.getElementById('camera-engine-info');
-        try {
-            if (!window.zbarReady || !window.zbarScanImageData) {
-                console.warn("ZBar WASM 미준비 - 다른 디코더 사용");
-                return;
-            }
-
-            zbarCanvas = document.createElement('canvas');
-            zbarCtx = zbarCanvas.getContext('2d', { willReadFrequently: true });
-
-            // 프레임 카운터로 매 프레임마다 다른 전처리 시도
-            let frameCount = 0;
-
-            const tick = async () => {
-                if (!scannerRunning || !videoElement || scanPaused) {
-                    zbarLoopId = setTimeout(tick, 100);
-                    return;
-                }
-                try {
-                    if (videoElement.readyState >= 2) {
-                        const vw = videoElement.videoWidth;
-                        const vh = videoElement.videoHeight;
-                        if (vw > 0 && vh > 0) {
-                            // ROI 크게 (95% x 70%)
-                            const cropW = Math.floor(vw * 0.95);
-                            const cropH = Math.floor(vh * 0.7);
-                            const cropX = Math.floor((vw - cropW) / 2);
-                            const cropY = Math.floor((vh - cropH) / 2);
-                            zbarCanvas.width = cropW;
-                            zbarCanvas.height = cropH;
-                            zbarCtx.drawImage(videoElement,
-                                cropX, cropY, cropW, cropH,
-                                0, 0, cropW, cropH);
-
-                            // 프레임마다 다른 전처리 시도 (3가지 로테이션)
-                            let imageData = zbarCtx.getImageData(0, 0, cropW, cropH);
-                            const variant = frameCount % 3;
-                            if (variant === 1) {
-                                imageData = preprocessImageData(imageData);
-                            } else if (variant === 2) {
-                                imageData = preprocessImageDataStrong(imageData);
-                            }
-                            // variant === 0이면 원본 그대로
-                            frameCount++;
-
-                            // ZBar 디코딩
-                            const results = await window.zbarScanImageData(imageData);
-                            if (results && results.length > 0) {
-                                const code = results[0].decode();
-                                if (code) {
-                                    onBarcodeScanned(code, "zbar");
-                                }
-                            }
-                        }
-                    }
-                } catch (e) {
-                    // 디코딩 실패는 무시
-                }
-                zbarLoopId = setTimeout(tick, 80);
-            };
-            tick();
-            console.log("✅ ZBar 디코더 가동");
-        } catch (e) {
-            console.error("ZBar 시작 실패:", e);
-        }
-    }
-
-    // ─── OCR 디코더 (Tesseract.js) - 바코드 밑 텍스트 인식 ─────────────────────────
-    // 바코드 자체가 안 잡힐 때 (빛 번짐, 작은 라벨) 우회 수단
-    // 무신사 바코드 텍스트 패턴:
-    //   - TWJU261PAJW032SV000 (영문 4 + 숫자 3 + 영문 + 숫자 + ..., 15~20자 영문/숫자)
-    //   - 1-0127020002 (숫자 + 하이픈 + 숫자, 짧음)
-    // OCR로 읽은 텍스트가 이 패턴에 맞으면 채택
-    let ocrWorker = null;
-    let ocrCanvas = null;
-    let ocrCtx = null;
-    let ocrLoopId = null;
-    let ocrBusy = false;  // 동시 호출 방지
-
-    async function initOcrWorker() {
-        if (ocrWorker || typeof Tesseract === 'undefined') return ocrWorker;
-        try {
-            console.log("⏳ OCR 워커 초기화 중...");
-            ocrWorker = await Tesseract.createWorker('eng', 1, {
-                // [추가] logger 활성화 - 진단용 (콘솔에 진행 상황 다 떠)
-                logger: m => {
-                    if (m.status === 'recognizing text') {
-                        console.log(`[OCR] ${m.status} (${Math.round(m.progress * 100)}%)`);
-                    } else if (m.status !== 'recognizing text') {
-                        console.log(`[OCR] ${m.status}`);
-                    }
-                }
-            });
-            // 영문 대문자 + 숫자 + 하이픈만 인식 (정확도 ↑)
-            await ocrWorker.setParameters({
-                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-',
-                // [패치] PSM 6 = 균일한 텍스트 블록 (가장 안전한 선택)
-                // 11 (희박 텍스트)이 효과 없었으니 6 시도
-                tessedit_pageseg_mode: '6',
-            });
-            console.log("✅ OCR 워커 준비 완료 (PSM 6, eng, whitelist 적용)");
-            return ocrWorker;
-        } catch (e) {
-            console.error("OCR 워커 초기화 실패:", e);
-            return null;
-        }
-    }
-
-    // 무신사 바코드 텍스트 패턴 검증
-    function matchBarcodeTextPattern(text) {
-        if (!text) return null;
-        // 모든 공백/특수문자 제거 (OCR이 가끔 공백 끼움)
-        const cleaned = text.replace(/[\s.,;:'"`]/g, '').toUpperCase();
-
-        // 패턴 1: 영문+숫자 혼합, 12~22자 (15→12로 완화)
-        // TWJU261PAJW032SV000 같은 거. 끝이 0XL/00S/999 등 다양
-        if (/^[A-Z0-9]{12,22}$/.test(cleaned) && /[A-Z]/.test(cleaned) && /\d/.test(cleaned)) {
-            return cleaned;
-        }
-        // 패턴 2: 숫자-숫자 형식 (예: 1-0127020002)
-        if (/^\d+-\d{6,12}$/.test(cleaned)) {
-            return cleaned;
-        }
-        // 패턴 3: 짧은 숫자 (10자 이상 순수 숫자) - EAN-13 등 가능
-        if (/^\d{10,14}$/.test(cleaned)) {
-            return cleaned;
-        }
-        return null;
-    }
-
-    // [추가] OCR 부분 보정 - 무신사 바코드 패턴 활용
-    // 두 가지 패턴 지원:
-    //   1) 19자 영문+숫자 혼합: HOUU252NRPN032BR003 (4-3-4-3-2-3)
-    //   2) 숫자-숫자 형식: 1-0127020002
-    function correctOcrPartial(text) {
-        if (!text) return text;
-
-        // 영문 → 숫자 헷갈림 보정 매핑
-        const toDigit = { 'O': '0', 'I': '1', 'L': '1', 'Z': '2', 'S': '5', 'B': '8', 'G': '6', 'Q': '0', 'D': '0' };
-        // 숫자 → 영문 헷갈림 보정 매핑
-        const toAlpha = { '0': 'O', '1': 'I', '2': 'Z', '5': 'S', '8': 'B', '6': 'G' };
-
-        // ─── 패턴 2: 숫자-숫자 형식 (예: 1-0127020002) ─────
-        // 하이픈이 있으면 숫자형 패턴 가능성 큼
-        if (text.includes('-')) {
-            // 모든 영문을 숫자로 강제 변환
-            let numericForced = '';
-            for (const c of text) {
-                if (c === '-') {
-                    numericForced += '-';
-                } else if (/[A-Z]/.test(c)) {
-                    // 영문이면 숫자로 보정 (매핑 없으면 그대로)
-                    numericForced += toDigit[c] || c;
-                } else {
-                    numericForced += c;
-                }
-            }
-            // 보정 결과가 숫자-숫자 패턴 맞으면 그거 반환
-            if (/^\d+-\d{6,12}$/.test(numericForced)) {
-                return numericForced;
-            }
-            // 안 맞으면 원본 그대로
-            return text;
-        }
-
-        // ─── 패턴 1: 19자 무신사 영문+숫자 ─────
-        // 패턴: [영문4][숫자3][영문4][숫자3][영문2][혼합3]
-        // 예: HOUU 252 NRPN 032 BR 003
-        if (text.length !== 19) return text;
-
-        // 위치별 타입: A=영문, N=숫자, X=둘다 가능 (보정 X)
-        const positionTypes = [
-            'A','A','A','A',   // 0~3: 영문 4자
-            'N','N','N',       // 4~6: 숫자 3자
-            'A','A','A','A',   // 7~10: 영문 4자
-            'N','N','N',       // 11~13: 숫자 3자
-            'A','A',           // 14~15: 영문 2자
-            'X','X','X'        // 16~18: 혼합 (보정 X)
-        ];
-
-        let corrected = '';
-        for (let i = 0; i < 19; i++) {
-            const c = text[i];
-            const expected = positionTypes[i];
-
-            if (expected === 'A' && /\d/.test(c)) {
-                // 영문 자리인데 숫자로 인식됨 → 영문으로 강제
-                corrected += toAlpha[c] || c;
-            } else if (expected === 'N' && /[A-Z]/.test(c)) {
-                // 숫자 자리인데 영문으로 인식됨 → 숫자로 강제
-                corrected += toDigit[c] || c;
-            } else {
-                // 이미 맞거나 X (혼합 자리)는 그대로
-                corrected += c;
-            }
-        }
-        return corrected;
-    }
-
-    // [추가] OCR Consensus voting - 여러 프레임 결과 모아서 가장 많이 나온 값 채택
-    // OCR이 한 번 잘못 인식해도 반복하면 진짜 값이 더 많이 나옴
-    let ocrConsensusVotes = {};  // {값: 표수}
-    let ocrConsensusTimer = null;
-    const OCR_CONSENSUS_WINDOW_MS = 5000;  // 5초 동안 모음
-    const OCR_CONSENSUS_MIN_VOTES = 2;     // 같은 값 2번 이상 나오면 즉시 채택
-
-    function addOcrCandidate(rawText) {
-        if (!rawText) return;
-
-        // 1차: 패턴 매칭 시도
-        let candidate = matchBarcodeTextPattern(rawText);
-
-        // 2차: 매칭 실패 시 보정 시도 후 다시 매칭
-        if (!candidate) {
-            const corrected = correctOcrPartial(rawText.toUpperCase().replace(/[\s.,;:'"`]/g, ''));
-            candidate = matchBarcodeTextPattern(corrected);
-        }
-
-        if (!candidate) return;
-
-        // voting에 추가
-        ocrConsensusVotes[candidate] = (ocrConsensusVotes[candidate] || 0) + 1;
-        console.log(`📝 OCR 후보 (${ocrConsensusVotes[candidate]}표):`, candidate);
-
-        // 같은 값 MIN_VOTES 이상 → 즉시 채택
-        if (ocrConsensusVotes[candidate] >= OCR_CONSENSUS_MIN_VOTES) {
-            console.log(`✅ OCR Consensus 채택 (${ocrConsensusVotes[candidate]}표): ${candidate}`);
-            if (ocrConsensusTimer) {
-                clearTimeout(ocrConsensusTimer);
-                ocrConsensusTimer = null;
-            }
-            ocrConsensusVotes = {};
-            onBarcodeScanned(candidate, 'ocr');
-            return;
-        }
-
-        // 첫 후보가 들어오면 타이머 시작
-        if (!ocrConsensusTimer) {
-            ocrConsensusTimer = setTimeout(finalizeOcrConsensus, OCR_CONSENSUS_WINDOW_MS);
-        }
-    }
-
-    function finalizeOcrConsensus() {
-        ocrConsensusTimer = null;
-        let bestCode = null;
-        let bestVotes = 0;
-        for (const [code, votes] of Object.entries(ocrConsensusVotes)) {
-            if (votes > bestVotes) {
-                bestVotes = votes;
-                bestCode = code;
-            }
-        }
-        ocrConsensusVotes = {};
-        if (bestCode) {
-            console.log(`⚠️ OCR 단독 채택 (${bestVotes}표): ${bestCode}`);
-            onBarcodeScanned(bestCode, 'ocr');
-        }
-    }
-
-    async function startOcrDetector(videoElement, w, h, zoomInfo) {
-        try {
-            if (typeof Tesseract === 'undefined') {
-                console.warn("Tesseract 미로드 - OCR 사용 안 함");
-                return;
-            }
-            // 워커는 lazy init (메모리 절약, 다운로드는 첫 시도 때)
-            ocrCanvas = document.createElement('canvas');
-            ocrCtx = ocrCanvas.getContext('2d', { willReadFrequently: true });
-
-            // OCR은 무거우니까 1초에 1번 정도만 시도 (다른 디코더가 메인, OCR은 보조)
-            const tick = async () => {
-                if (!scannerRunning || !videoElement || scanPaused) {
-                    ocrLoopId = setTimeout(tick, 500);
-                    return;
-                }
-                // 이미 OCR 처리 중이면 skip (한 번에 하나만)
-                if (ocrBusy) {
-                    ocrLoopId = setTimeout(tick, 500);
-                    return;
-                }
-                try {
-                    if (videoElement.readyState >= 2) {
-                        const vw = videoElement.videoWidth;
-                        const vh = videoElement.videoHeight;
-                        if (vw > 0 && vh > 0) {
-                            // [패치] ROI 더 좁게: 화면 가운데 가로 띠 영역만
-                            // 90% 가로 × 30% 세로 - 텍스트 영역 좁히면 OCR 정확도 ↑
-                            const cropW = Math.floor(vw * 0.95);
-                            const cropH = Math.floor(vh * 0.45);
-                            const cropX = Math.floor((vw - cropW) / 2);
-                            const cropY = Math.floor((vh - cropH) / 2);
-
-                            // [패치] OCR용 캔버스를 2배 확대 - 글자 디테일 ↑
-                            // Tesseract는 글자가 클수록 잘 인식함
-                            const scale = 2;
-                            ocrCanvas.width = cropW * scale;
-                            ocrCanvas.height = cropH * scale;
-                            ocrCtx.drawImage(videoElement,
-                                cropX, cropY, cropW, cropH,
-                                0, 0, cropW * scale, cropH * scale);
-
-                            // [패치] 전처리 적용 - 명암 강조 (빛 번짐 + 흐릿 대응)
-                            try {
-                                let imgData = ocrCtx.getImageData(0, 0, ocrCanvas.width, ocrCanvas.height);
-                                imgData = preprocessImageData(imgData);
-                                ocrCtx.putImageData(imgData, 0, 0);
-                            } catch(e) {}
-
-                            // 텍스트 인식 시작 - 워커 초기화 lazy
-                            ocrBusy = true;
-                            const debugEl = document.getElementById('ocr-debug');
-                            const debugText = document.getElementById('ocr-debug-text');
-                            try {
-                                if (debugText) debugText.innerText = '읽는 중...';
-                                if (debugEl) debugEl.className = 'ocr-debug';
-
-                                const worker = await initOcrWorker();
-                                if (!worker) {
-                                    if (debugText) debugText.innerText = '워커 초기화 실패';
-                                    ocrBusy = false;
-                                    ocrLoopId = setTimeout(tick, 1000);
-                                    return;
-                                }
-
-                                const { data } = await worker.recognize(ocrCanvas);
-
-                                // [추가] 진단용 - confidence + 원본 텍스트 + words 다 콘솔에
-                                console.log("[OCR 결과]", {
-                                    text: data?.text || '(빈)',
-                                    confidence: data?.confidence,
-                                    words: data?.words?.length || 0,
-                                    lines: data?.lines?.length || 0
-                                });
-
-                                if (data && data.text) {
-                                    // 모든 줄을 voting 시스템에 넣음 - consensus로 진짜 값 찾기
-                                    const lines = data.text.split('\n')
-                                        .map(l => l.trim())
-                                        .filter(l => l.length >= 3);
-
-                                    let bestRaw = '';
-                                    let hasCandidate = false;
-                                    for (const line of lines) {
-                                        // voting 시스템에 추가 (패턴 매칭 + 보정 다 시도)
-                                        const before = JSON.stringify(ocrConsensusVotes);
-                                        addOcrCandidate(line);
-                                        const after = JSON.stringify(ocrConsensusVotes);
-                                        if (before !== after) {
-                                            hasCandidate = true;
-                                        }
-                                        if (line.length > bestRaw.length) bestRaw = line;
-                                    }
-
-                                    // 디버그 표시
-                                    const totalVotes = Object.values(ocrConsensusVotes).reduce((a,b)=>a+b, 0);
-                                    if (hasCandidate) {
-                                        if (debugText) debugText.innerText = `🔄 후보 모으는 중 (${totalVotes}표)`;
-                                        if (debugEl) debugEl.className = 'ocr-debug';
-                                    } else if (bestRaw) {
-                                        const truncated = bestRaw.length > 30 ? bestRaw.slice(0, 30) + '...' : bestRaw;
-                                        if (debugText) debugText.innerText = `읽음: "${truncated}" (패턴 X)`;
-                                        if (debugEl) debugEl.className = 'ocr-debug no-match';
-                                    } else {
-                                        const wordsCount = data?.words?.length || 0;
-                                        const conf = Math.round(data?.confidence || 0);
-                                        if (wordsCount > 0) {
-                                            if (debugText) debugText.innerText = `짧은 글자 ${wordsCount}개 (conf ${conf}, 길이 부족)`;
-                                            if (debugEl) debugEl.className = 'ocr-debug no-match';
-                                        } else {
-                                            if (debugText) debugText.innerText = `읽힌 글자 없음 (conf ${conf})`;
-                                            if (debugEl) debugEl.className = 'ocr-debug';
-                                        }
-                                    }
-                                } else {
-                                    if (debugText) debugText.innerText = '결과 빈 응답';
-                                }
-                            } catch (e) {
-                                if (debugText) debugText.innerText = '오류: ' + (e.message || e).slice(0, 30);
-                            }
-                            ocrBusy = false;
-                        }
-                    }
-                } catch (e) {
-                    ocrBusy = false;
-                }
-                // OCR은 1초마다 (CPU 부담 ↓, 다른 디코더가 메인)
-                ocrLoopId = setTimeout(tick, 1000);
-            };
-            tick();
-            console.log("✅ OCR 디코더 가동");
-        } catch (e) {
-            console.error("OCR 시작 실패:", e);
-        }
-    }
-
-    // ─── zxing-wasm 디코더 (C++ 네이티브) ─────────────────────────
-    let zxingWasmCanvas = null;
-    let zxingWasmCtx = null;
-    let zxingWasmLoopId = null;
-
-    async function startZxingWasmDetector(videoElement, w, h, zoomInfo) {
-        const engineInfo = document.getElementById('camera-engine-info');
-        try {
-            if (!window.zxingWasmReady || !window.zxingReadBarcodes) {
-                console.warn("zxing-wasm 미준비 - 백업 디코더만 사용");
-                // 엔진 표시 - ZBar 상태도 같이
-                const zbarOk = window.zbarReady ? "ZBar+" : "";
-                engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing+OCR (${w}x${h}${zoomInfo})`;
-                return;
-            }
-
-            zxingWasmCanvas = document.createElement('canvas');
-            zxingWasmCtx = zxingWasmCanvas.getContext('2d', { willReadFrequently: true });
-
-            // 프레임마다 다른 전처리 시도
-            let frameCount = 0;
-
-            const tick = async () => {
-                if (!scannerRunning || !videoElement || scanPaused) {
-                    zxingWasmLoopId = setTimeout(tick, 100);
-                    return;
-                }
-                try {
-                    if (videoElement.readyState >= 2) {
-                        const vw = videoElement.videoWidth;
-                        const vh = videoElement.videoHeight;
-                        if (vw > 0 && vh > 0) {
-                            // [패치] ROI 확장: 95% x 70% (19자리 긴 바코드 다 들어가게)
-                            const cropW = Math.floor(vw * 0.95);
-                            const cropH = Math.floor(vh * 0.7);
-                            const cropX = Math.floor((vw - cropW) / 2);
-                            const cropY = Math.floor((vh - cropH) / 2);
-                            zxingWasmCanvas.width = cropW;
-                            zxingWasmCanvas.height = cropH;
-                            zxingWasmCtx.drawImage(videoElement,
-                                cropX, cropY, cropW, cropH,
-                                0, 0, cropW, cropH);
-
-                            // 프레임마다 다른 전처리 시도 (ZBar와 다른 페이즈로)
-                            let imageData = zxingWasmCtx.getImageData(0, 0, cropW, cropH);
-                            const variant = (frameCount + 1) % 3;  // ZBar와 1프레임 offset
-                            if (variant === 1) {
-                                imageData = preprocessImageData(imageData);
-                            } else if (variant === 2) {
-                                imageData = preprocessImageDataStrong(imageData);
-                            }
-                            frameCount++;
-
-                            const results = await window.zxingReadBarcodes(imageData, {
-                                tryHarder: true,
-                                formats: [
-                                    'Code128', 'Code39', 'Code93',
-                                    'EAN-13', 'EAN-8',
-                                    'UPC-A', 'UPC-E',
-                                    'Codabar', 'ITF',
-                                    'QRCode', 'DataMatrix'
-                                ],
-                                maxNumberOfSymbols: 1
-                            });
-                            if (results && results.length > 0 && results[0].text) {
-                                onBarcodeScanned(results[0].text, "zxing-wasm");
-                            }
-                        }
-                    }
-                } catch (e) {
-                    // 디코딩 실패는 무시
-                }
-                zxingWasmLoopId = setTimeout(tick, 80);
-            };
-            tick();
-            usingEngine = 'zxing-wasm';
-            // ZBar 상태도 포함해서 표시
-            const zbarOk = window.zbarReady ? "ZBar+" : "";
-            engineInfo.innerText = `엔진: ${zbarOk}ZXing-WASM+Quagga+OCR (${w}x${h}${zoomInfo})`;
-        } catch (e) {
-            console.error("zxing-wasm 시작 실패:", e);
-            const zbarOk = window.zbarReady ? "ZBar+" : "";
-            engineInfo.innerText = `엔진: ${zbarOk}Quagga+ZXing+OCR (${w}x${h}${zoomInfo})`;
-        }
-    }
-
-    // ─── Quagga2 디코더 (1D 바코드 강력) ─────────────────────────
-    function startQuaggaDetector(videoElement, w, h, zoomInfo) {
-        const engineInfo = document.getElementById('camera-engine-info');
-        try {
-            if (typeof Quagga === 'undefined') {
-                engineInfo.innerText = `엔진: ZXing only (${w}x${h}${zoomInfo})`;
-                return;
-            }
-            Quagga.init({
-                inputStream: {
-                    name: "Live",
-                    type: "LiveStream",
-                    target: videoElement,
-                    constraints: {
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 },
-                        facingMode: "environment"
-                    },
-                    area: {
-                        // [패치] 영역 확장: 19자리 긴 바코드 다 들어가게
-                        top: "10%", right: "2%",
-                        left: "2%", bottom: "10%"
-                    }
-                },
-                locator: {
-                    patchSize: "medium",
-                    halfSample: true
-                },
-                numOfWorkers: 4,
-                frequency: 10,
-                decoder: {
-                    // [패치] 영문+숫자 혼합 19자리(TWJU...)에 대응
-                    // EAN/UPC 같은 숫자 전용 reader 제거 - 오인식 큰 폭 감소
-                    // 너의 바코드 형식: CODE128 (영문+숫자) 또는 짧은 숫자 (1-0127020002 = CODE39 가능)
-                    readers: [
-                        "code_128_reader",
-                        "code_39_reader",
-                        "code_93_reader"
-                    ]
-                },
-                locate: true
-            }, (err) => {
-                if (err) {
-                    console.error("Quagga 초기화 실패:", err);
-                    engineInfo.innerText = `엔진: ZXing only (${w}x${h}${zoomInfo})`;
-                    return;
-                }
-                Quagga.start();
-                engineInfo.innerText = `엔진: Quagga+ZXing (${w}x${h}${zoomInfo})`;
-                usingEngine = 'quagga';
-            });
-
-            Quagga.onDetected(handleQuaggaDetection);
-        } catch (e) {
-            console.error("Quagga 시작 오류:", e);
-            engineInfo.innerText = `엔진: ZXing only (${w}x${h}${zoomInfo})`;
-        }
-    }
-
-    // Quagga가 인식할 때마다 호출 - 신뢰도 확인 후 처리
-    function handleQuaggaDetection(result) {
-        // [추가] PDA 확인 대기 중이면 무시
-        if (scanPaused || pendingScan) return;
-
-        if (!result || !result.codeResult) return;
-        const code = result.codeResult.code;
-        if (!code) return;
-
-        // 신뢰도 체크 - 사용자가 ✓ 눌러야 추가되니까 좀 풀어줘도 됨
-        const decoded = result.codeResult.decodedCodes || [];
-        let totalErr = 0;
-        let validCount = 0;
-        for (const d of decoded) {
-            if (d.error !== undefined) {
-                totalErr += d.error;
-                validCount++;
-            }
-        }
-        const avgErr = validCount > 0 ? totalErr / validCount : 1;
-        // [완화] 0.08 → 0.2 (PDA 확인 모드라 사용자가 검증 가능)
-        if (avgErr > 0.2) {
-            console.log(`🚫 Quagga 신뢰도 너무 낮음 (err=${avgErr.toFixed(3)}): ${code}`);
-            return;
-        }
-
-        // [완화] 너무 짧은 거만 거부 (3자 미만은 진짜 노이즈)
-        if (code.length < 3) {
-            return;
-        }
-
-        onBarcodeScanned(code, "quagga");
-    }
-
-    // ─── ZXing 백업 디코더 ─────────────────────────
-    function startZxingBackupDetector(videoElement) {
-        try {
-            if (!zxingScanner) {
-                const hints = new Map();
-                const formats = [
-                    ZXing.BarcodeFormat.CODE_128,
-                    ZXing.BarcodeFormat.CODE_39,
-                    ZXing.BarcodeFormat.CODE_93,
-                    ZXing.BarcodeFormat.EAN_13,
-                    ZXing.BarcodeFormat.EAN_8,
-                    ZXing.BarcodeFormat.UPC_A,
-                    ZXing.BarcodeFormat.UPC_E,
-                    ZXing.BarcodeFormat.CODABAR,
-                    ZXing.BarcodeFormat.ITF,
-                    ZXing.BarcodeFormat.QR_CODE,
-                    ZXing.BarcodeFormat.DATA_MATRIX,
-                ];
-                hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-                hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-                zxingScanner = new ZXing.BrowserMultiFormatReader(hints, 200);
-            }
-            zxingScanner.decodeFromVideoElement(videoElement, (result, err) => {
-                if (result) {
-                    onBarcodeScanned(result.getText(), "zxing-js");
-                }
-            });
-        } catch (e) {
-            console.error("ZXing 백업 시작 실패:", e);
-        }
-    }
-
-    function stopCamera() {
-        scannerRunning = false;
-        scanPaused = false;
-        // [추가] consensus 상태 초기화
-        if (consensusTimer) {
-            clearTimeout(consensusTimer);
-            consensusTimer = null;
-        }
-        consensusVotes = {};
-        // [추가] OCR 루프 정지 (워커는 유지 - 다음 카메라 켤 때 재사용)
-        if (ocrLoopId) {
-            clearTimeout(ocrLoopId);
-            ocrLoopId = null;
-        }
-        ocrCanvas = null;
-        ocrCtx = null;
-        ocrBusy = false;
-        // [추가] OCR consensus 상태 초기화
-        if (ocrConsensusTimer) {
-            clearTimeout(ocrConsensusTimer);
-            ocrConsensusTimer = null;
-        }
-        ocrConsensusVotes = {};
-        // ZBar 루프 정지
-        if (zbarLoopId) {
-            clearTimeout(zbarLoopId);
-            zbarLoopId = null;
-        }
-        zbarCanvas = null;
-        zbarCtx = null;
-        // zxing-wasm 루프 정지
-        if (zxingWasmLoopId) {
-            clearTimeout(zxingWasmLoopId);
-            zxingWasmLoopId = null;
-        }
-        zxingWasmCanvas = null;
-        zxingWasmCtx = null;
-        // Quagga 정지
-        try {
-            if (typeof Quagga !== 'undefined') {
-                Quagga.offDetected(handleQuaggaDetection);
-                Quagga.stop();
-            }
-        } catch(e) {}
-        // 네이티브 루프 정지
-        if (detectLoopId) {
-            clearTimeout(detectLoopId);
-            detectLoopId = null;
-        }
-        barcodeDetector = null;
-        // ZXing 정지
-        if (zxingScanner) {
-            try { zxingScanner.reset(); } catch(e) {}
-        }
-        // 카메라 스트림 정지
-        if (cameraStream) {
-            try {
-                cameraStream.getTracks().forEach(t => t.stop());
-            } catch(e) {}
-            cameraStream = null;
-        }
-        cameraTrack = null;
-        cameraZoomCaps = null;
-        currentZoom = 1.0;
-        if (videoEl) {
-            try { videoEl.srcObject = null; } catch(e) {}
-        }
-    }
-
-    function stopScanner() {
-        const modal = document.getElementById('camera-modal');
-        if (modal && modal.classList.contains('open')) {
-            modal.classList.remove('open');
-        }
-        stopCamera();
-    }
-
-    // ─── 탭해서 초점 ─────────────────────────
-    async function handleViewportTap(e) {
-        if (!cameraStream) return;
-        try {
-            const track = cameraStream.getVideoTracks()[0];
-            if (!track) return;
-            const capabilities = track.getCapabilities ? track.getCapabilities() : {};
-            const settings = track.getSettings ? track.getSettings() : {};
-
-            // 시각적 피드백 - 노란 원
-            const rect = e.currentTarget.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            const ring = document.createElement('div');
-            ring.className = 'focus-ring';
-            ring.style.left = x + 'px';
-            ring.style.top = y + 'px';
-            e.currentTarget.appendChild(ring);
-            setTimeout(() => ring.remove(), 500);
-
-            // 초점 강제 트리거
-            const advanced = [];
-            if (capabilities.focusMode && capabilities.focusMode.includes('manual')) {
-                advanced.push({ focusMode: 'manual' });
-                setTimeout(async () => {
-                    try {
-                        await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-                    } catch(e) {}
-                }, 300);
-            } else if (capabilities.focusMode && capabilities.focusMode.includes('single-shot')) {
-                advanced.push({ focusMode: 'single-shot' });
-            } else {
-                advanced.push({ focusMode: 'continuous' });
-            }
-            // pointsOfInterest 지원하면 그 지점 초점
-            if (capabilities.pointsOfInterest) {
-                const px = x / rect.width;
-                const py = y / rect.height;
-                advanced.push({ pointsOfInterest: [{ x: px, y: py }] });
-            }
-            try {
-                await track.applyConstraints({ advanced });
-            } catch(e) {
-                // 초점 명령 실패 (대부분 폰이 자동 모드)
-            }
-        } catch (e) {
-            console.warn("초점 트리거 실패:", e);
-        }
-    }
-
-    // ─── 수동 초점 버튼 (🎯) ─────────────────────────
-    async function triggerFocus() {
-        if (!cameraStream) return;
-        try {
-            const track = cameraStream.getVideoTracks()[0];
-            if (!track) return;
-            await track.applyConstraints({
-                advanced: [{ focusMode: 'continuous' }]
-            });
-            // 짧은 진동으로 피드백
-            vibrate(30);
-            beep(800, 60);
-        } catch(e) {}
-    }
-
-    // ─── 줌 조절 (➕➖) ─────────────────────────
-    async function adjustZoom(direction) {
-        if (!cameraTrack || !cameraZoomCaps) return;
-        try {
-            const step = cameraZoomCaps.step || 0.5;
-            let newZoom = currentZoom + (direction * Math.max(step, 0.5));
-            newZoom = Math.max(cameraZoomCaps.min, Math.min(cameraZoomCaps.max, newZoom));
-            // 소수점 1자리로 반올림
-            newZoom = Math.round(newZoom * 10) / 10;
-            if (newZoom === currentZoom) return;
-            await cameraTrack.applyConstraints({
-                advanced: [{ zoom: newZoom }]
-            });
-            currentZoom = newZoom;
-            updateZoomUI();
-            // 짧은 피드백
-            beep(900, 40);
-        } catch(e) {
-            console.warn("줌 조절 실패:", e);
-        }
-    }
-    function updateZoomUI() {
-        const label = document.getElementById('zoom-label');
-        if (label) label.innerText = `${currentZoom.toFixed(1)}x`;
-    }
-
-    // ─── 수동 입력 (키보드로 직접) ─────────────────────────
+    // ─── 수동 입력 (스캐너 안 될 때) ─────────────────────────
     function submitManualBarcode() {
         const input = document.getElementById('manual-barcode-input');
-        const val = (input.value || '').trim();
-        if (!val) {
-            feedbackError("바코드를 입력하세요");
+        if (!input) return;
+        const v = input.value.trim();
+        if (!v) {
+            feedbackError('값을 입력하세요');
             return;
         }
-        onBarcodeScanned(val);
         input.value = '';
-        // 상품 모드면 계속 입력 가능하게 포커스 유지
-        if (scanCameraMode === 'product') {
-            input.focus();
-        }
+        processPdaScan(v);
+        keepPdaFocus();
     }
 
-    // ─── 바코드 인식 콜백 ─────────────────────────
-    // SCAN_COOLDOWN_MS: 인식 후 이 시간 동안 다음 인식 무시 (디바운스)
-    const SCAN_COOLDOWN_MS = 500;
-    // [추가] Consensus 모드 - 0.3초 모아서 가장 자주 나온 값 채택
-    // 디코더 4개가 동시에 도는데 한 번 받자마자 채택하면 가짜 결과(Quagga 오인식 등)도
-    // 즉시 통과돼버림. 0.3초 모아서 voting 하면 진짜 값만 살아남음.
-    const CONSENSUS_WINDOW_MS = 300;
-    const CONSENSUS_MIN_VOTES = 2;  // 최소 2번 같은 값 나와야 채택
-    let consensusVotes = {};  // {코드: 카운트}
-    let consensusTimer = null;
-    let consensusStartedAt = 0;
+    // ─── 페이지 로드 시 초기화 ─────────────────────────
+    if (document.readyState !== 'loading') {
+        setTimeout(initPdaScanner, 0);
+    } else {
+        document.addEventListener('DOMContentLoaded', initPdaScanner);
+    }
 
-    function onBarcodeScanned(decodedText, source) {
-        const code = (decodedText || '').trim();
-        if (!code) return;
 
-        // 확인 대기 중이면 추가 인식 무시
-        if (scanPaused || pendingScan) return;
-
-        const now = Date.now();
-        if ((now - lastScanAt) < SCAN_COOLDOWN_MS) return;
-
-        console.log(`📷 후보 [${source || '?'}]:`, code);
-
-        // [패치] ZBar는 오인식 거의 안 함 - 1표만으로 즉시 채택
-        // ZBar = C 네이티브 디코더라 잡으면 거의 다 진짜
-        // OCR도 패턴 매칭 통과한 거라 즉시 채택
-        if (source === 'zbar' || source === 'ocr') {
-            console.log(`✅ ${source} 즉시 채택: ${code}`);
-            if (consensusTimer) { clearTimeout(consensusTimer); consensusTimer = null; }
-            finalizeWithCode(code);
+    function handleProductScan(barcode) {
+        if (!scanState.currentLoc) {
+            // 큰 표시 + 음성 둘 다
+            showPdaRecent('error', barcode, '로케를 먼저 스캔하세요');
+            feedbackError("로케이션이 없어요");
             return;
         }
 
-        // [Consensus] voting에 추가
-        consensusVotes[code] = (consensusVotes[code] || 0) + 1;
+        // 동일 로케 + 동일 바코드면 수량 +1 (중복 처리)
+        const existing = scanState.items.find(it =>
+            it.barcode === barcode && it.location === scanState.currentLoc
+        );
 
-        // 첫 후보가 들어오면 타이머 시작
-        if (!consensusTimer) {
-            consensusStartedAt = now;
-            consensusTimer = setTimeout(finalizeConsensus, CONSENSUS_WINDOW_MS);
-        }
-
-        // 같은 값이 MIN_VOTES 도달하면 즉시 채택 (빠른 인식)
-        // - 디코더 2개가 같은 값 던지면 진짜일 확률 매우 높음
-        if (consensusVotes[code] >= CONSENSUS_MIN_VOTES) {
-            console.log(`✅ 즉시 채택 (${consensusVotes[code]}표): ${code}`);
-            clearTimeout(consensusTimer);
-            consensusTimer = null;
-            finalizeWithCode(code);
-        }
-    }
-
-    // Consensus 윈도우 종료 시 호출 - 가장 많이 나온 값 채택
-    function finalizeConsensus() {
-        consensusTimer = null;
-
-        // 가장 표 많은 거 선택
-        let bestCode = null;
-        let bestVotes = 0;
-        for (const [code, votes] of Object.entries(consensusVotes)) {
-            if (votes > bestVotes) {
-                bestVotes = votes;
-                bestCode = code;
-            }
-        }
-
-        if (!bestCode) {
-            consensusVotes = {};
-            return;
-        }
-
-        // 단독 1표면 신뢰도 낮음 - 채택은 하되 로그 남김
-        if (bestVotes < CONSENSUS_MIN_VOTES) {
-            console.warn(`⚠️ 단독 1표 채택: ${bestCode} (다른 후보: ${Object.keys(consensusVotes).filter(c => c !== bestCode).join(',') || '없음'})`);
-        } else {
-            console.log(`✅ Consensus 채택 (${bestVotes}표): ${bestCode}`);
-        }
-        finalizeWithCode(bestCode);
-    }
-
-    function finalizeWithCode(code) {
-        // voting 초기화
-        consensusVotes = {};
-        lastScanText = code;
-        lastScanAt = Date.now();
-
-        // [PDA 확인 모드] 즉시 처리 X → 확인 오버레이 띄움
-        showScanConfirm(code);
-    }
-
-    // ─── PDA 확인 오버레이 표시 ─────────────────────────
-    function showScanConfirm(code) {
-        // 카메라/디코더 일시 정지
-        scanPaused = true;
-        try {
-            if (typeof Quagga !== 'undefined') {
-                Quagga.pause();
-            }
-        } catch(e) {}
-        // ZXing JS는 자체 정지 어려워서 그냥 pendingScan 플래그로 차단
-        // zxing-wasm 루프는 scanPaused 체크로 자동 일시정지
-
-        // 비디오도 멈춤 (시각적으로 정지된 느낌)
-        if (videoEl) {
-            try { videoEl.pause(); } catch(e) {}
-        }
-
-        // 어떤 종류인지 판별
-        let kind = 'product';
-        let label = '바코드';
-        let banner = '✓ 스캔 완료';
-        if (scanCameraMode === 'location') {
-            kind = 'loc';
-            label = '로케이션';
-            banner = '📍 로케 인식';
-        } else if (isLocationBarcode(code)) {
-            kind = 'loc';
-            label = '로케이션 (자동 인식)';
-            banner = '📍 로케 변경';
-        }
-
-        // 너무 짧은 결과는 의심 - 경고 표시지만 추가는 가능
-        if (code.length < 5 && kind === 'product') {
-            kind = 'error';
-            banner = '⚠️ 너무 짧음 (오인식 의심)';
-        }
-
-        // pendingScan에 저장 + 오버레이 표시
-        pendingScan = { code, kind };
-
-        const confirm = document.getElementById('scan-confirm');
-        const bannerEl = document.getElementById('scan-confirm-banner');
-        const labelEl = document.getElementById('scan-confirm-label');
-        const valueEl = document.getElementById('scan-confirm-value');
-
-        confirm.className = 'scan-confirm open kind-' + kind;
-        bannerEl.innerText = banner;
-        labelEl.innerText = label;
-        valueEl.innerText = code;
-
-        // 피드백 (소리/진동)
-        beep(1200, 80);
-        vibrate(50);
-    }
-
-    // ─── ✓ 추가하고 계속 ─────────────────────────
-    function acceptPendingScan() {
-        if (!pendingScan) return;
-        const { code, kind } = pendingScan;
-
-        if (kind === 'loc' || scanCameraMode === 'location') {
-            // 로케 처리
-            const locValue = code.toUpperCase();
-            scanState.currentLoc = locValue;
-            updateLocUI(locValue);
+        if (existing) {
+            existing.qty = (existing.qty || 1) + 1;
+            renderScanList();
             saveScanDraft();
-            // 로케 모드면 모달 닫기
-            if (scanCameraMode === 'location') {
-                hideScanConfirm();
-                closeCameraModal();
-                return;
-            }
-            // 상품 모드 중 로케 인식 - info 갱신
-            const info = document.getElementById('camera-modal-info');
-            if (info) info.innerText = `📍 ${locValue} · 연속 스캔`;
+            updatePdaCounters();
+            showPdaRecent('duplicate', barcode, `${scanState.currentLoc} · 수량 ${existing.qty}개`);
+            // 중복용 짧은 피드백
+            beep(600, 60);
+            vibrate([30, 30, 30]);
+            speak('중복');
         } else {
-            // 상품 처리
-            if (!scanState.currentLoc) {
-                feedbackError("로케이션이 없어요");
-                hideScanConfirm();
-                return;
-            }
             const item = {
-                barcode: code,
+                barcode: barcode,
                 qty: 1,
                 location: scanState.currentLoc,
                 ts: Date.now()
@@ -3419,77 +2032,10 @@
             scanState.items.push(item);
             renderScanList();
             saveScanDraft();
-            const status = document.getElementById('camera-modal-status');
-            if (status) status.innerText = `${scanState.items.length}건`;
+            updatePdaCounters();
+            showPdaRecent('success', barcode, `${scanState.currentLoc} · 등록`);
+            feedbackScanSuccess(barcode);
         }
-
-        // 확인 닫고 카메라 재개
-        hideScanConfirm();
-    }
-
-    // ─── ✗ 다시 (잘못 찍음) ─────────────────────────
-    function cancelPendingScan() {
-        if (!pendingScan) return;
-        // 그냥 닫기만, 데이터 추가 X
-        beep(600, 80);
-        vibrate(30);
-        hideScanConfirm();
-    }
-
-    // 오버레이 숨기고 디코더 재개
-    function hideScanConfirm() {
-        const confirm = document.getElementById('scan-confirm');
-        if (confirm) confirm.classList.remove('open');
-        pendingScan = null;
-        // [추가] consensus 정리 - 다음 스캔은 fresh 하게
-        if (consensusTimer) {
-            clearTimeout(consensusTimer);
-            consensusTimer = null;
-        }
-        consensusVotes = {};
-        // [추가] OCR consensus도 정리
-        if (ocrConsensusTimer) {
-            clearTimeout(ocrConsensusTimer);
-            ocrConsensusTimer = null;
-        }
-        ocrConsensusVotes = {};
-        // 비디오 재개
-        if (videoEl) {
-            try { videoEl.play(); } catch(e) {}
-        }
-        // Quagga 재개
-        try {
-            if (typeof Quagga !== 'undefined') {
-                Quagga.start();
-            }
-        } catch(e) {}
-        // 1초 후 디코더 재가동 (사용자가 카메라 다시 위치 잡을 시간)
-        setTimeout(() => {
-            scanPaused = false;
-            lastScanText = '';
-            lastScanAt = Date.now();  // 쿨다운 새로 시작
-        }, 800);
-    }
-
-    function handleProductScan(barcode) {
-        if (!scanState.currentLoc) {
-            feedbackError("로케이션이 없어요");
-            return;
-        }
-
-        const item = {
-            barcode: barcode,
-            qty: 1,
-            location: scanState.currentLoc,
-            ts: Date.now()
-        };
-        scanState.items.push(item);
-        renderScanList();
-        saveScanDraft();
-        feedbackScanSuccess(barcode);  // [수정] 바코드 값 전달 - 플래시에 표시
-
-        const status = document.getElementById('camera-modal-status');
-        if (status) status.innerText = `${scanState.items.length}건`;
     }
 
     // ─── 스캔 목록 렌더링 ─────────────────────────
@@ -3534,6 +2080,8 @@
         scanState.items.splice(idx, 1);
         renderScanList();
         saveScanDraft();
+        updatePdaCounters();
+        keepPdaFocus();
     }
 
     function undoLastScan() {
@@ -3541,25 +2089,40 @@
             feedbackError("취소할 항목 없음");
             return;
         }
-        scanState.items.pop();
+        const last = scanState.items[scanState.items.length - 1];
+        // 수량이 2 이상이면 1만 차감, 아니면 항목 자체 제거
+        if (last.qty && last.qty > 1) {
+            last.qty -= 1;
+            showPdaRecent('duplicate', last.barcode, `수량 ${last.qty}개로 차감`);
+        } else {
+            scanState.items.pop();
+            showPdaRecent('idle', '취소됨', '마지막 스캔 제거');
+        }
         renderScanList();
         saveScanDraft();
+        updatePdaCounters();
         beep(600, 80);
         vibrate(30);
+        speak('취소');
+        keepPdaFocus();
     }
 
     function clearAllScans() {
         if (scanState.items.length === 0) {
             // 그냥 작업명/로케만 초기화
-            if (!confirm("작업명과 로케를 초기화할까요?")) return;
+            if (!confirm("작업명과 로케를 초기화할까요?")) {
+                keepPdaFocus();
+                return;
+            }
         } else {
-            if (!confirm(`스캔한 ${scanState.items.length}건을 전부 삭제할까요?\n(전송 안 한 데이터는 사라집니다)`)) return;
+            if (!confirm(`스캔한 ${scanState.items.length}건을 전부 삭제할까요?\n(전송 안 한 데이터는 사라집니다)`)) {
+                keepPdaFocus();
+                return;
+            }
         }
         scanState = {
             mode: scanState.mode,
             label: '',
-            workType: null,    // [수정] 미선택
-            quality: null,     // [수정] 미선택
             currentLoc: '',
             fromLoc: '',
             toLoc: '',
@@ -3568,72 +2131,35 @@
         };
         document.getElementById('scan-label').value = '';
         updateLocUI('');
-        // UI 토글 모두 active 제거
-        document.querySelectorAll('.scan-mini-btn').forEach(b => b.classList.remove('active'));
+        updatePdaLocDisplay('');
+        updatePdaCounters();
         renderScanList();
         clearScanDraft();
+        // 최근 표시도 초기화
+        const recent = document.getElementById('pda-recent');
+        if (recent) {
+            recent.className = 'pda-recent idle';
+            recent.querySelector('.top').textContent = '최근 스캔';
+            recent.querySelector('.bc').textContent = '아직 스캔 안 함';
+            recent.querySelector('.sub').textContent = '';
+        }
+        keepPdaFocus();
     }
 
     // ─── 전송 (Firestore) ─────────────────────────
     async function sendScanSession() {
         const name = localStorage.getItem("logipan_user_name");
         if (!name) {
-            showToast("⚠️ 작업자 이름이 등록되지 않았어요");
+            feedbackError("작업자 이름이 등록되지 않았어요");
             return;
         }
         if (scanState.items.length === 0) {
-            showToast("⚠️ 스캔 데이터가 없어요");
+            feedbackError("스캔 데이터 없음");
             return;
         }
         const label = (document.getElementById('scan-label').value || '').trim();
         if (!label) {
-            showToast("⚠️ 작업명을 입력하세요");
-            const labelEl = document.getElementById('scan-label');
-            labelEl.focus();
-            labelEl.style.transition = 'all 0.2s';
-            labelEl.style.border = '2px solid #DC2626';
-            labelEl.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.2)';
-            labelEl.style.animation = 'shakeInput 0.4s';
-            setTimeout(() => {
-                labelEl.style.border = ''; labelEl.style.boxShadow = ''; labelEl.style.animation = '';
-            }, 1500);
-            return;
-        }
-        // [추가] 작업 종류 필수 검증
-        if (!scanState.workType) {
-            showToast("⚠️ 작업 종류를 선택하세요 (매입/위탁/기타)");
-            // 작업 종류 버튼 영역 강조
-            const workBtns = document.querySelectorAll('.scan-mini-btn[data-work]');
-            workBtns.forEach(b => {
-                b.style.transition = 'all 0.2s';
-                b.style.border = '2px solid #DC2626';
-                b.style.boxShadow = '0 0 0 2px rgba(220,38,38,0.15)';
-                b.style.animation = 'shakeInput 0.4s';
-            });
-            setTimeout(() => {
-                workBtns.forEach(b => {
-                    b.style.border = ''; b.style.boxShadow = ''; b.style.animation = '';
-                });
-            }, 1500);
-            return;
-        }
-        // [추가] 정상/불량 필수 검증
-        if (!scanState.quality) {
-            showToast("⚠️ 정상/불량을 선택하세요");
-            const qualBtns = [document.getElementById('quality-btn-normal'), document.getElementById('quality-btn-defect')];
-            qualBtns.forEach(b => {
-                if (!b) return;
-                b.style.transition = 'all 0.2s';
-                b.style.border = '2px solid #DC2626';
-                b.style.boxShadow = '0 0 0 2px rgba(220,38,38,0.15)';
-                b.style.animation = 'shakeInput 0.4s';
-            });
-            setTimeout(() => {
-                qualBtns.forEach(b => {
-                    if (!b) return;
-                    b.style.border = ''; b.style.boxShadow = ''; b.style.animation = '';
-                });
-            }, 1500);
+            feedbackError("작업명을 입력하세요");
             return;
         }
 
@@ -3643,12 +2169,10 @@
         sendBtn.innerText = '📤 전송 중...';
 
         try {
-            // Firestore에 저장 - 세션 단위로 workType + quality 박힘
-            const sessionRef = await db.collection("scan_sessions").add({
+            // Firestore에 저장
+            await db.collection("scan_sessions").add({
                 user: name,
                 mode: scanState.mode,
-                work_type: scanState.workType,       // [추가] 매입/위탁/기타
-                quality: scanState.quality,          // [추가] normal/defect (세션 단위)
                 label: label,
                 items: scanState.items.map(it => ({
                     barcode: it.barcode,
@@ -3661,47 +2185,30 @@
                 created_at: firebase.firestore.FieldValue.serverTimestamp()
             });
 
-            // [추가] 작업보고 탭에 알림용 카드 추가 (관리자가 한눈에 보게)
-            // 일반 작업보고와 같은 컬렉션 but source='scan'으로 구분
-            const qualityLabel = scanState.quality === 'defect' ? '불량' : '정상';
-            const itemCount = scanState.items.length;
-            try {
-                await db.collection("field_reports").add({
-                    user: name,
-                    title: `[${scanState.workType}] ${label} (${qualityLabel} ${itemCount}개)`,
-                    text: `📦 스캔 ${itemCount}개 (${qualityLabel}) - 관리자가 입고 처리 대기 중`,
-                    work_category: scanState.workType,    // 매입/위탁/기타
-                    source: 'scan',                       // [핵심] 일반 vs 스캔 구분
-                    scan_session_id: sessionRef.id,       // scan_sessions 참조
-                    scan_quality: scanState.quality,      // normal/defect
-                    scan_item_count: itemCount,
-                    scan_label: label,
-                    date: new Date().toISOString().slice(2,10).replace(/-/g,'/'),  // yy/mm/dd
-                    status: "⏳ 처리중",
-                    comment_count: 0,
-                    has_attached_image: false,
-                    timestamp: firebase.firestore.FieldValue.serverTimestamp()
-                });
-            } catch (e2) {
-                console.warn("작업보고 알림 추가 실패 (스캔은 OK):", e2);
-                // 알림 실패해도 스캔 데이터는 저장됨 → 관리자가 별도로 확인 가능
-            }
-
             feedbackSent();
             showToast(`✅ ${scanState.items.length}건 전송 완료!`);
 
             // 초기화
             scanState.items = [];
             scanState.label = '';
-            scanState.workType = null;       // [수정] 다시 미선택 상태로
-            scanState.quality = null;        // [수정] 다시 미선택 상태로
             scanState.currentLoc = '';
             document.getElementById('scan-label').value = '';
             updateLocUI('');
-            // UI 토글 모두 초기화 (active 제거)
-            document.querySelectorAll('.scan-mini-btn').forEach(b => b.classList.remove('active'));
+            updatePdaLocDisplay('');
+            updatePdaCounters();
             renderScanList();
             clearScanDraft();
+            // 최근 표시도 리셋
+            const recent = document.getElementById('pda-recent');
+            if (recent) {
+                recent.className = 'pda-recent idle';
+                recent.querySelector('.top').textContent = '최근 스캔';
+                recent.querySelector('.bc').textContent = '아직 스캔 안 함';
+                recent.querySelector('.sub').textContent = '';
+            }
+            sendBtn.disabled = false;
+            sendBtn.innerText = originalText;
+            keepPdaFocus();
         } catch (e) {
             console.error("스캔 전송 실패:", e);
             feedbackError("전송 실패: " + e.message);
@@ -3715,6 +2222,10 @@
         initScanSettingsUI();
         loadScanDraft();
         renderScanList();
+        // [PDA 추가] 저장된 상태로 PDA UI도 초기화
+        updatePdaLocDisplay(scanState.currentLoc || '');
+        updatePdaCounters();
+
         // 작업명 변경 시 자동 저장
         const labelInput = document.getElementById('scan-label');
         if (labelInput) {
@@ -3723,19 +2234,23 @@
                 saveScanDraft();
             });
         }
-        // 로케 입력칸 직접 편집 시 저장
+        // 로케 입력칸 직접 편집 시 - 포커스 빠질 때만 적용 (실시간 반영하면 Enter 누르기 전 미완성 값이 들어감)
         const locInput = document.getElementById('scan-loc-input');
         if (locInput) {
-            locInput.addEventListener('input', () => {
-                scanState.currentLoc = locInput.value.toUpperCase();
-                saveScanDraft();
-            });
-            // 포커스 빠질 때 대문자 변환
             locInput.addEventListener('blur', () => {
                 const v = locInput.value.trim().toUpperCase();
                 locInput.value = v;
-                scanState.currentLoc = v;
-                saveScanDraft();
+                if (v && v !== scanState.currentLoc) {
+                    // 직접 타이핑 후 포커스 빠지면 로케로 등록
+                    if (isLocationBarcode(v)) {
+                        registerPdaLocation(v);
+                    } else {
+                        // 패턴 안 맞아도 일단 저장 (사용자 의도 존중)
+                        scanState.currentLoc = v;
+                        updatePdaLocDisplay(v);
+                        saveScanDraft();
+                    }
+                }
             });
         }
     }
