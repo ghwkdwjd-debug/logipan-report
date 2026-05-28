@@ -11,6 +11,7 @@
     <title>로지판 - 통합 현장 관리 (v2.1)</title>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
     <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
     <!-- [PDA 전용 모드] 바코드 디코더 라이브러리 제거됨.
          PDA/USB 스캐너는 키보드 입력으로 바코드를 전송하므로 별도 디코더 불필요. -->
@@ -265,6 +266,56 @@
             background: #f5f6f8; color: #444; border-color: #bbb;
         }
 
+        /* ═══ 재고조사 모드 UI ═══ */
+        .audit-session-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 14px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .audit-session-card:active {
+            transform: scale(0.98);
+            background: #f5f6f8;
+        }
+        .audit-session-card.closed {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .audit-session-card .title {
+            font-size: 15px;
+            font-weight: bold;
+            color: #222;
+            margin-bottom: 4px;
+        }
+        .audit-session-card .meta {
+            font-size: 12px;
+            color: #888;
+            display: flex;
+            justify-content: space-between;
+            margin-top: 6px;
+        }
+        .audit-session-card .stats {
+            font-size: 13px;
+            color: #1877F2;
+            margin-top: 4px;
+        }
+        .audit-session-card .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+            background: #e8f5e9;
+            color: #2e7d32;
+            margin-left: 6px;
+        }
+        .audit-session-card .badge.closed {
+            background: #f5f5f5;
+            color: #999;
+        }
+
         .scan-toggle {
             display: inline-flex; align-items: center; gap: 4px;
             padding: 6px 12px; background: #f5f6f8; border-radius: 14px;
@@ -447,8 +498,11 @@
         <div class="scan-mode-row">
             <button class="scan-mode-btn active" data-mode="inbound" onclick="selectScanMode('inbound')">📥 입고</button>
             <button class="scan-mode-btn" data-mode="move" onclick="selectScanMode('move')" disabled title="준비 중">🔄 재고이동</button>
-            <button class="scan-mode-btn" data-mode="audit" onclick="selectScanMode('audit')" disabled title="준비 중">📋 재고조사</button>
+            <button class="scan-mode-btn" data-mode="audit" onclick="selectScanMode('audit')">📋 재고조사</button>
         </div>
+
+        <!-- ═══════════ 📥 입고 모드 UI ═══════════ -->
+        <div id="inbound-mode-ui">
 
         <!-- 작업명 -->
         <label>📌 작업명</label>
@@ -526,6 +580,59 @@
         <button class="clear-btn" onclick="clearAllScans()">
             🗑️ 전체 초기화
         </button>
+
+        </div>
+        <!-- ═══════════ 📥 입고 모드 UI 끝 ═══════════ -->
+
+
+        <!-- ═══════════ 📋 재고조사 모드 UI ═══════════ -->
+        <div id="audit-mode-ui" style="display:none;">
+
+            <!-- (1) 세션 선택 화면 -->
+            <div id="audit-session-picker">
+                <h3 style="margin:10px 0; color:#222;">📂 재고조사 세션 선택</h3>
+                <p style="font-size:13px; color:#666; margin-bottom:12px;">
+                    관리자가 만든 세션을 선택해 시작하세요.
+                </p>
+                <div id="audit-session-list" style="display:flex; flex-direction:column; gap:8px;">
+                    <div style="text-align:center; color:#999; padding:30px 10px; font-size:13px;">
+                        세션 목록 불러오는 중...
+                    </div>
+                </div>
+                <button class="clear-btn" onclick="loadAuditSessions()" style="margin-top:10px;">
+                    🔄 목록 새로고침
+                </button>
+            </div>
+
+            <!-- (2) 마스터 다운로드 진행 화면 -->
+            <div id="audit-loading" style="display:none; text-align:center; padding:40px 20px;">
+                <div style="font-size:48px; margin-bottom:10px;">📥</div>
+                <div style="font-size:16px; font-weight:bold; color:#222; margin-bottom:8px;">
+                    마스터 데이터 다운로드 중...
+                </div>
+                <div id="audit-loading-progress" style="font-size:13px; color:#666;">
+                    잠시만 기다려주세요
+                </div>
+            </div>
+
+            <!-- (3) 스캔 화면 (2-2 단계에서 구현) -->
+            <div id="audit-scan-ui" style="display:none;">
+                <div style="background:#fff9c4; border-left:4px solid #fbc02d; padding:12px; border-radius:8px; margin-bottom:10px; font-size:13px;">
+                    ⚠️ 스캔 화면은 다음 단계에서 구현됩니다.
+                    <br>지금은 세션 선택 + 마스터 다운로드까지만 동작합니다.
+                </div>
+                <div style="background:white; padding:12px; border-radius:8px; margin-bottom:10px;">
+                    <div style="font-size:12px; color:#888;">선택된 세션</div>
+                    <div id="audit-current-session-title" style="font-size:15px; font-weight:bold; color:#222;">-</div>
+                    <div id="audit-current-session-stats" style="font-size:12px; color:#666; margin-top:4px;">-</div>
+                </div>
+                <button class="clear-btn" onclick="exitAuditSession()">
+                    ← 세션 선택으로 돌아가기
+                </button>
+            </div>
+
+        </div>
+        <!-- ═══════════ 📋 재고조사 모드 UI 끝 ═══════════ -->
     </div>
 </div>
 
@@ -534,6 +641,7 @@
     const firebaseConfig = {
         apiKey: "AIzaSyBYJfQD7Jkd9Jecyu27Owy8yGPrwg3tg80",
         authDomain: "logipan-2026.firebaseapp.com",
+        databaseURL: "https://logipan-2026-default-rtdb.asia-southeast1.firebasedatabase.app",
         projectId: "logipan-2026",
         storageBucket: "logipan-2026.firebasestorage.app",
         messagingSenderId: "650344159406",
@@ -542,6 +650,7 @@
     };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
+    const rtdb = firebase.database();
     const IMGBB_KEY = "3db15a11410b0c569fb9c8706f7b8d12";
 
     // [추가] 푸시 알림용 VAPID 키
@@ -1782,15 +1891,246 @@
     }
     // ─── 모드 전환 ─────────────────────────
     function selectScanMode(mode) {
-        if (mode !== 'inbound') {
-            feedbackError(mode === 'move' ? "재고이동은 준비 중" : "재고조사는 준비 중");
+        if (mode === 'move') {
+            feedbackError("재고이동은 준비 중");
             return;
         }
         scanState.mode = mode;
         document.querySelectorAll('.scan-mode-btn').forEach(b => {
             b.classList.toggle('active', b.dataset.mode === mode);
         });
+
+        // 입고/재고조사 UI 토글
+        const inboundUI = document.getElementById('inbound-mode-ui');
+        const auditUI = document.getElementById('audit-mode-ui');
+        if (mode === 'audit') {
+            inboundUI.style.display = 'none';
+            auditUI.style.display = 'block';
+            // 재고조사 모드 들어오면 세션 목록 자동 로드
+            loadAuditSessions();
+        } else {
+            inboundUI.style.display = 'block';
+            auditUI.style.display = 'none';
+        }
+
         saveScanDraft();
+    }
+
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ─── [재고조사 모드] - Realtime Database 기반 ───
+    // ═══════════════════════════════════════════════════════════════════
+    // 흐름:
+    //  1. 세션 선택 (RTDB의 stocktake_sessions 메타 한 번에 받기)
+    //  2. 세션 선택하면 마스터 통째 다운로드 (stocktake_data/<sid>/items)
+    //     → IndexedDB에 캐시 (다음번엔 다운로드 안 함)
+    //  3. 스캔 → 로컬 마스터에서 즉시 조회 + DB transaction 차감
+    //
+    // 비용:
+    //  - 세션 목록: 메타만 → 매우 가벼움 (수십 KB)
+    //  - 마스터: 1회만 다운로드 (4만 건 ≈ 6MB)
+    //  - 스캔: 1건당 transaction 1번
+    // ═══════════════════════════════════════════════════════════════════
+
+    let auditState = {
+        sessionId: null,        // 현재 선택된 세션 ID
+        sessionMeta: null,      // {title, creator, created_at, total_rows, total_qty, status}
+        master: null,           // {key: {loc, bc, qty, remaining}, ...}
+        currentLoc: null,       // 현재 스캔 중인 로케
+        listenerRef: null,      // RTDB 실시간 동기화 리스너 핸들
+    };
+
+    // IndexedDB 헬퍼 (마스터 캐시용)
+    const AUDIT_DB_NAME = 'logipan_audit';
+    const AUDIT_STORE = 'masters';
+
+    function openAuditDB() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(AUDIT_DB_NAME, 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(AUDIT_STORE)) {
+                    db.createObjectStore(AUDIT_STORE);  // key = sessionId
+                }
+            };
+            req.onsuccess = (e) => resolve(e.target.result);
+            req.onerror = (e) => reject(e.target.error);
+        });
+    }
+
+    async function loadMasterFromCache(sessionId) {
+        try {
+            const db = await openAuditDB();
+            return new Promise((resolve) => {
+                const tx = db.transaction(AUDIT_STORE, 'readonly');
+                const req = tx.objectStore(AUDIT_STORE).get(sessionId);
+                req.onsuccess = () => resolve(req.result || null);
+                req.onerror = () => resolve(null);
+            });
+        } catch (e) {
+            console.warn('IndexedDB 캐시 읽기 실패:', e);
+            return null;
+        }
+    }
+
+    async function saveMasterToCache(sessionId, masterData) {
+        try {
+            const db = await openAuditDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(AUDIT_STORE, 'readwrite');
+                tx.objectStore(AUDIT_STORE).put(masterData, sessionId);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        } catch (e) {
+            console.warn('IndexedDB 캐시 저장 실패:', e);
+        }
+    }
+
+    // ─── 세션 목록 로드 ─────────────────────────
+    async function loadAuditSessions() {
+        const listBox = document.getElementById('audit-session-list');
+        listBox.innerHTML = '<div style="text-align:center; color:#999; padding:30px 10px; font-size:13px;">불러오는 중...</div>';
+
+        try {
+            // /stocktake_sessions 전체 한 번에 받기 (메타만이라 가벼움)
+            const snap = await rtdb.ref('stocktake_sessions').once('value');
+            const sessions = snap.val() || {};
+
+            // 메타 정리 + 정렬
+            const sessionList = [];
+            for (const sid in sessions) {
+                const meta = sessions[sid]?.meta;
+                if (!meta) continue;
+                sessionList.push({ sid, meta });
+            }
+            sessionList.sort((a, b) => (b.meta.created_at || 0) - (a.meta.created_at || 0));
+
+            if (sessionList.length === 0) {
+                listBox.innerHTML = '<div style="text-align:center; color:#999; padding:30px 10px; font-size:13px;">활성 세션이 없습니다.<br>관리자에게 세션 생성을 요청하세요.</div>';
+                return;
+            }
+
+            // 카드 렌더링
+            const html = sessionList.map(({ sid, meta }) => {
+                const createdStr = meta.created_at
+                    ? new Date(meta.created_at).toLocaleString('ko-KR', { hour12: false }).slice(0, 16)
+                    : '';
+                const isClosed = meta.status === 'closed';
+                const badgeHtml = isClosed
+                    ? '<span class="badge closed">완료</span>'
+                    : '<span class="badge">진행중</span>';
+                const clickHandler = isClosed
+                    ? ''
+                    : `onclick="selectAuditSession('${sid}')"`;
+                const cardClass = isClosed ? 'audit-session-card closed' : 'audit-session-card';
+                return `
+                    <div class="${cardClass}" ${clickHandler}>
+                        <div class="title">${escapeHtml(meta.title || '(제목 없음)')}${badgeHtml}</div>
+                        <div class="stats">
+                            📦 ${(meta.total_rows || 0).toLocaleString()}개 항목 · 총 ${(meta.total_qty || 0).toLocaleString()}개
+                        </div>
+                        <div class="meta">
+                            <span>👤 ${escapeHtml(meta.creator || '-')}</span>
+                            <span>${createdStr}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            listBox.innerHTML = html;
+        } catch (e) {
+            console.error('세션 목록 로드 실패:', e);
+            listBox.innerHTML = `<div style="text-align:center; color:#c62828; padding:30px 10px; font-size:13px;">
+                ⚠️ 세션 목록 로드 실패<br>
+                <small>${escapeHtml(e.message)}</small>
+            </div>`;
+        }
+    }
+
+    // ─── 세션 선택 → 마스터 다운로드 ─────────────────────────
+    async function selectAuditSession(sessionId) {
+        // UI 전환: 세션 선택 화면 → 로딩 화면
+        document.getElementById('audit-session-picker').style.display = 'none';
+        document.getElementById('audit-loading').style.display = 'block';
+        const progressEl = document.getElementById('audit-loading-progress');
+
+        try {
+            // 1) 메타 받기
+            progressEl.textContent = '세션 정보 조회 중...';
+            const metaSnap = await rtdb.ref(`stocktake_sessions/${sessionId}/meta`).once('value');
+            const meta = metaSnap.val();
+            if (!meta) {
+                throw new Error('세션을 찾을 수 없습니다');
+            }
+            auditState.sessionId = sessionId;
+            auditState.sessionMeta = meta;
+
+            // 2) 마스터 - 캐시 먼저 확인
+            progressEl.textContent = '캐시 확인 중...';
+            const cached = await loadMasterFromCache(sessionId);
+            let master = null;
+
+            if (cached && cached.cached_at) {
+                // 캐시 사용 (간단히 항상 사용 - 향후 갱신 옵션 추가 가능)
+                master = cached.items;
+                console.log(`✅ 마스터 캐시 사용 (${Object.keys(master).length}개 항목)`);
+                progressEl.textContent = `캐시에서 ${Object.keys(master).length.toLocaleString()}개 항목 로드됨`;
+            } else {
+                // 캐시 없음 → 다운로드
+                progressEl.textContent = `마스터 다운로드 중... (${(meta.total_rows || 0).toLocaleString()}개)`;
+                const itemsSnap = await rtdb.ref(`stocktake_data/${sessionId}/items`).once('value');
+                master = itemsSnap.val() || {};
+                console.log(`✅ 마스터 다운로드 완료 (${Object.keys(master).length}개 항목)`);
+                // 캐시 저장
+                progressEl.textContent = '캐시 저장 중...';
+                await saveMasterToCache(sessionId, {
+                    cached_at: Date.now(),
+                    items: master,
+                });
+            }
+
+            auditState.master = master;
+
+            // 3) 스캔 화면으로 전환
+            document.getElementById('audit-loading').style.display = 'none';
+            document.getElementById('audit-scan-ui').style.display = 'block';
+
+            // 세션 정보 표시
+            document.getElementById('audit-current-session-title').textContent = meta.title || '(제목 없음)';
+            const itemCount = Object.keys(master).length;
+            const totalQty = Object.values(master).reduce((s, it) => s + (it.qty || 0), 0);
+            const remainingQty = Object.values(master).reduce((s, it) => s + (it.remaining || 0), 0);
+            document.getElementById('audit-current-session-stats').textContent =
+                `📦 ${itemCount.toLocaleString()}개 항목 · 총 ${totalQty.toLocaleString()}개 · 남은 ${remainingQty.toLocaleString()}개`;
+
+            showToast(`✅ ${meta.title} 세션 로드 완료`);
+        } catch (e) {
+            console.error('세션 선택 실패:', e);
+            alert(`세션 로드 실패:\n${e.message}`);
+            // 세션 선택 화면으로 복귀
+            document.getElementById('audit-loading').style.display = 'none';
+            document.getElementById('audit-session-picker').style.display = 'block';
+        }
+    }
+
+    // ─── 세션 나가기 ─────────────────────────
+    function exitAuditSession() {
+        // 리스너 해제 (2-3 단계에서 추가될 예정)
+        if (auditState.listenerRef) {
+            try { auditState.listenerRef.off(); } catch (e) {}
+            auditState.listenerRef = null;
+        }
+        // 상태 초기화 (마스터 데이터는 메모리에서 비움)
+        auditState.sessionId = null;
+        auditState.sessionMeta = null;
+        auditState.master = null;
+        auditState.currentLoc = null;
+
+        // UI 복귀
+        document.getElementById('audit-scan-ui').style.display = 'none';
+        document.getElementById('audit-loading').style.display = 'none';
+        document.getElementById('audit-session-picker').style.display = 'block';
+        loadAuditSessions();
     }
 
     // ─── localStorage 저장/복원 ─────────────────────────
