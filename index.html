@@ -316,6 +316,185 @@
             color: #999;
         }
 
+        /* ═══ 재고조사 스캔 화면 ═══ */
+        .audit-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            background: white;
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin-top: 6px;
+            border: 1px solid #e0e0e0;
+        }
+        .audit-header .info { flex: 1; min-width: 0; }
+        .audit-header .title {
+            font-size: 14px; font-weight: bold; color: #222;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .audit-header .stats { font-size: 11px; color: #666; margin-top: 2px; }
+        .audit-header .exit-btn {
+            background: #f5f6f8; color: #666;
+            border: 1px solid #ddd; border-radius: 6px;
+            padding: 6px 10px; font-size: 12px; cursor: pointer;
+            flex-shrink: 0; margin-left: 8px;
+        }
+
+        .audit-loc-display {
+            margin-top: 10px;
+            background: linear-gradient(135deg, #1877F2 0%, #4285F4 100%);
+            color: white;
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(24,119,242,0.25);
+        }
+        .audit-loc-display.empty { background: #cbd5e1; color: #475569; box-shadow: none; }
+        .audit-loc-display .lbl { font-size: 11px; opacity: 0.9; letter-spacing: 1.5px; margin-bottom: 4px; }
+        .audit-loc-display .val {
+            font-size: 26px; font-weight: bold;
+            font-family: 'Consolas', monospace; letter-spacing: 2px;
+        }
+        .audit-loc-display.empty .val { font-size: 15px; letter-spacing: 0; font-family: 'Malgun Gothic', sans-serif; }
+
+        .audit-recent {
+            margin-top: 10px;
+            background: #222;
+            color: white;
+            padding: 14px 16px;
+            border-radius: 10px;
+            text-align: center;
+            transition: background 0.15s;
+        }
+        .audit-recent.idle { background: #6b7280; }
+        .audit-recent.success { background: #16a34a; }
+        .audit-recent.complete { background: #15803d; }  /* 로케 100% 완료 */
+        .audit-recent.warn { background: #f57c00; }  /* 다른 로케 상품 */
+        .audit-recent.error { background: #dc2626; animation: pda-shake 0.3s; }
+        .audit-recent.over { background: #b91c1c; }  /* 초과 스캔 */
+        .audit-recent .top { font-size: 11px; opacity: 0.8; letter-spacing: 1px; margin-bottom: 3px; }
+        .audit-recent .bc {
+            font-size: 18px; font-weight: bold;
+            font-family: 'Consolas', monospace; letter-spacing: 1px;
+            word-break: break-all;
+        }
+        .audit-recent .sub { font-size: 11px; opacity: 0.85; margin-top: 3px; }
+        .audit-recent.idle .bc { font-size: 14px; opacity: 0.7; }
+
+        /* 이 로케 진행 상황 */
+        .audit-loc-progress {
+            margin-top: 10px;
+            background: white;
+            border-radius: 10px;
+            border: 1px solid #e0e0e0;
+            overflow: hidden;
+        }
+        .audit-loc-progress .header {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #f5f6f8;
+            padding: 8px 12px;
+            font-size: 12px; font-weight: bold; color: #444;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .audit-loc-progress .items {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .audit-loc-item {
+            display: flex; align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 12px;
+        }
+        .audit-loc-item:last-child { border-bottom: none; }
+        .audit-loc-item.done { background: #f0fdf4; }
+        .audit-loc-item.partial { background: #fffbeb; }
+        .audit-loc-item .bc {
+            font-family: 'Consolas', monospace;
+            font-weight: bold;
+            color: #222;
+            flex: 1; min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .audit-loc-item .qty-info {
+            font-size: 11px;
+            color: #666;
+            margin-left: 8px;
+            white-space: nowrap;
+        }
+        .audit-loc-item .qty-info .done-num { color: #16a34a; font-weight: bold; }
+        .audit-loc-item.done .qty-info::after { content: ' ✓'; color: #16a34a; }
+
+        /* 전체 진행 */
+        .audit-total-counter {
+            margin-top: 10px;
+            background: white;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid #e0e0e0;
+        }
+        .audit-total-counter .row {
+            display: flex; justify-content: space-between;
+            font-size: 12px; margin-bottom: 6px;
+        }
+        .audit-total-counter .label { color: #666; }
+        .audit-total-counter .value { font-weight: bold; color: #222; }
+        .audit-total-counter .bar {
+            height: 6px;
+            background: #f0f0f0;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .audit-total-counter .fill {
+            height: 100%;
+            background: linear-gradient(90deg, #16a34a 0%, #4ade80 100%);
+            transition: width 0.3s;
+        }
+
+        /* 스캔 로그 */
+        .audit-log {
+            margin-top: 10px;
+            background: white;
+            border-radius: 10px;
+            border: 1px solid #e0e0e0;
+            overflow: hidden;
+        }
+        .audit-log .header {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #f5f6f8;
+            padding: 8px 12px;
+            font-size: 12px; font-weight: bold; color: #444;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .audit-log .items {
+            max-height: 180px;
+            overflow-y: auto;
+        }
+        .audit-log .empty {
+            text-align: center; padding: 20px 10px;
+            color: #aaa; font-size: 12px;
+        }
+        .audit-log-row {
+            padding: 6px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 11px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .audit-log-row:last-child { border-bottom: none; }
+        .audit-log-row .time { color: #999; font-size: 10px; flex-shrink: 0; }
+        .audit-log-row .loc {
+            background: #e3f2fd; color: #0d47a1;
+            padding: 1px 5px; border-radius: 3px;
+            font-family: 'Consolas', monospace; font-size: 10px;
+            flex-shrink: 0;
+        }
+        .audit-log-row .bc {
+            font-family: 'Consolas', monospace;
+            color: #333;
+            flex: 1; min-width: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+
         .scan-toggle {
             display: inline-flex; align-items: center; gap: 4px;
             padding: 6px 12px; background: #f5f6f8; border-radius: 14px;
@@ -615,20 +794,78 @@
                 </div>
             </div>
 
-            <!-- (3) 스캔 화면 (2-2 단계에서 구현) -->
+            <!-- (3) 재고조사 스캔 화면 -->
             <div id="audit-scan-ui" style="display:none;">
-                <div style="background:#fff9c4; border-left:4px solid #fbc02d; padding:12px; border-radius:8px; margin-bottom:10px; font-size:13px;">
-                    ⚠️ 스캔 화면은 다음 단계에서 구현됩니다.
-                    <br>지금은 세션 선택 + 마스터 다운로드까지만 동작합니다.
+
+                <!-- 상단: 세션 정보 + 나가기 버튼 -->
+                <div class="audit-header">
+                    <div class="info">
+                        <div class="title" id="audit-current-session-title">-</div>
+                        <div class="stats" id="audit-current-session-stats">-</div>
+                    </div>
+                    <button class="exit-btn" onclick="exitAuditSession()">← 나가기</button>
                 </div>
-                <div style="background:white; padding:12px; border-radius:8px; margin-bottom:10px;">
-                    <div style="font-size:12px; color:#888;">선택된 세션</div>
-                    <div id="audit-current-session-title" style="font-size:15px; font-weight:bold; color:#222;">-</div>
-                    <div id="audit-current-session-stats" style="font-size:12px; color:#666; margin-top:4px;">-</div>
+
+                <!-- 현재 로케 큰 표시 -->
+                <div class="audit-loc-display empty" id="audit-loc-display">
+                    <div class="lbl">CURRENT LOCATION</div>
+                    <div class="val" id="audit-loc-value">로케를 먼저 스캔하세요</div>
                 </div>
-                <button class="clear-btn" onclick="exitAuditSession()">
-                    ← 세션 선택으로 돌아가기
-                </button>
+
+                <!-- 최근 스캔 결과 큰 표시 -->
+                <div class="audit-recent idle" id="audit-recent">
+                    <div class="top">최근 스캔</div>
+                    <div class="bc">아직 스캔 안 함</div>
+                    <div class="sub"></div>
+                </div>
+
+                <!-- 이 로케의 진행 상황 -->
+                <div class="audit-loc-progress" id="audit-loc-progress" style="display:none;">
+                    <div class="header">
+                        <span>📋 이 로케 항목</span>
+                        <span id="audit-loc-progress-count">0 / 0</span>
+                    </div>
+                    <div class="items" id="audit-loc-items">
+                        <!-- 동적 생성 -->
+                    </div>
+                </div>
+
+                <!-- 전체 진행 카운터 -->
+                <div class="audit-total-counter">
+                    <div class="row">
+                        <span class="label">전체 진행</span>
+                        <span class="value" id="audit-total-progress">0 / 0 (0%)</span>
+                    </div>
+                    <div class="bar"><div class="fill" id="audit-total-bar" style="width:0%"></div></div>
+                </div>
+
+                <!-- 음성/진동/역순보정 토글 (재고조사 모드용 별도 ID) -->
+                <div style="display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;">
+                    <span class="scan-toggle on" id="audit-toggle-sound" onclick="toggleSound()">🔊 음성</span>
+                    <span class="scan-toggle on" id="audit-toggle-vibrate" onclick="toggleVibrate()">📳 진동</span>
+                    <span class="scan-toggle on" id="audit-toggle-reverse" onclick="togglePdaReverse()">↔️ 역순보정</span>
+                </div>
+
+                <!-- 수동 입력 -->
+                <div style="margin-top:10px; text-align:right;">
+                    <button class="pda-manual-toggle" onclick="toggleAuditManual()" id="audit-manual-toggle-btn">⌨️ 수동입력</button>
+                </div>
+                <div class="pda-manual-row" id="audit-manual-panel" style="display:none;">
+                    <input type="text" id="audit-manual-input" placeholder="바코드/로케 직접 입력 후 Enter" autocomplete="off">
+                    <button class="pda-manual-btn" onclick="submitAuditManual()">입력</button>
+                </div>
+
+                <!-- 스캔 로그 (최근 10건) -->
+                <div class="audit-log">
+                    <div class="header">
+                        <span>📜 내 스캔 기록</span>
+                        <span id="audit-log-count">0건</span>
+                    </div>
+                    <div class="items" id="audit-log-items">
+                        <div class="empty">아직 스캔한 게 없어요</div>
+                    </div>
+                </div>
+
             </div>
 
         </div>
@@ -1884,6 +2121,22 @@
         speak("전송 완료");
     }
 
+    // [재고조사용] 통합 feedback wrapper - audit 모드에서 사용
+    // 매개변수: type ('success' | 'error' | 'duplicate'), msg
+    function feedback(type, msg) {
+        if (type === 'success') {
+            beep(800, 60);
+            vibrate(30);
+        } else if (type === 'duplicate') {
+            beep(600, 60);
+            vibrate([30, 30, 30]);
+        } else if (type === 'error') {
+            beep(300, 250);
+            setTimeout(() => beep(300, 250), 280);
+            vibrate([0, 200, 100, 200]);
+        }
+    }
+
     // [PDA 전용] 카메라 viewport 플래시 → 사용 안 함 (pda-recent로 대체).
     // 다른 코드에서 호출해도 에러 안 나게 빈 함수만 남겨둠.
     function showScanFlash(kind, value) {
@@ -2103,6 +2356,20 @@
             document.getElementById('audit-current-session-stats').textContent =
                 `📦 ${itemCount.toLocaleString()}개 항목 · 총 ${totalQty.toLocaleString()}개 · 남은 ${remainingQty.toLocaleString()}개`;
 
+            // 초기 UI 리셋
+            updateAuditLocDisplay(null);  // 로케 미선택
+            const recent = document.getElementById('audit-recent');
+            if (recent) {
+                recent.className = 'audit-recent idle';
+                recent.querySelector('.top').textContent = '최근 스캔';
+                recent.querySelector('.bc').textContent = '아직 스캔 안 함';
+                recent.querySelector('.sub').textContent = '';
+            }
+            document.getElementById('audit-loc-progress').style.display = 'none';
+            auditScanLog = [];
+            renderAuditLog();
+            updateAuditTotalProgress();
+
             showToast(`✅ ${meta.title} 세션 로드 완료`);
         } catch (e) {
             console.error('세션 선택 실패:', e);
@@ -2132,6 +2399,324 @@
         document.getElementById('audit-session-picker').style.display = 'block';
         loadAuditSessions();
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ─── [재고조사 모드] 스캔 핸들러 ───
+    // ═══════════════════════════════════════════════════════════════════
+    // 마스터 구조 (RTDB에서 받음):
+    //   { "AA-01-01-01__ABC123": { loc, bc, qty, remaining }, ... }
+    //
+    // 작업자 입장:
+    //  - 로케 스캔: 마스터에서 해당 로케 항목들 찾아서 표시
+    //  - 바코드 스캔: 현재 로케 + 바코드 → 마스터 항목 찾음
+    //    → 있으면 remaining -1 (로컬 + DB transaction)
+    //    → 없으면 ⚠ 팝업
+    // ═══════════════════════════════════════════════════════════════════
+
+    // 스캔 로그 (메모리에만, 화면 표시용 - 최근 50건 유지)
+    let auditScanLog = [];
+
+    // ─── 로케 스캔 처리 ─────────────────────────
+    function handleAuditLocation(loc) {
+        if (!auditState.master) {
+            showAuditRecent('error', loc, '먼저 세션을 선택하세요');
+            feedback('error', '세션 없음');
+            return;
+        }
+
+        // 마스터에서 이 로케의 항목들 찾기
+        const items = Object.entries(auditState.master)
+            .filter(([k, v]) => v.loc === loc)
+            .map(([k, v]) => ({ key: k, ...v }));
+
+        auditState.currentLoc = loc;
+        updateAuditLocDisplay(loc);
+        renderAuditLocItems(items);
+
+        if (items.length === 0) {
+            // 마스터에 없는 로케
+            showAuditRecent('warn', loc, '마스터에 없는 로케입니다');
+            feedback('error', '없는 로케');
+            speak('없는 로케');
+        } else {
+            const totalQty = items.reduce((s, it) => s + (it.qty || 0), 0);
+            const remainingQty = items.reduce((s, it) => s + (it.remaining || 0), 0);
+            const doneQty = totalQty - remainingQty;
+            const isComplete = remainingQty === 0;
+            showAuditRecent(isComplete ? 'complete' : 'success', loc,
+                `${items.length}개 항목 · ${doneQty}/${totalQty} 완료${isComplete ? ' ✓' : ''}`);
+            if (isComplete) {
+                feedback('success', '이미 완료된 로케');
+                speak('완료된 로케');
+            } else {
+                feedback('success', '로케 등록');
+                speak('로케');
+            }
+        }
+    }
+
+    // ─── 바코드 스캔 처리 ─────────────────────────
+    async function handleAuditBarcode(bc) {
+        if (!auditState.master) {
+            showAuditRecent('error', bc, '먼저 세션을 선택하세요');
+            return;
+        }
+        if (!auditState.currentLoc) {
+            showAuditRecent('error', bc, '먼저 로케를 스캔하세요');
+            feedback('error', '로케 먼저');
+            speak('로케 먼저');
+            return;
+        }
+
+        const loc = auditState.currentLoc;
+        const key = `${loc}__${bc}`;  // LogiPan 업로드 키 규칙과 동일
+
+        // 1) 현재 로케에 이 바코드가 있는가?
+        const item = auditState.master[key];
+
+        if (!item) {
+            // 현재 로케엔 없음 → 다른 로케에 있는지 확인
+            const otherLocs = Object.values(auditState.master)
+                .filter(v => v.bc === bc)
+                .map(v => v.loc);
+
+            if (otherLocs.length > 0) {
+                // 다른 로케에 있는 바코드
+                showAuditRecent('warn', bc, `이 바코드는 [${otherLocs[0]}] 로케 상품입니다`);
+                feedback('error', '다른 로케 상품');
+                speak('다른 로케 상품');
+                alert(`⚠️ 위치 불일치\n\n이 바코드(${bc})는\n현재 로케 [${loc}]가 아닌\n[${otherLocs.slice(0, 3).join(', ')}] 로케의 상품입니다.\n\n해당 로케로 이동 후 다시 스캔하세요.`);
+            } else {
+                // 마스터에 아예 없음
+                showAuditRecent('error', bc, '마스터에 없는 바코드');
+                feedback('error', '없는 바코드');
+                speak('없는 바코드');
+                alert(`⚠️ 없는 바코드\n\n바코드 ${bc}는\n마스터 재고에 없습니다.\n\n확인 후 다시 스캔하세요.`);
+            }
+            return;
+        }
+
+        // 2) 이 로케에 있는 바코드 → 차감 시도
+        if (item.remaining <= 0) {
+            // 이미 다 찍힌 항목
+            showAuditRecent('over', bc, `이미 ${item.qty}개 다 찍었습니다 (초과)`);
+            feedback('error', '초과 스캔');
+            speak('초과');
+            // 초과 스캔은 DB에 안 반영, 로그에만 남길 수도 있음 (지금은 안 함)
+            return;
+        }
+
+        // 3) DB transaction으로 안전하게 -1 (동시 차감 충돌 방지)
+        try {
+            const itemRef = rtdb.ref(`stocktake_data/${auditState.sessionId}/items/${key}/remaining`);
+            const result = await itemRef.transaction((current) => {
+                if (current === null || current === undefined) {
+                    return current;  // 항목이 없으면 그대로 (abort)
+                }
+                if (current <= 0) {
+                    return;  // undefined 반환 = abort (이미 0)
+                }
+                return current - 1;
+            });
+
+            if (!result.committed) {
+                // 다른 작업자가 먼저 차감해서 0이 됨
+                showAuditRecent('over', bc, '다른 작업자가 먼저 완료');
+                feedback('error', '초과');
+                speak('초과');
+                // 로컬 마스터 갱신
+                item.remaining = result.snapshot.val() || 0;
+                renderAuditLocItems(getCurrentLocItems());
+                return;
+            }
+
+            // 4) 로컬 마스터 갱신
+            item.remaining = result.snapshot.val();
+
+            // 5) UI 갱신
+            renderAuditLocItems(getCurrentLocItems());
+            updateAuditTotalProgress();
+
+            const doneNow = item.qty - item.remaining;
+            const isItemDone = item.remaining === 0;
+
+            // 로케 전체 완료 체크
+            const locItems = getCurrentLocItems();
+            const locTotalRemaining = locItems.reduce((s, it) => s + (it.remaining || 0), 0);
+            const isLocComplete = locTotalRemaining === 0;
+
+            if (isLocComplete) {
+                showAuditRecent('complete', bc, `🎉 이 로케 완료! 다음 로케 스캔하세요`);
+                feedback('success', '로케 완료');
+                speak('로케 완료');
+            } else if (isItemDone) {
+                showAuditRecent('success', bc, `${item.qty}/${item.qty} 완료`);
+                feedback('success', '완료');
+                speak('완료');
+            } else {
+                showAuditRecent('success', bc, `${doneNow}/${item.qty}`);
+                feedback('success', '등록');
+                speak('등록');
+            }
+
+            // 6) 로그 추가
+            addAuditLog(loc, bc);
+
+        } catch (e) {
+            console.error('DB 차감 실패:', e);
+            showAuditRecent('error', bc, `DB 오류: ${e.message}`);
+            feedback('error', 'DB 오류');
+            speak('오류');
+        }
+    }
+
+    // ─── 헬퍼: 현재 로케 항목 다시 얻기 ─────────────────────────
+    function getCurrentLocItems() {
+        if (!auditState.master || !auditState.currentLoc) return [];
+        return Object.entries(auditState.master)
+            .filter(([k, v]) => v.loc === auditState.currentLoc)
+            .map(([k, v]) => ({ key: k, ...v }));
+    }
+
+    // ─── UI 갱신 함수들 ─────────────────────────
+    function updateAuditLocDisplay(loc) {
+        const box = document.getElementById('audit-loc-display');
+        const val = document.getElementById('audit-loc-value');
+        if (!box || !val) return;
+        if (loc) {
+            box.classList.remove('empty');
+            val.textContent = loc;
+        } else {
+            box.classList.add('empty');
+            val.textContent = '로케를 먼저 스캔하세요';
+        }
+    }
+
+    function showAuditRecent(type, code, sub) {
+        const el = document.getElementById('audit-recent');
+        if (!el) return;
+        el.className = 'audit-recent ' + type;
+        const topMap = {
+            success: '✅ 등록',
+            complete: '🎉 완료',
+            warn: '⚠️ 위치 불일치',
+            error: '⛔ 오류',
+            over: '🚫 초과',
+        };
+        el.querySelector('.top').textContent = topMap[type] || '최근 스캔';
+        el.querySelector('.bc').textContent = code;
+        el.querySelector('.sub').textContent = sub || '';
+    }
+
+    function renderAuditLocItems(items) {
+        const box = document.getElementById('audit-loc-progress');
+        const itemsBox = document.getElementById('audit-loc-items');
+        const countLabel = document.getElementById('audit-loc-progress-count');
+
+        if (!items || items.length === 0) {
+            box.style.display = 'none';
+            return;
+        }
+
+        box.style.display = 'block';
+        const totalQty = items.reduce((s, it) => s + (it.qty || 0), 0);
+        const remainingQty = items.reduce((s, it) => s + (it.remaining || 0), 0);
+        const doneQty = totalQty - remainingQty;
+        countLabel.textContent = `${doneQty} / ${totalQty}`;
+
+        const html = items.map(it => {
+            const done = (it.qty || 0) - (it.remaining || 0);
+            const isDone = it.remaining === 0;
+            const isPartial = done > 0 && !isDone;
+            const cls = isDone ? 'done' : (isPartial ? 'partial' : '');
+            return `<div class="audit-loc-item ${cls}">
+                <span class="bc">${escapeHtml(it.bc)}</span>
+                <span class="qty-info">
+                    <span class="done-num">${done}</span> / ${it.qty || 0}
+                </span>
+            </div>`;
+        }).join('');
+        itemsBox.innerHTML = html;
+    }
+
+    function updateAuditTotalProgress() {
+        if (!auditState.master) return;
+        const items = Object.values(auditState.master);
+        const totalQty = items.reduce((s, it) => s + (it.qty || 0), 0);
+        const remainingQty = items.reduce((s, it) => s + (it.remaining || 0), 0);
+        const doneQty = totalQty - remainingQty;
+        const pct = totalQty > 0 ? Math.round((doneQty / totalQty) * 100) : 0;
+        document.getElementById('audit-total-progress').textContent =
+            `${doneQty.toLocaleString()} / ${totalQty.toLocaleString()} (${pct}%)`;
+        document.getElementById('audit-total-bar').style.width = pct + '%';
+
+        // 헤더의 stats도 갱신
+        document.getElementById('audit-current-session-stats').textContent =
+            `📦 ${items.length.toLocaleString()}개 항목 · 총 ${totalQty.toLocaleString()}개 · 남은 ${remainingQty.toLocaleString()}개`;
+    }
+
+    function addAuditLog(loc, bc) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('ko-KR', { hour12: false });
+        auditScanLog.unshift({ loc, bc, time: timeStr });
+        if (auditScanLog.length > 50) auditScanLog.pop();
+        renderAuditLog();
+    }
+
+    function renderAuditLog() {
+        const box = document.getElementById('audit-log-items');
+        const count = document.getElementById('audit-log-count');
+        if (!box) return;
+
+        count.textContent = `${auditScanLog.length}건`;
+
+        if (auditScanLog.length === 0) {
+            box.innerHTML = '<div class="empty">아직 스캔한 게 없어요</div>';
+            return;
+        }
+
+        box.innerHTML = auditScanLog.slice(0, 10).map(log =>
+            `<div class="audit-log-row">
+                <span class="time">${log.time}</span>
+                <span class="loc">${escapeHtml(log.loc)}</span>
+                <span class="bc">${escapeHtml(log.bc)}</span>
+            </div>`
+        ).join('');
+    }
+
+    // ─── 수동 입력 토글 (재고조사 모드용) ─────────────────────────
+    function toggleAuditManual() {
+        const panel = document.getElementById('audit-manual-panel');
+        const btn = document.getElementById('audit-manual-toggle-btn');
+        if (!panel || !btn) return;
+        const isOpen = panel.style.display !== 'none';
+        if (isOpen) {
+            panel.style.display = 'none';
+            btn.classList.remove('open');
+            btn.textContent = '⌨️ 수동입력';
+        } else {
+            panel.style.display = 'flex';
+            btn.classList.add('open');
+            btn.textContent = '✕ 수동입력 닫기';
+            setTimeout(() => {
+                const inp = document.getElementById('audit-manual-input');
+                if (inp) inp.focus();
+            }, 50);
+        }
+    }
+
+    function submitAuditManual() {
+        const input = document.getElementById('audit-manual-input');
+        if (!input) return;
+        const v = input.value.trim();
+        if (!v) {
+            feedback('error', '값을 입력하세요');
+            return;
+        }
+        input.value = '';
+        processPdaScan(v, false);  // fromPda=false → 역순 보정 안 함
+    }
+
 
     // ─── localStorage 저장/복원 ─────────────────────────
     function saveScanDraft() {
@@ -2290,6 +2875,17 @@
             });
         }
 
+        // 재고조사 수동 입력칸 Enter
+        const auditManualInput = document.getElementById('audit-manual-input');
+        if (auditManualInput) {
+            auditManualInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submitAuditManual();
+                }
+            });
+        }
+
         console.log('✅ PDA 스캐너 입력 활성화 (document-level, 키보드 안 뜸)');
     }
 
@@ -2321,6 +2917,18 @@
         lastScanText = value;
         lastScanAt = now;
 
+        // ═══ 모드별 분기 ═══
+        // 재고조사 모드면 audit 핸들러로
+        if (scanState.mode === 'audit') {
+            if (isLocationBarcode(value)) {
+                handleAuditLocation(value.toUpperCase());
+            } else {
+                handleAuditBarcode(value);
+            }
+            return;
+        }
+
+        // ─── 입고 모드 (기존 로직) ───
         // 로케 패턴이면 로케 등록 (대문자 변환)
         if (isLocationBarcode(value)) {
             registerPdaLocation(value.toUpperCase());
