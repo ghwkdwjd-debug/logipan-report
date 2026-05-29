@@ -9053,6 +9053,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         make_map_row(map_frame, "로케 컬럼", "stock_col_loc")
         make_map_row(map_frame, "바코드 컬럼", "stock_col_bc")
         make_map_row(map_frame, "수량 컬럼", "stock_col_qty")
+        make_map_row(map_frame, "상품명 (선택)", "stock_col_name")
+        make_map_row(map_frame, "사이즈 (선택)", "stock_col_size")
 
         # 미리보기
         self.stock_preview_label = tk.Label(left_card,
@@ -9149,28 +9151,35 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self._stocktake_loaded_df = df
 
         cols = list(df.columns)
-        for cb in (self.stock_col_loc, self.stock_col_bc, self.stock_col_qty):
+        for cb in (self.stock_col_loc, self.stock_col_bc, self.stock_col_qty,
+                   self.stock_col_name, self.stock_col_size):
             cb["values"] = cols
             cb.set("")
 
+        # 키워드 우선순위 검색 (앞 키워드부터)
         def find_col(keywords):
-            for c in cols:
-                lc = str(c).lower().replace(" ", "")
-                for kw in keywords:
+            for kw in keywords:
+                for c in cols:
+                    lc = str(c).lower().replace(" ", "")
                     if kw in lc:
                         return c
             return ""
 
         loc_col = find_col(["로케", "loc", "위치", "location"])
-        bc_col = find_col(["바코드", "barcode", "코드", "code", "품번"])
+        bc_col = find_col(["바코드", "barcode", "품번", "상품코드", "code"])
         qty_col = find_col(["수량", "qty", "재고", "stock"])
+        name_col = find_col(["상품명", "품명", "name", "제품명"])
+        size_col = find_col(["사이즈", "size", "규격"])
 
         if loc_col: self.stock_col_loc.set(loc_col)
         if bc_col: self.stock_col_bc.set(bc_col)
         if qty_col: self.stock_col_qty.set(qty_col)
+        if name_col: self.stock_col_name.set(name_col)
+        if size_col: self.stock_col_size.set(size_col)
 
         self._update_stock_preview()
-        for cb in (self.stock_col_loc, self.stock_col_bc, self.stock_col_qty):
+        for cb in (self.stock_col_loc, self.stock_col_bc, self.stock_col_qty,
+                   self.stock_col_name, self.stock_col_size):
             cb.bind("<<ComboboxSelected>>", lambda e: self._update_stock_preview())
 
     def _update_stock_preview(self):
@@ -9226,6 +9235,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         loc_col = self.stock_col_loc.get()
         bc_col = self.stock_col_bc.get()
         qty_col = self.stock_col_qty.get()
+        name_col = self.stock_col_name.get()  # 선택적
+        size_col = self.stock_col_size.get()  # 선택적
 
         # 데이터 변환
         items = {}
@@ -9240,19 +9251,28 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     qty = 0
                 if not bc or qty <= 0:
                     continue
+                # 상품명/사이즈 (선택)
+                name = str(row[name_col]).strip() if name_col else ""
+                size = str(row[size_col]).strip() if size_col else ""
                 # RTDB 키 규칙: $#[]/. 사용 불가 → 안전한 문자로 치환
                 # 로케+바코드 조합 키. 같은 로케+바코드가 여러 행이면 수량 합산.
                 key = f"{loc}__{bc}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
                 if key in items:
                     items[key]["qty"] += qty
                     items[key]["remaining"] += qty
+                    # 상품명/사이즈는 첫 번째 행 것 유지 (보통 같을 것)
                 else:
-                    items[key] = {
+                    item = {
                         "loc": loc,
                         "bc": bc,
                         "qty": qty,
                         "remaining": qty,
                     }
+                    if name:
+                        item["name"] = name
+                    if size:
+                        item["size"] = size
+                    items[key] = item
         except Exception as e:
             messagebox.showerror("변환 실패", f"마스터 데이터 변환 실패:\n{e}")
             return
@@ -10029,6 +10049,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 rows.append({
                     "로케": it.get("loc", ""),
                     "바코드": it.get("bc", ""),
+                    "상품명": it.get("name", ""),
+                    "사이즈": it.get("size", ""),
                     "원래수량": qty,
                     "스캔됨": scanned,
                     "남음": remaining,
@@ -10095,14 +10117,22 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     return
 
                 rows = []
+                items_local = state["items"]  # 현재 items 캐시에서 상품명/사이즈 가져옴
                 for log_id, log_data in logs.items():
                     ts_ms = log_data.get("ts", 0)
                     ts_str = datetime.fromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d %H:%M:%S") if ts_ms else ""
+                    loc = log_data.get("loc", "")
+                    bc = log_data.get("bc", "")
+                    # 로그 시점의 상품명/사이즈는 따로 저장 안 하니까 현재 items에서 조회
+                    key = f"{loc}__{bc}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+                    item = items_local.get(key, {})
                     rows.append({
                         "시간": ts_str,
                         "작업자": log_data.get("worker", ""),
-                        "로케": log_data.get("loc", ""),
-                        "바코드": log_data.get("bc", ""),
+                        "로케": loc,
+                        "바코드": bc,
+                        "상품명": item.get("name", ""),
+                        "사이즈": item.get("size", ""),
                     })
                 rows.sort(key=lambda r: r["시간"])
 
