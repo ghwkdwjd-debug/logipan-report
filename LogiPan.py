@@ -9641,6 +9641,106 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         tree.bind("<Button-1>", on_tree_cell_click, add="+")
 
+        # ─── [추가] 우클릭 컨텍스트 메뉴 - 선택 항목 일괄 완료 처리 ───
+        tree.config(selectmode="extended")  # Ctrl/Shift로 다중 선택 가능
+
+        def on_tree_complete_selected():
+            """선택된 항목들을 일괄 완료 처리"""
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("선택 없음", "완료 처리할 항목을 먼저 선택하세요.\n(Ctrl+클릭 또는 Shift+클릭으로 다중 선택)", parent=win)
+                return
+
+            # 이미 완료된 거 제외
+            targets = []
+            for iid in sel:
+                it = state["items"].get(iid)
+                if it and it.get("remaining", 0) > 0:
+                    targets.append((iid, it))
+
+            if not targets:
+                messagebox.showinfo("대상 없음", "선택한 항목은 모두 이미 완료 상태입니다.", parent=win)
+                return
+
+            # 미리보기
+            preview = "\n".join([
+                f"  • {it.get('loc','')} / {it.get('bc','')} : 남음 {it.get('remaining',0)} → 0"
+                for iid, it in targets[:5]
+            ])
+            if len(targets) > 5:
+                preview += f"\n  ... 외 {len(targets)-5}개"
+
+            total_remaining = sum(it.get("remaining", 0) for _, it in targets)
+
+            if not messagebox.askyesno(
+                "선택 항목 완료 처리",
+                f"선택한 {len(targets):,}건을 완료 처리합니다.\n"
+                f"(남음 합계 {total_remaining:,}개 → 0)\n\n"
+                f"{preview}\n\n"
+                f"진행할까요?",
+                parent=win
+            ):
+                return
+
+            # 실행
+            try:
+                ts_ms = int(datetime.now().timestamp() * 1000)
+                correction_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/correction_log")
+                applied_log = []
+
+                for key, it in targets:
+                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
+                    old_remaining = it.get("remaining", 0)
+                    item_ref.set(0)
+                    state["items"][key]["remaining"] = 0
+                    applied_log.append({
+                        "loc": it.get("loc", ""),
+                        "bc": it.get("bc", ""),
+                        "from": old_remaining,
+                        "to": 0,
+                        "ts": ts_ms,
+                        "reason": "manual_complete",
+                    })
+
+                if applied_log and correction_log_ref:
+                    try:
+                        updates = {}
+                        for log_item in applied_log:
+                            new_id = correction_log_ref.push().key
+                            updates[new_id] = log_item
+                        correction_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"로그 저장 실패: {e}")
+
+                show_copy_toast(f"✅ {len(targets)}건 완료 처리됨")
+                update_progress()
+                render_items_table()
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("완료 처리 실패", f"{e}", parent=win)
+
+        # 우클릭 메뉴
+        ctx_menu = tk.Menu(win, tearoff=0, font=("맑은 고딕", 9))
+        ctx_menu.add_command(
+            label="✅ 선택 항목 완료 처리",
+            command=on_tree_complete_selected
+        )
+
+        def show_context_menu(event):
+            # 우클릭한 행이 선택 안 되어 있으면 그 행만 선택 (Treeview 기본 동작 보완)
+            row_id = tree.identify_row(event.y)
+            if row_id and row_id not in tree.selection():
+                tree.selection_set(row_id)
+            # 메뉴 표시
+            try:
+                ctx_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                ctx_menu.grab_release()
+
+        tree.bind("<Button-3>", show_context_menu)  # Windows/Linux 우클릭
+        tree.bind("<Button-2>", show_context_menu)  # macOS 우클릭
+
         # ─── 오른쪽: 액션 패널 (스크롤 가능) ───
         right_outer = tk.Frame(body, bg="#F5F6F8", width=296)
         right_outer.pack(side="right", fill="y", padx=(5, 0))
