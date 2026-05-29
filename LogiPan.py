@@ -9568,22 +9568,24 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                  font=("맑은 고딕", 8), fg="#888").pack(side="left", padx=(2, 0))
 
         # Treeview
-        cols = ("loc", "bc", "qty", "scanned", "outbound", "remaining", "status")
+        cols = ("loc", "bc", "qty", "scanned", "outbound", "added", "remaining", "status")
         tree = ttk.Treeview(left, columns=cols, show="headings", height=20)
         tree.heading("loc", text="로케")
         tree.heading("bc", text="바코드")
         tree.heading("qty", text="원래수량")
         tree.heading("scanned", text="스캔됨")
         tree.heading("outbound", text="출고됨")
+        tree.heading("added", text="신규입고")
         tree.heading("remaining", text="남음")
         tree.heading("status", text="상태")
-        tree.column("loc", width=100, anchor="center")
-        tree.column("bc", width=170)
-        tree.column("qty", width=65, anchor="e")
-        tree.column("scanned", width=65, anchor="e")
-        tree.column("outbound", width=65, anchor="e")
-        tree.column("remaining", width=65, anchor="e")
-        tree.column("status", width=100, anchor="center")
+        tree.column("loc", width=95, anchor="center")
+        tree.column("bc", width=150)
+        tree.column("qty", width=60, anchor="e")
+        tree.column("scanned", width=60, anchor="e")
+        tree.column("outbound", width=60, anchor="e")
+        tree.column("added", width=65, anchor="e")
+        tree.column("remaining", width=60, anchor="e")
+        tree.column("status", width=110, anchor="center")
 
         # 스크롤바
         tree_scroll = ttk.Scrollbar(left, orient="vertical", command=tree.yview)
@@ -9597,6 +9599,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tree.tag_configure("mixed", background="#E0E7FF")      # 보라 (스캔+출고 혼합 완료)
         tree.tag_configure("partial", background="#FEF3C7")    # 노랑 (진행중)
         tree.tag_configure("over", background="#FEE2E2")       # 빨강 (초과)
+        tree.tag_configure("newly_added", background="#FED7AA")  # 오렌지 (신규 입고분 있음)
 
         # ─── [추가] 셀 클릭 시 그 값을 클립보드에 복사 ───
         def on_tree_cell_click(event):
@@ -9792,6 +9795,629 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                    state="disabled")
         btn_apply_out.pack(fill="x")
 
+        # ─ 신규 입고 카드 ─
+        in_card = tk.LabelFrame(right, text="  🆕 신규 입고 파일  ",
+                                 bg="white", fg="#1A1A1A",
+                                 font=("맑은 고딕", 10, "bold"),
+                                 bd=1, relief="solid", padx=10, pady=8)
+        in_card.pack(fill="x", pady=(0, 8))
+
+        tk.Label(in_card,
+                 text="진행 중 신규 입고된 재고를 마스터에 추가합니다.\n완료된 항목에 들어와도 완료 상태는 유지됩니다.",
+                 font=("맑은 고딕", 8), bg="white", fg="#666",
+                 justify="left").pack(anchor="w", pady=(0, 6))
+
+        in_file_label = tk.Label(in_card, text="(파일 선택 안 됨)",
+                                  font=("맑은 고딕", 9), bg="#F9FAFB", fg="#6B7280",
+                                  anchor="w", padx=6, bd=1, relief="solid")
+        in_file_label.pack(fill="x", pady=(0, 6), ipady=3)
+
+        # 컬럼 매핑
+        in_map_frame = tk.LabelFrame(in_card, text="  컬럼 매핑  ",
+                                      bg="white", fg="#6B7280",
+                                      font=("맑은 고딕", 8), bd=1, relief="solid", padx=6, pady=4)
+        in_map_frame.pack(fill="x", pady=(0, 6))
+
+        def make_in_map_row(parent, label):
+            row = tk.Frame(parent, bg="white")
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=label, font=("맑은 고딕", 8), bg="white",
+                     fg="#374151", width=8, anchor="w").pack(side="left")
+            cb = ttk.Combobox(row, font=("맑은 고딕", 8), state="readonly")
+            cb.pack(side="left", fill="x", expand=True)
+            return cb
+
+        in_loc_cb = make_in_map_row(in_map_frame, "로케")
+        in_bc_cb = make_in_map_row(in_map_frame, "바코드")
+        in_qty_cb = make_in_map_row(in_map_frame, "수량")
+        in_name_cb = make_in_map_row(in_map_frame, "상품명")
+        in_size_cb = make_in_map_row(in_map_frame, "사이즈")
+
+        in_state = {"df": None, "valid_df": None, "path": None,
+                    "col_loc": "", "col_bc": "", "col_qty": "",
+                    "col_name": "", "col_size": ""}
+
+        def refresh_in_preview():
+            df = in_state["df"]
+            if df is None: return
+            col_loc = in_state["col_loc"]
+            col_bc = in_state["col_bc"]
+            col_qty = in_state["col_qty"]
+            if not (col_loc and col_bc and col_qty):
+                in_preview.config(text="⚠️ 로케/바코드/수량 컬럼을 모두 선택하세요", fg="#DC2626")
+                btn_apply_in.config(state="disabled")
+                return
+            try:
+                valid_df = df.copy()
+                valid_df = valid_df[valid_df[col_loc].astype(str).str.strip() != ""]
+                valid_df = valid_df[valid_df[col_bc].astype(str).str.strip() != ""]
+                qty_series = pd.to_numeric(valid_df[col_qty], errors="coerce").fillna(0).astype(int)
+                valid_df = valid_df[qty_series > 0]
+                qty_series = qty_series[qty_series > 0]
+                skipped = len(df) - len(valid_df)
+                total_qty = int(qty_series.sum())
+
+                # 신규 vs 기존 분류 (미리보기)
+                new_count = 0
+                existing_count = 0
+                items_local = state["items"]
+                for _, row in valid_df.iterrows():
+                    loc_v = str(row[col_loc]).strip()
+                    bc_v = str(row[col_bc]).strip()
+                    key = f"{loc_v}__{bc_v}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+                    if key in items_local:
+                        existing_count += 1
+                    else:
+                        new_count += 1
+
+                skip_msg = f" (불완전 {skipped}건 제외)" if skipped > 0 else ""
+                in_preview.config(
+                    text=f"📊 신규 입고: {len(valid_df):,}건 / 총 {total_qty:,}개{skip_msg}\n"
+                         f"  · 기존 항목에 추가: {existing_count:,}건\n"
+                         f"  · 신규 항목 생성: {new_count:,}건",
+                    fg="#065F46"
+                )
+                in_state["valid_df"] = valid_df
+                btn_apply_in.config(state="normal")
+            except Exception as e:
+                in_preview.config(text=f"⚠️ 미리보기 실패: {e}", fg="#DC2626")
+                btn_apply_in.config(state="disabled")
+
+        def on_in_map_change(*args):
+            in_state["col_loc"] = in_loc_cb.get()
+            in_state["col_bc"] = in_bc_cb.get()
+            in_state["col_qty"] = in_qty_cb.get()
+            in_state["col_name"] = in_name_cb.get()
+            in_state["col_size"] = in_size_cb.get()
+            if in_state["df"] is not None:
+                refresh_in_preview()
+        in_loc_cb.bind("<<ComboboxSelected>>", on_in_map_change)
+        in_bc_cb.bind("<<ComboboxSelected>>", on_in_map_change)
+        in_qty_cb.bind("<<ComboboxSelected>>", on_in_map_change)
+        in_name_cb.bind("<<ComboboxSelected>>", on_in_map_change)
+        in_size_cb.bind("<<ComboboxSelected>>", on_in_map_change)
+
+        def choose_inbound_file():
+            path = filedialog.askopenfilename(
+                title="신규 입고 파일 선택",
+                filetypes=[("엑셀/CSV", "*.xlsx *.xls *.csv"), ("모든 파일", "*.*")],
+                parent=win
+            )
+            if not path:
+                return
+            try:
+                if path.lower().endswith(".csv"):
+                    df = pd.read_csv(path, dtype=str)
+                else:
+                    df = pd.read_excel(path, dtype=str)
+                df = df.fillna("")
+            except Exception as e:
+                messagebox.showerror("파일 읽기 실패", str(e), parent=win)
+                return
+
+            in_state["df"] = df
+            in_state["path"] = path
+            in_file_label.config(text=f"📄 {os.path.basename(path)}", fg="#1A1A1A")
+
+            cols = list(df.columns)
+            def find_col(keywords):
+                for kw in keywords:
+                    for c in cols:
+                        lc = str(c).lower().replace(" ", "")
+                        if kw in lc:
+                            return c
+                return ""
+            in_state["col_loc"] = find_col(["로케", "loc", "위치"])
+            in_state["col_bc"] = find_col(["바코드", "barcode", "품번", "상품코드", "code"])
+            in_state["col_qty"] = find_col(["입고수량", "수량", "qty"])
+            in_state["col_name"] = find_col(["상품명", "품명", "name", "제품명"])
+            in_state["col_size"] = find_col(["사이즈", "size", "규격"])
+
+            for cb, attr in [(in_loc_cb, "col_loc"), (in_bc_cb, "col_bc"),
+                              (in_qty_cb, "col_qty"),
+                              (in_name_cb, "col_name"), (in_size_cb, "col_size")]:
+                cb["values"] = cols
+                cb.set(in_state[attr] or "")
+
+            refresh_in_preview()
+
+        tk.Button(in_card, text="📁 파일 선택", command=choose_inbound_file,
+                  bg="#1877F2", fg="white", font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=10, pady=4, cursor="hand2").pack(fill="x", pady=(0, 6))
+
+        in_preview = tk.Label(in_card, text="파일 선택 후 미리보기가 표시됩니다",
+                               font=("맑은 고딕", 8), bg="#F9FAFB", fg="#6B7280",
+                               anchor="w", padx=8, pady=6, bd=1, relief="solid",
+                               justify="left", wraplength=240)
+        in_preview.pack(fill="x", pady=(0, 6))
+
+        def apply_inbound():
+            df = in_state.get("valid_df")
+            if df is None or len(df) == 0:
+                return
+            col_loc = in_state["col_loc"]
+            col_bc = in_state["col_bc"]
+            col_qty = in_state["col_qty"]
+            col_name = in_state["col_name"]  # 선택
+            col_size = in_state["col_size"]  # 선택
+            if not (col_loc and col_bc and col_qty):
+                return
+
+            total_qty = int(pd.to_numeric(df[col_qty], errors="coerce").fillna(0).sum())
+            if not messagebox.askyesno("신규 입고 적용",
+                f"신규 입고 {len(df):,}건 / 총 {total_qty:,}개를\n"
+                f"마스터에 추가합니다.\n\n"
+                f"※ 완료된 항목은 완료 상태 유지\n"
+                f"※ 🆕 표시되어 신규임을 알 수 있음\n\n진행할까요?", parent=win):
+                return
+
+            btn_apply_in.config(state="disabled", text="🆕 추가 중...")
+            win.update()
+
+            try:
+                items_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items")
+                inbound_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/inbound_log")
+
+                added_new = 0
+                added_existing = 0
+                applied_log = []
+                ts_ms = int(datetime.now().timestamp() * 1000)
+
+                for idx, row in df.iterrows():
+                    loc = str(row[col_loc]).strip()
+                    bc = str(row[col_bc]).strip()
+                    try:
+                        qty = int(float(row[col_qty]))
+                    except (ValueError, TypeError):
+                        qty = 0
+                    if not loc or not bc or qty <= 0:
+                        continue
+
+                    # 상품명/사이즈 (선택)
+                    name = str(row[col_name]).strip() if col_name else ""
+                    size = str(row[col_size]).strip() if col_size else ""
+
+                    key = f"{loc}__{bc}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+
+                    if key in state["items"]:
+                        # 기존 항목에 추가
+                        existing = state["items"][key]
+                        current_remaining = existing.get("remaining", 0)
+                        current_qty = existing.get("qty", 0)
+                        current_added = existing.get("qty_added", 0)
+
+                        if current_remaining <= 0:
+                            # 완료 유지
+                            new_added = current_added + qty
+                            updates = {
+                                "qty_added": new_added,
+                                "qty_added_at": ts_ms,
+                            }
+                        else:
+                            # 진행중/미스캔 → qty + remaining 같이 증가
+                            new_qty = current_qty + qty
+                            new_remaining = current_remaining + qty
+                            new_added = current_added + qty
+                            updates = {
+                                "qty": new_qty,
+                                "remaining": new_remaining,
+                                "qty_added": new_added,
+                                "qty_added_at": ts_ms,
+                            }
+                        # 기존 항목에 상품명/사이즈가 비어있고 입고 파일에 있으면 채워넣기
+                        if name and not existing.get("name"):
+                            updates["name"] = name
+                        if size and not existing.get("size"):
+                            updates["size"] = size
+
+                        item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}")
+                        item_ref.update(updates)
+                        for k, v in updates.items():
+                            state["items"][key][k] = v
+                        added_existing += 1
+                    else:
+                        # 신규 항목 생성
+                        new_item = {
+                            "loc": loc,
+                            "bc": bc,
+                            "qty": qty,
+                            "remaining": qty,
+                            "outbound_qty": 0,
+                            "qty_added": qty,
+                            "qty_added_at": ts_ms,
+                        }
+                        if name:
+                            new_item["name"] = name
+                        if size:
+                            new_item["size"] = size
+                        item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}")
+                        item_ref.set(new_item)
+                        state["items"][key] = new_item
+                        added_new += 1
+
+                    applied_log.append({"loc": loc, "bc": bc, "qty": qty, "ts": ts_ms})
+
+                    if idx % 100 == 0:
+                        btn_apply_in.config(text=f"🆕 추가 중... {idx}/{len(df)}")
+                        win.update()
+
+                # 입고 로그 batch 저장
+                if applied_log and inbound_log_ref:
+                    try:
+                        updates = {}
+                        for log_item in applied_log:
+                            new_id = inbound_log_ref.push().key
+                            updates[new_id] = log_item
+                        inbound_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"입고 로그 저장 실패: {e}")
+
+                messagebox.showinfo("✅ 신규 입고 완료",
+                    f"신규 입고 적용 완료\n\n"
+                    f"✅ 기존 항목에 추가: {added_existing:,}건\n"
+                    f"🆕 신규 항목 생성: {added_new:,}건\n\n"
+                    f"🆕 배지가 붙은 항목은 신규 입고 분이 있음을 의미합니다.",
+                    parent=win)
+
+                update_progress()
+                render_items_table()
+
+                in_state["df"] = None
+                in_state["valid_df"] = None
+                in_file_label.config(text="(파일 선택 안 됨)", fg="#6B7280")
+                in_preview.config(text="파일 선택 후 미리보기가 표시됩니다", fg="#6B7280")
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("입고 적용 실패", f"{e}", parent=win)
+            finally:
+                btn_apply_in.config(state="disabled", text="🆕 마스터에 추가")
+
+        btn_apply_in = tk.Button(in_card, text="🆕 마스터에 추가",
+                                  command=apply_inbound,
+                                  bg="#F59E0B", fg="white",
+                                  activebackground="#D97706",
+                                  font=("맑은 고딕", 10, "bold"),
+                                  relief="flat", padx=10, pady=8, cursor="hand2",
+                                  state="disabled")
+        btn_apply_in.pack(fill="x")
+
+        # ─ 재고이동 카드 ─
+        mv_card = tk.LabelFrame(right, text="  🔄 재고이동 파일  ",
+                                 bg="white", fg="#1A1A1A",
+                                 font=("맑은 고딕", 10, "bold"),
+                                 bd=1, relief="solid", padx=10, pady=8)
+        mv_card.pack(fill="x", pady=(0, 8))
+
+        tk.Label(mv_card,
+                 text="박스를 다른 로케로 옮길 때 마스터 위치를 갱신합니다.\n반출/반입 로케 + 바코드 + 수량 컬럼 필요.",
+                 font=("맑은 고딕", 8), bg="white", fg="#666",
+                 justify="left").pack(anchor="w", pady=(0, 6))
+
+        mv_file_label = tk.Label(mv_card, text="(파일 선택 안 됨)",
+                                  font=("맑은 고딕", 9), bg="#F9FAFB", fg="#6B7280",
+                                  anchor="w", padx=6, bd=1, relief="solid")
+        mv_file_label.pack(fill="x", pady=(0, 6), ipady=3)
+
+        # 컬럼 매핑
+        mv_map_frame = tk.LabelFrame(mv_card, text="  컬럼 매핑  ",
+                                      bg="white", fg="#6B7280",
+                                      font=("맑은 고딕", 8), bd=1, relief="solid", padx=6, pady=4)
+        mv_map_frame.pack(fill="x", pady=(0, 6))
+
+        def make_mv_map_row(parent, label):
+            row = tk.Frame(parent, bg="white")
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=label, font=("맑은 고딕", 8), bg="white",
+                     fg="#374151", width=8, anchor="w").pack(side="left")
+            cb = ttk.Combobox(row, font=("맑은 고딕", 8), state="readonly")
+            cb.pack(side="left", fill="x", expand=True)
+            return cb
+
+        mv_from_cb = make_mv_map_row(mv_map_frame, "반출로케")
+        mv_to_cb = make_mv_map_row(mv_map_frame, "반입로케")
+        mv_bc_cb = make_mv_map_row(mv_map_frame, "바코드")
+        mv_qty_cb = make_mv_map_row(mv_map_frame, "수량")
+
+        mv_state = {"df": None, "valid_df": None, "path": None,
+                    "col_from": "", "col_to": "", "col_bc": "", "col_qty": ""}
+
+        def refresh_mv_preview():
+            df = mv_state["df"]
+            if df is None: return
+            col_from = mv_state["col_from"]
+            col_to = mv_state["col_to"]
+            col_bc = mv_state["col_bc"]
+            col_qty = mv_state["col_qty"]
+            if not (col_from and col_to and col_bc and col_qty):
+                mv_preview.config(text="⚠️ 모든 컬럼을 선택하세요", fg="#DC2626")
+                btn_apply_mv.config(state="disabled")
+                return
+            try:
+                valid_df = df.copy()
+                valid_df = valid_df[valid_df[col_from].astype(str).str.strip() != ""]
+                valid_df = valid_df[valid_df[col_to].astype(str).str.strip() != ""]
+                valid_df = valid_df[valid_df[col_bc].astype(str).str.strip() != ""]
+                qty_series = pd.to_numeric(valid_df[col_qty], errors="coerce").fillna(0).astype(int)
+                valid_df = valid_df[qty_series > 0]
+                qty_series = qty_series[qty_series > 0]
+                skipped = len(df) - len(valid_df)
+                total_qty = int(qty_series.sum())
+
+                # 마스터 매칭 분류
+                found_count = 0
+                missing_count = 0
+                items_local = state["items"]
+                for _, row in valid_df.iterrows():
+                    from_loc = str(row[col_from]).strip()
+                    bc_v = str(row[col_bc]).strip()
+                    from_key = f"{from_loc}__{bc_v}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+                    if from_key in items_local:
+                        found_count += 1
+                    else:
+                        missing_count += 1
+
+                skip_msg = f" (불완전 {skipped}건 제외)" if skipped > 0 else ""
+                mv_preview.config(
+                    text=f"📊 이동: {len(valid_df):,}건 / 총 {total_qty:,}개{skip_msg}\n"
+                         f"  · 마스터 매칭: {found_count:,}건\n"
+                         f"  · 반출로케 없음: {missing_count:,}건 (이동 안 됨)",
+                    fg="#065F46"
+                )
+                mv_state["valid_df"] = valid_df
+                btn_apply_mv.config(state="normal")
+            except Exception as e:
+                mv_preview.config(text=f"⚠️ 미리보기 실패: {e}", fg="#DC2626")
+                btn_apply_mv.config(state="disabled")
+
+        def on_mv_map_change(*args):
+            mv_state["col_from"] = mv_from_cb.get()
+            mv_state["col_to"] = mv_to_cb.get()
+            mv_state["col_bc"] = mv_bc_cb.get()
+            mv_state["col_qty"] = mv_qty_cb.get()
+            if mv_state["df"] is not None:
+                refresh_mv_preview()
+        mv_from_cb.bind("<<ComboboxSelected>>", on_mv_map_change)
+        mv_to_cb.bind("<<ComboboxSelected>>", on_mv_map_change)
+        mv_bc_cb.bind("<<ComboboxSelected>>", on_mv_map_change)
+        mv_qty_cb.bind("<<ComboboxSelected>>", on_mv_map_change)
+
+        def choose_move_file():
+            path = filedialog.askopenfilename(
+                title="재고이동 파일 선택",
+                filetypes=[("엑셀/CSV", "*.xlsx *.xls *.csv"), ("모든 파일", "*.*")],
+                parent=win
+            )
+            if not path:
+                return
+            try:
+                if path.lower().endswith(".csv"):
+                    df = pd.read_csv(path, dtype=str)
+                else:
+                    df = pd.read_excel(path, dtype=str)
+                df = df.fillna("")
+            except Exception as e:
+                messagebox.showerror("파일 읽기 실패", str(e), parent=win)
+                return
+
+            mv_state["df"] = df
+            mv_state["path"] = path
+            mv_file_label.config(text=f"📄 {os.path.basename(path)}", fg="#1A1A1A")
+
+            cols = list(df.columns)
+            def find_col(keywords):
+                for kw in keywords:
+                    for c in cols:
+                        lc = str(c).lower().replace(" ", "")
+                        if kw in lc:
+                            return c
+                return ""
+            # 자동 매핑 - 반출/반입 구분
+            mv_state["col_from"] = find_col(["반출", "from", "옛", "이전로케", "출발"])
+            mv_state["col_to"] = find_col(["반입", "to", "새로케", "도착", "신규로케"])
+            # 일반 "로케" 키워드가 둘 다 못 잡히면 채택할 백업 (덮어쓰기 안 함)
+            if not mv_state["col_from"]:
+                mv_state["col_from"] = find_col(["로케1", "loc1"])
+            if not mv_state["col_to"]:
+                mv_state["col_to"] = find_col(["로케2", "loc2"])
+            mv_state["col_bc"] = find_col(["바코드", "barcode", "품번", "상품코드", "code"])
+            mv_state["col_qty"] = find_col(["이동수량", "수량", "qty"])
+
+            for cb, attr in [(mv_from_cb, "col_from"), (mv_to_cb, "col_to"),
+                              (mv_bc_cb, "col_bc"), (mv_qty_cb, "col_qty")]:
+                cb["values"] = cols
+                cb.set(mv_state[attr] or "")
+
+            refresh_mv_preview()
+
+        tk.Button(mv_card, text="📁 파일 선택", command=choose_move_file,
+                  bg="#1877F2", fg="white", font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=10, pady=4, cursor="hand2").pack(fill="x", pady=(0, 6))
+
+        mv_preview = tk.Label(mv_card, text="파일 선택 후 미리보기가 표시됩니다",
+                               font=("맑은 고딕", 8), bg="#F9FAFB", fg="#6B7280",
+                               anchor="w", padx=8, pady=6, bd=1, relief="solid",
+                               justify="left", wraplength=240)
+        mv_preview.pack(fill="x", pady=(0, 6))
+
+        def apply_move():
+            df = mv_state.get("valid_df")
+            if df is None or len(df) == 0:
+                return
+            col_from = mv_state["col_from"]
+            col_to = mv_state["col_to"]
+            col_bc = mv_state["col_bc"]
+            col_qty = mv_state["col_qty"]
+            if not (col_from and col_to and col_bc and col_qty):
+                return
+
+            total_qty = int(pd.to_numeric(df[col_qty], errors="coerce").fillna(0).sum())
+            if not messagebox.askyesno("재고이동 적용",
+                f"재고이동 {len(df):,}건 / 총 {total_qty:,}개를\n"
+                f"마스터에 반영합니다.\n\n"
+                f"※ 반출 로케에서 차감, 반입 로케에 증가\n"
+                f"※ 스캔/출고 진행상황은 반출 항목에 남음\n\n진행할까요?", parent=win):
+                return
+
+            btn_apply_mv.config(state="disabled", text="🔄 이동 중...")
+            win.update()
+
+            try:
+                move_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/move_log")
+
+                moved = 0
+                not_found = 0  # 반출 로케에 없는 경우
+                insufficient = 0  # 반출 수량이 부족한 경우
+                applied_log = []
+                ts_ms = int(datetime.now().timestamp() * 1000)
+
+                for idx, row in df.iterrows():
+                    from_loc = str(row[col_from]).strip()
+                    to_loc = str(row[col_to]).strip()
+                    bc = str(row[col_bc]).strip()
+                    try:
+                        qty = int(float(row[col_qty]))
+                    except (ValueError, TypeError):
+                        qty = 0
+                    if not from_loc or not to_loc or not bc or qty <= 0:
+                        continue
+                    if from_loc == to_loc:
+                        continue  # 같은 로케 이동 무의미
+
+                    from_key = f"{from_loc}__{bc}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+                    to_key = f"{to_loc}__{bc}".replace("/", "_").replace(".", "_").replace("#", "_").replace("$", "_").replace("[", "_").replace("]", "_")
+
+                    # 1) 반출 항목 확인
+                    if from_key not in state["items"]:
+                        not_found += 1
+                        continue
+                    from_item = state["items"][from_key]
+                    from_qty = from_item.get("qty", 0)
+                    from_remaining = from_item.get("remaining", 0)
+
+                    # 반출 수량 부족 체크 (qty 기준)
+                    if from_qty < qty:
+                        insufficient += 1
+                        # 그래도 가능한 만큼만 이동? → 일단 스킵
+                        continue
+
+                    # 2) 반출 항목 차감
+                    new_from_qty = from_qty - qty
+                    # remaining은 비율로 조정 (qty가 줄어든 비율만큼)
+                    # 단순화: remaining도 같은 양만큼 차감 (단, 음수 방지)
+                    new_from_remaining = max(0, from_remaining - qty)
+
+                    from_updates = {
+                        "qty": new_from_qty,
+                        "remaining": new_from_remaining,
+                    }
+                    from_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{from_key}")
+                    from_ref.update(from_updates)
+                    for k, v in from_updates.items():
+                        state["items"][from_key][k] = v
+
+                    # 3) 반입 항목 처리
+                    if to_key in state["items"]:
+                        # 기존 항목에 추가
+                        to_item = state["items"][to_key]
+                        to_updates = {
+                            "qty": to_item.get("qty", 0) + qty,
+                            "remaining": to_item.get("remaining", 0) + qty,
+                        }
+                        to_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{to_key}")
+                        to_ref.update(to_updates)
+                        for k, v in to_updates.items():
+                            state["items"][to_key][k] = v
+                    else:
+                        # 반입 로케에 신규 생성 (반출 항목의 상품명/사이즈 가져오기)
+                        new_item = {
+                            "loc": to_loc,
+                            "bc": bc,
+                            "qty": qty,
+                            "remaining": qty,
+                            "outbound_qty": 0,
+                            "qty_added": 0,
+                        }
+                        if from_item.get("name"):
+                            new_item["name"] = from_item["name"]
+                        if from_item.get("size"):
+                            new_item["size"] = from_item["size"]
+                        to_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{to_key}")
+                        to_ref.set(new_item)
+                        state["items"][to_key] = new_item
+
+                    moved += 1
+                    applied_log.append({
+                        "from": from_loc, "to": to_loc, "bc": bc,
+                        "qty": qty, "ts": ts_ms
+                    })
+
+                    if idx % 100 == 0:
+                        btn_apply_mv.config(text=f"🔄 이동 중... {idx}/{len(df)}")
+                        win.update()
+
+                # 이동 로그 batch 저장
+                if applied_log and move_log_ref:
+                    try:
+                        updates = {}
+                        for log_item in applied_log:
+                            new_id = move_log_ref.push().key
+                            updates[new_id] = log_item
+                        move_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"이동 로그 저장 실패: {e}")
+
+                # 결과
+                messagebox.showinfo("✅ 재고이동 완료",
+                    f"재고이동 적용 완료\n\n"
+                    f"✅ 이동 성공: {moved:,}건\n"
+                    f"⚠️ 반출 로케 없음: {not_found:,}건\n"
+                    f"⛔ 수량 부족: {insufficient:,}건",
+                    parent=win)
+
+                update_progress()
+                render_items_table()
+
+                mv_state["df"] = None
+                mv_state["valid_df"] = None
+                mv_file_label.config(text="(파일 선택 안 됨)", fg="#6B7280")
+                mv_preview.config(text="파일 선택 후 미리보기가 표시됩니다", fg="#6B7280")
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("이동 적용 실패", f"{e}", parent=win)
+            finally:
+                btn_apply_mv.config(state="disabled", text="🔄 마스터에 이동 반영")
+
+        btn_apply_mv = tk.Button(mv_card, text="🔄 마스터에 이동 반영",
+                                  command=apply_move,
+                                  bg="#8B5CF6", fg="white",
+                                  activebackground="#7C3AED",
+                                  font=("맑은 고딕", 10, "bold"),
+                                  relief="flat", padx=10, pady=8, cursor="hand2",
+                                  state="disabled")
+        btn_apply_mv.pack(fill="x")
+
         # ─ Export 카드 ─
         export_card = tk.LabelFrame(right, text="  📥 엑셀 추출  ",
                                      bg="white", fg="#1A1A1A",
@@ -9929,12 +10555,20 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 bc = it.get("bc", "")
                 qty = it.get("qty", 0)
                 remaining = it.get("remaining", 0)
+                qty_added = it.get("qty_added", 0)
                 status, tag, scanned, outbound_qty = compute_item_status(it)
+
+                # 신규 입고 표시 - 상태 라벨 앞에 🆕 추가
+                if qty_added > 0:
+                    status = f"🆕 {status}"
+                    # 미스캔이면 tag를 newly_added로 (오렌지 음영)
+                    if tag == "":
+                        tag = "newly_added"
 
                 # 필터
                 if filter_mode == "done" and tag not in ("done", "outbound", "mixed"): continue
                 if filter_mode == "partial" and tag != "partial": continue
-                if filter_mode == "pending" and tag != "": continue
+                if filter_mode == "pending" and tag not in ("", "newly_added"): continue
                 if filter_mode == "over" and tag != "over": continue
 
                 # 검색
@@ -9944,11 +10578,13 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
                 tree.insert("", "end", iid=key, tags=(tag,) if tag else (),
                             values=(loc, bc, f"{qty:,}", f"{scanned:,}",
-                                    f"{outbound_qty:,}", f"{remaining:,}", status))
+                                    f"{outbound_qty:,}",
+                                    f"{qty_added:,}" if qty_added > 0 else "-",
+                                    f"{remaining:,}", status))
                 count_shown += 1
                 # 너무 많으면 끊기 (Treeview 성능)
                 if count_shown >= 5000:
-                    tree.insert("", "end", values=("...", f"({len(items)-5000}건 더 있음)", "", "", "", "", ""))
+                    tree.insert("", "end", values=("...", f"({len(items)-5000}건 더 있음)", "", "", "", "", "", ""))
                     break
 
         # ═══ 출고 차감 적용 ═══
@@ -10117,6 +10753,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     "원래수량": qty,
                     "스캔됨": scanned,
                     "출고됨": outbound_qty,
+                    "신규입고": it.get("qty_added", 0),
                     "남음": remaining,
                     "상태": status_label,
                 })
