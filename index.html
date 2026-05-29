@@ -17,6 +17,25 @@
          PDA/USB 스캐너는 키보드 입력으로 바코드를 전송하므로 별도 디코더 불필요. -->
     <style>
         body { font-family: 'Malgun Gothic', sans-serif; padding: 15px; background: #f4f7f9; margin: 0; color: #333; }
+
+        /* [추가] 가로 화면일 때 안내 메시지 (재고조사 작업 시 세로 권장) */
+        @media (orientation: landscape) and (max-width: 932px) {
+            body::before {
+                content: "📱 휴대폰을 세로로 돌려주세요";
+                position: fixed;
+                top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.85);
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 99999;
+                text-align: center;
+                padding: 20px;
+            }
+        }
         .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 550px; margin: auto; }
         .tabs { display: flex; gap: 5px; margin-bottom: 20px; position: relative; }
         .tab-btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; background: #eee; color: #666; position: relative; }
@@ -1008,6 +1027,19 @@
 
     window.onload = function() {
         console.log("%c🚀 로지판 v2.4 로드됨 (작업 종류 분류 추가)", "color: #1a73e8; font-size: 14px; font-weight: bold;");
+
+        // [추가] 화면 세로 고정 (PDA에서 회전 방지)
+        try {
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('portrait').catch(e => {
+                    // 일부 브라우저/모드에서 실패 가능 (사용자 제스처 필요한 경우 등)
+                    console.log('화면 세로 고정 실패 (정상 - PWA 설치 시 manifest로 처리됨):', e.message);
+                });
+            }
+        } catch (e) {
+            console.log('Screen Orientation API 미지원:', e.message);
+        }
+
         const name = localStorage.getItem("logipan_user_name");
         if (!name) askName();
         else {
@@ -2522,21 +2554,44 @@
     let auditScanLog = [];
 
     // ─── 로케 스캔 처리 ─────────────────────────
-    function handleAuditLocation(loc) {
+    async function handleAuditLocation(loc) {
         if (!auditState.master) {
             showAuditRecent('error', loc, '먼저 세션을 선택하세요');
             feedback('error', '세션 없음');
             return;
         }
 
-        // 마스터에서 이 로케의 항목들 찾기
-        const items = Object.entries(auditState.master)
-            .filter(([k, v]) => v.loc === loc)
-            .map(([k, v]) => ({ key: k, ...v }));
-
         auditState.currentLoc = loc;
         updateAuditLocDisplay(loc);
+
+        // 마스터에서 이 로케의 항목 키들 모음
+        const locKeys = Object.entries(auditState.master)
+            .filter(([k, v]) => v.loc === loc)
+            .map(([k, v]) => k);
+
+        // [추가] 로케 항목들 RTDB에서 최신값 일괄 받기 (병렬, 빠름)
+        // 한 로케에 보통 10~20개라 합쳐도 1~2KB 정도
+        if (locKeys.length > 0 && locKeys.length <= 100) {
+            try {
+                const promises = locKeys.map(k =>
+                    rtdb.ref(`stocktake_data/${auditState.sessionId}/items/${k}`).once('value')
+                );
+                const snaps = await Promise.all(promises);
+                snaps.forEach((snap, i) => {
+                    const v = snap.val();
+                    if (v) auditState.master[locKeys[i]] = v;
+                });
+            } catch (e) {
+                console.warn('로케 항목 최신화 실패:', e);
+            }
+        }
+
+        // 갱신된 마스터로 항목 다시 만들기
+        const items = locKeys
+            .map(k => ({ key: k, ...auditState.master[k] }));
+
         renderAuditLocItems(items);
+        updateAuditTotalProgress();  // 전체 진행률도 같이 갱신
 
         if (items.length === 0) {
             // 마스터에 없는 로케
@@ -2577,7 +2632,23 @@
         const key = `${loc}__${bc}`;  // LogiPan 업로드 키 규칙과 동일
 
         // 1) 현재 로케에 이 바코드가 있는가?
-        const item = auditState.master[key];
+        let item = auditState.master[key];
+
+        // [추가] 매칭됐으면 RTDB에서 최신값 1개만 받아서 동기화 (~100바이트)
+        // 다른 사람/관리자가 차감한 거 즉시 반영
+        if (item) {
+            try {
+                const freshSnap = await rtdb.ref(`stocktake_data/${auditState.sessionId}/items/${key}`).once('value');
+                const fresh = freshSnap.val();
+                if (fresh) {
+                    auditState.master[key] = fresh;
+                    item = fresh;
+                }
+            } catch (e) {
+                // 네트워크 오류 등 - 로컬 값 그대로 사용
+                console.warn('항목 최신 조회 실패, 로컬 사용:', e);
+            }
+        }
 
         if (!item) {
             // 현재 로케엔 없음 → 다른 로케에 있는지 확인
