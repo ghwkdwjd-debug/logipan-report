@@ -9641,10 +9641,47 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         tree.bind("<Button-1>", on_tree_cell_click, add="+")
 
-        # ─── 오른쪽: 액션 패널 ───
-        right = tk.Frame(body, bg="#F5F6F8", width=280)
-        right.pack(side="right", fill="y", padx=(5, 0))
-        right.pack_propagate(False)
+        # ─── 오른쪽: 액션 패널 (스크롤 가능) ───
+        right_outer = tk.Frame(body, bg="#F5F6F8", width=296)
+        right_outer.pack(side="right", fill="y", padx=(5, 0))
+        right_outer.pack_propagate(False)
+
+        # Canvas + Scrollbar
+        right_canvas = tk.Canvas(right_outer, bg="#F5F6F8",
+                                  highlightthickness=0, bd=0)
+        right_vbar = ttk.Scrollbar(right_outer, orient="vertical",
+                                    command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_vbar.set)
+        right_vbar.pack(side="right", fill="y")
+        right_canvas.pack(side="left", fill="both", expand=True)
+
+        # 실제 카드들이 들어갈 내부 프레임 (이걸 right로 사용)
+        right = tk.Frame(right_canvas, bg="#F5F6F8")
+        right_window = right_canvas.create_window((0, 0), window=right, anchor="nw")
+
+        # 내부 크기 변경 시 scrollregion 갱신
+        def _on_right_configure(event):
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+            # 캔버스 너비에 맞춰 내부 프레임 너비도 조정 (가로 스크롤 없게)
+            right_canvas.itemconfig(right_window, width=event.width)
+        right_canvas.bind("<Configure>",
+                          lambda e: right_canvas.itemconfig(right_window, width=e.width))
+        right.bind("<Configure>",
+                   lambda e: right_canvas.configure(scrollregion=right_canvas.bbox("all")))
+
+        # 마우스 휠 스크롤 (Windows 기준)
+        def _on_right_mousewheel(event):
+            # 휠 1틱 = 120 → 3행 정도 스크롤
+            right_canvas.yview_scroll(int(-1 * (event.delta / 120)) * 3, "units")
+        def _bind_wheel(_):
+            right_canvas.bind_all("<MouseWheel>", _on_right_mousewheel)
+        def _unbind_wheel(_):
+            right_canvas.unbind_all("<MouseWheel>")
+        # 캔버스 위에 마우스 올라가면 휠 바인딩, 떠나면 해제 (다른 위젯과 충돌 방지)
+        right_canvas.bind("<Enter>", _bind_wheel)
+        right_canvas.bind("<Leave>", _unbind_wheel)
+        right.bind("<Enter>", _bind_wheel)
+        right.bind("<Leave>", _unbind_wheel)
 
         # ─ 출고 업로드 카드 ─
         out_card = tk.LabelFrame(right, text="  📤 출고 파일 업로드  ",
