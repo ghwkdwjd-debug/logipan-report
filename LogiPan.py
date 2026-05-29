@@ -9267,6 +9267,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         "bc": bc,
                         "qty": qty,
                         "remaining": qty,
+                        "outbound_qty": 0,  # [추가] 출고로 차감된 누계 (스캔과 구분)
                     }
                     if name:
                         item["name"] = name
@@ -9567,20 +9568,22 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                  font=("맑은 고딕", 8), fg="#888").pack(side="left", padx=(2, 0))
 
         # Treeview
-        cols = ("loc", "bc", "qty", "scanned", "remaining", "status")
+        cols = ("loc", "bc", "qty", "scanned", "outbound", "remaining", "status")
         tree = ttk.Treeview(left, columns=cols, show="headings", height=20)
         tree.heading("loc", text="로케")
         tree.heading("bc", text="바코드")
         tree.heading("qty", text="원래수량")
         tree.heading("scanned", text="스캔됨")
+        tree.heading("outbound", text="출고됨")
         tree.heading("remaining", text="남음")
         tree.heading("status", text="상태")
         tree.column("loc", width=100, anchor="center")
-        tree.column("bc", width=180)
-        tree.column("qty", width=70, anchor="e")
-        tree.column("scanned", width=70, anchor="e")
-        tree.column("remaining", width=70, anchor="e")
-        tree.column("status", width=80, anchor="center")
+        tree.column("bc", width=170)
+        tree.column("qty", width=65, anchor="e")
+        tree.column("scanned", width=65, anchor="e")
+        tree.column("outbound", width=65, anchor="e")
+        tree.column("remaining", width=65, anchor="e")
+        tree.column("status", width=100, anchor="center")
 
         # 스크롤바
         tree_scroll = ttk.Scrollbar(left, orient="vertical", command=tree.yview)
@@ -9589,9 +9592,51 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tree_scroll.pack(side="right", fill="y")
 
         # 색상 태그
-        tree.tag_configure("done", background="#D1FAE5")       # 초록 음영 (완료)
-        tree.tag_configure("partial", background="#FEF3C7")    # 노랑 음영 (진행중)
-        tree.tag_configure("over", background="#FEE2E2")       # 빨강 음영 (초과 차감)
+        tree.tag_configure("done", background="#D1FAE5")       # 초록 (스캔 완료)
+        tree.tag_configure("outbound", background="#DBEAFE")   # 파랑 (출고처리)
+        tree.tag_configure("mixed", background="#E0E7FF")      # 보라 (스캔+출고 혼합 완료)
+        tree.tag_configure("partial", background="#FEF3C7")    # 노랑 (진행중)
+        tree.tag_configure("over", background="#FEE2E2")       # 빨강 (초과)
+
+        # ─── [추가] 셀 클릭 시 그 값을 클립보드에 복사 ───
+        def on_tree_cell_click(event):
+            region = tree.identify_region(event.x, event.y)
+            if region != "cell":
+                return
+            row_id = tree.identify_row(event.y)
+            col_id = tree.identify_column(event.x)  # "#1", "#2", ...
+            if not row_id or not col_id:
+                return
+            try:
+                col_idx = int(col_id.replace("#", "")) - 1
+                values = tree.item(row_id, "values")
+                if 0 <= col_idx < len(values):
+                    cell_value = str(values[col_idx])
+                    # 숫자 포맷팅된 거 (1,234) → 그대로 복사 (필요 시 컴마 빼고 싶으면 여기서 처리)
+                    win.clipboard_clear()
+                    win.clipboard_append(cell_value)
+                    # 작은 토스트 띄우기 (간단히)
+                    show_copy_toast(cell_value)
+            except Exception as e:
+                print(f"셀 복사 실패: {e}")
+
+        # 토스트용 라벨 (생성 시점에 미리 만들어둠)
+        copy_toast = tk.Label(win, text="", bg="#1A1A1A", fg="white",
+                               font=("맑은 고딕", 9, "bold"),
+                               padx=12, pady=6, bd=0)
+        copy_toast_after_id = [None]
+
+        def show_copy_toast(text):
+            # 텍스트 길면 잘라서 표시
+            display = text if len(text) <= 30 else text[:27] + "..."
+            copy_toast.config(text=f"📋 복사됨: {display}")
+            copy_toast.place(relx=0.5, rely=0.96, anchor="s")
+            # 1.5초 뒤 자동 숨김
+            if copy_toast_after_id[0]:
+                win.after_cancel(copy_toast_after_id[0])
+            copy_toast_after_id[0] = win.after(1500, lambda: copy_toast.place_forget())
+
+        tree.bind("<Button-1>", on_tree_cell_click, add="+")
 
         # ─── 오른쪽: 액션 패널 ───
         right = tk.Frame(body, bg="#F5F6F8", width=280)
@@ -9836,6 +9881,34 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 progress_bar_fill.place(x=0, y=0, relheight=1.0, width=fill_width)
 
         # ═══ 테이블 렌더링 함수 ═══
+        # ═══ 통합 상태 계산 함수 ═══
+        # scanned = 작업자가 직접 스캔해서 차감한 수량
+        # outbound_qty = 출고 파일로 차감된 수량
+        # remaining = qty - scanned - outbound_qty
+        # 반환: (status_label, tag, scanned, outbound_qty)
+        def compute_item_status(it):
+            qty = it.get("qty", 0)
+            remaining = it.get("remaining", 0)
+            outbound_qty = it.get("outbound_qty", 0)
+            # 스캔으로 차감된 수량 = (원래 - 남은) - 출고
+            scanned = qty - remaining - outbound_qty
+            if scanned < 0:  # 데이터 이상 케이스 보정
+                scanned = 0
+
+            if remaining < 0:
+                return ("🚫 초과", "over", scanned, outbound_qty)
+            if remaining <= 0:
+                # 완료 - 어떻게 완료됐는지 구분
+                if outbound_qty > 0 and scanned == 0:
+                    return ("📤 출고처리", "outbound", scanned, outbound_qty)
+                elif outbound_qty > 0 and scanned > 0:
+                    return ("🔵 완료(혼합)", "mixed", scanned, outbound_qty)
+                else:
+                    return ("✅ 완료", "done", scanned, outbound_qty)
+            if scanned > 0 or outbound_qty > 0:
+                return ("🟡 진행중", "partial", scanned, outbound_qty)
+            return ("⬜ 미스캔", "", scanned, outbound_qty)
+
         def render_items_table():
             if state["destroyed"]: return
             # 기존 행 클리어
@@ -9856,24 +9929,10 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 bc = it.get("bc", "")
                 qty = it.get("qty", 0)
                 remaining = it.get("remaining", 0)
-                scanned = qty - remaining
-
-                # 상태 판별
-                if remaining < 0:
-                    status = "🚫 초과"
-                    tag = "over"
-                elif remaining <= 0:
-                    status = "✅ 완료"
-                    tag = "done"
-                elif scanned > 0:
-                    status = "🟡 진행중"
-                    tag = "partial"
-                else:
-                    status = "⬜ 미스캔"
-                    tag = ""
+                status, tag, scanned, outbound_qty = compute_item_status(it)
 
                 # 필터
-                if filter_mode == "done" and tag != "done": continue
+                if filter_mode == "done" and tag not in ("done", "outbound", "mixed"): continue
                 if filter_mode == "partial" and tag != "partial": continue
                 if filter_mode == "pending" and tag != "": continue
                 if filter_mode == "over" and tag != "over": continue
@@ -9884,11 +9943,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         continue
 
                 tree.insert("", "end", iid=key, tags=(tag,) if tag else (),
-                            values=(loc, bc, f"{qty:,}", f"{scanned:,}", f"{remaining:,}", status))
+                            values=(loc, bc, f"{qty:,}", f"{scanned:,}",
+                                    f"{outbound_qty:,}", f"{remaining:,}", status))
                 count_shown += 1
                 # 너무 많으면 끊기 (Treeview 성능)
                 if count_shown >= 5000:
-                    tree.insert("", "end", values=("...", f"({len(items)-5000}건 더 있음)", "", "", "", ""))
+                    tree.insert("", "end", values=("...", f"({len(items)-5000}건 더 있음)", "", "", "", "", ""))
                     break
 
         # ═══ 출고 차감 적용 ═══
@@ -9954,18 +10014,23 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                             no_bc += 1
                         continue
 
-                    # 트랜잭션 차감 (음수 허용)
-                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
+                    # 트랜잭션 차감 (음수 허용) + outbound_qty 누적
                     try:
-                        # 단순 set으로 가도 되지만 트랜잭션이 더 안전
+                        # remaining 차감
+                        item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
                         current = item_ref.get()
                         if current is None:
                             no_bc += 1
                             continue
                         new_val = current - qty
                         item_ref.set(new_val)
+                        # outbound_qty 누적 (출고로 빠진 누계)
+                        ob_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/outbound_qty")
+                        current_ob = ob_ref.get() or 0
+                        ob_ref.set(current_ob + qty)
                         # 로컬도 갱신 (리스너가 받기 전에 미리)
                         state["items"][key]["remaining"] = new_val
+                        state["items"][key]["outbound_qty"] = current_ob + qty
                         success += 1
                         applied_log.append({
                             "loc": loc, "bc": bc, "qty": qty,
@@ -10032,16 +10097,14 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                     key=lambda x: (x[1].get("loc", ""), x[1].get("bc", ""))):
                 qty = it.get("qty", 0)
                 remaining = it.get("remaining", 0)
-                scanned = qty - remaining
-
-                if remaining < 0:
-                    status_label = "초과"
-                elif remaining <= 0:
-                    status_label = "완료"
-                elif scanned > 0:
-                    status_label = "진행중"
-                else:
-                    status_label = "미스캔"
+                # 통합 상태 계산 함수 사용 (이모지 떼고 라벨만)
+                status_full, tag, scanned, outbound_qty = compute_item_status(it)
+                # 엑셀용 깔끔한 라벨 (이모지 제거)
+                status_label_map = {
+                    "over": "초과", "done": "완료", "outbound": "출고처리",
+                    "mixed": "완료(혼합)", "partial": "진행중", "": "미스캔",
+                }
+                status_label = status_label_map.get(tag, "미스캔")
 
                 if filter_mode == "pending" and status_label != "미스캔": continue
                 if filter_mode == "over" and status_label != "초과": continue
@@ -10053,6 +10116,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     "사이즈": it.get("size", ""),
                     "원래수량": qty,
                     "스캔됨": scanned,
+                    "출고됨": outbound_qty,
                     "남음": remaining,
                     "상태": status_label,
                 })
