@@ -10491,6 +10491,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                   activebackground="#DC2626",
                   font=("맑은 고딕", 9, "bold"),
                   relief="flat", padx=8, pady=6, cursor="hand2").pack(fill="x", pady=2)
+        tk.Button(manage_card, text="🎯 로케 일괄 완료 처리",
+                  command=lambda: bulk_complete_loc(),
+                  bg="#3B82F6", fg="white",
+                  activebackground="#2563EB",
+                  font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=8, pady=6, cursor="hand2").pack(fill="x", pady=2)
         tk.Button(manage_card, text="✅ 세션 완료 표시",
                   command=lambda: close_session(),
                   bg="#10B981", fg="white",
@@ -10667,6 +10673,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 success = 0
                 no_loc = 0
                 no_bc = 0
+                already_done = 0  # [추가] 이미 차감 완료된 항목 (스캔 등으로 이미 0 또는 음수)
                 applied_log = []
 
                 # 행마다 차감 (트랜잭션은 작업자랑 충돌 안전, 출고도 같은 방식)
@@ -10693,7 +10700,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                             no_bc += 1
                         continue
 
-                    # 트랜잭션 차감 (음수 허용) + outbound_qty 누적
+                    # 트랜잭션 차감 + outbound_qty 누적
                     try:
                         # remaining 차감
                         item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
@@ -10701,9 +10708,30 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         if current is None:
                             no_bc += 1
                             continue
-                        new_val = current - qty
+
+                        # [추가] 이미 0 이하면 차감 스킵 (음수 방지)
+                        # 작업자가 이미 스캔으로 차감했거나 다른 출고로 빠진 경우
+                        # 단, outbound_qty는 누적 (출고 카운트는 정확히 기록)
+                        if current <= 0:
+                            already_done += 1
+                            # outbound_qty만 누적 (실제 출고는 일어났으니까 기록)
+                            ob_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/outbound_qty")
+                            current_ob = ob_ref.get() or 0
+                            ob_ref.set(current_ob + qty)
+                            state["items"][key]["outbound_qty"] = current_ob + qty
+                            applied_log.append({
+                                "loc": loc, "bc": bc, "qty": qty,
+                                "skipped": True,  # 차감 안 함 표시
+                                "ts": int(datetime.now().timestamp() * 1000)
+                            })
+                            continue
+
+                        # 정상 차감: remaining 음수까지 안 가게 0에서 멈춤
+                        new_val = max(0, current - qty)
+                        actually_deducted = current - new_val  # 실제로 깎은 수량
                         item_ref.set(new_val)
-                        # outbound_qty 누적 (출고로 빠진 누계)
+
+                        # outbound_qty 누적 (요청된 전체 수량 기록)
                         ob_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/outbound_qty")
                         current_ob = ob_ref.get() or 0
                         ob_ref.set(current_ob + qty)
@@ -10737,14 +10765,38 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     except Exception as e:
                         print(f"출고 로그 저장 실패: {e}")
 
-                # 결과 메시지
-                messagebox.showinfo("✅ 차감 완료",
-                    f"출고 차감 완료\n\n"
-                    f"✅ 성공: {success:,}건\n"
-                    f"⚠️ 로케 불일치: {no_loc:,}건\n"
-                    f"⛔ 마스터에 없는 바코드: {no_bc:,}건\n\n"
-                    f"로케 불일치/없는 바코드는 차감되지 않았습니다.",
-                    parent=win)
+                # 결과 메시지 - 케이스별로 명확히 설명
+                msg_parts = ["✅ 출고 차감 완료\n"]
+
+                if success > 0:
+                    msg_parts.append(
+                        f"📦 정상 차감: {success:,}건\n"
+                        f"   → 작업자 미처리 박스를 출고로 차감"
+                    )
+                if already_done > 0:
+                    msg_parts.append(
+                        f"\n🔄 스캔 후 출고: {already_done:,}건\n"
+                        f"   → 작업자가 이미 스캔한 상품\n"
+                        f"   → 실물은 1번만 출고됨 (마스터 영향 없음)\n"
+                        f"   → 출고 카운트만 기록"
+                    )
+                if no_loc > 0:
+                    msg_parts.append(
+                        f"\n⚠️ 로케 불일치: {no_loc:,}건\n"
+                        f"   → 피킹 로케와 마스터 로케 다름\n"
+                        f"   → 마스터에 그 로케+바코드 조합 없음"
+                    )
+                if no_bc > 0:
+                    msg_parts.append(
+                        f"\n⛔ 없는 바코드: {no_bc:,}건\n"
+                        f"   → 마스터에 등록 안 된 상품"
+                    )
+
+                # 총 시도 / 실제 차감 비교
+                total_tried = success + already_done + no_loc + no_bc
+                msg_parts.append(f"\n\n📊 전체 시도: {total_tried:,}건")
+
+                messagebox.showinfo("✅ 차감 완료", "".join(msg_parts), parent=win)
 
                 # UI 갱신
                 update_progress()
@@ -10967,6 +11019,113 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 import traceback
                 print(traceback.format_exc())
                 messagebox.showerror("보정 실패", f"{e}", parent=win)
+
+        def bulk_complete_loc():
+            """특정 로케(또는 prefix)의 미스캔/진행중 항목 일괄 완료 처리"""
+            # 입력 받기
+            loc_pattern = simpledialog.askstring(
+                "로케 일괄 완료",
+                "완료 처리할 로케를 입력하세요\n\n"
+                "예시:\n"
+                "  AA-01           → AA-01로 시작하는 모든 로케 (AA-01-*)\n"
+                "  AA-01-03        → AA-01-03 로 시작하는 로케\n"
+                "  AA-01-03-02     → 그 로케만 정확히\n\n"
+                "이 로케들의 모든 항목을 remaining=0 (완료)로 만듭니다.",
+                parent=win
+            )
+            if not loc_pattern:
+                return
+            loc_pattern = loc_pattern.strip().upper()
+            if not loc_pattern:
+                return
+
+            # 매칭되는 항목 찾기
+            # - 정확 일치 또는 prefix 일치 (loc.startswith(pattern))
+            # - 단, 이미 완료된(remaining<=0) 항목은 제외
+            target_items = {}
+            for key, it in state["items"].items():
+                loc = it.get("loc", "")
+                if not loc.startswith(loc_pattern):
+                    continue
+                if it.get("remaining", 0) <= 0:
+                    continue  # 이미 완료/초과는 스킵
+                target_items[key] = it
+
+            if not target_items:
+                messagebox.showinfo(
+                    "대상 없음",
+                    f"'{loc_pattern}'에 해당하는 미완료 항목이 없습니다.\n"
+                    f"(이미 완료된 항목은 제외됨)",
+                    parent=win
+                )
+                return
+
+            # 통계
+            total_count = len(target_items)
+            total_remaining = sum(it.get("remaining", 0) for it in target_items.values())
+            unique_locs = sorted({it.get("loc", "") for it in target_items.values()})
+            locs_preview = ", ".join(unique_locs[:5])
+            if len(unique_locs) > 5:
+                locs_preview += f" ... 외 {len(unique_locs)-5}개"
+
+            if not messagebox.askyesno(
+                "일괄 완료 확인",
+                f"'{loc_pattern}' 로케 일괄 완료 처리\n\n"
+                f"대상 항목: {total_count:,}건\n"
+                f"미스캔 수량 합: {total_remaining:,}개\n"
+                f"로케 수: {len(unique_locs)}개\n"
+                f"  ({locs_preview})\n\n"
+                f"이 항목들을 모두 'remaining=0' (완료)로 변경합니다.\n"
+                f"※ 이 작업은 되돌릴 수 없습니다.\n\n"
+                f"진행할까요?",
+                parent=win
+            ):
+                return
+
+            # 실행
+            try:
+                ts_ms = int(datetime.now().timestamp() * 1000)
+                correction_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/correction_log")
+                applied_log = []
+
+                for idx, (key, it) in enumerate(target_items.items()):
+                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
+                    old_remaining = it.get("remaining", 0)
+                    item_ref.set(0)
+                    state["items"][key]["remaining"] = 0
+                    applied_log.append({
+                        "loc": it.get("loc", ""),
+                        "bc": it.get("bc", ""),
+                        "from": old_remaining,
+                        "to": 0,
+                        "ts": ts_ms,
+                        "reason": f"bulk_complete_{loc_pattern}",
+                    })
+
+                if applied_log and correction_log_ref:
+                    try:
+                        updates = {}
+                        for log_item in applied_log:
+                            new_id = correction_log_ref.push().key
+                            updates[new_id] = log_item
+                        correction_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"보정 로그 저장 실패: {e}")
+
+                messagebox.showinfo(
+                    "✅ 일괄 완료",
+                    f"'{loc_pattern}' 로케 {total_count:,}건을 완료 처리했습니다.\n"
+                    f"(remaining {total_remaining:,}개 → 0)\n\n"
+                    f"보정 기록은 correction_log에 저장됨.",
+                    parent=win
+                )
+
+                update_progress()
+                render_items_table()
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("일괄 완료 실패", f"{e}", parent=win)
 
         def close_session():
             if not messagebox.askyesno("세션 완료",
