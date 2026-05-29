@@ -425,6 +425,20 @@
         .audit-loc-item .qty-info .done-num { color: #16a34a; font-weight: bold; }
         .audit-loc-item.done .qty-info::after { content: ' ✓'; color: #16a34a; }
 
+        /* 차감 출처 뱃지 (스캔/출고/혼합) */
+        .src-badge {
+            display: inline-block;
+            font-size: 9px;
+            font-weight: bold;
+            padding: 1px 5px;
+            border-radius: 3px;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
+        .src-badge.scan { background: #dcfce7; color: #166534; }
+        .src-badge.out { background: #dbeafe; color: #1e40af; }
+        .src-badge.mixed { background: #e0e7ff; color: #4338ca; }
+
         /* 전체 진행 */
         .audit-total-counter {
             margin-top: 10px;
@@ -2589,11 +2603,26 @@
 
         // 2) 이 로케에 있는 바코드 → 차감 시도
         if (item.remaining <= 0) {
-            // 이미 다 찍힌 항목
-            showAuditRecent('over', bc, `이미 ${item.qty}개 다 찍었습니다 (초과)`);
-            feedback('error', '초과 스캔');
-            speak('초과');
-            // 초과 스캔은 DB에 안 반영, 로그에만 남길 수도 있음 (지금은 안 함)
+            // 출고로 빠진 건지, 작업자가 다 찍은 건지 구분
+            const outboundQty = item.outbound_qty || 0;
+            const scannedQty = (item.qty || 0) - item.remaining - outboundQty;
+
+            if (outboundQty > 0 && scannedQty === 0) {
+                // 출고로만 빠진 상품
+                showAuditRecent('warn', bc, `📤 출고된 상품입니다 - 출고 작업장으로`);
+                feedback('error', '출고 상품');
+                speak('출고된 상품');
+            } else if (outboundQty > 0 && scannedQty > 0) {
+                // 일부는 스캔, 일부는 출고 - 다 처리됨
+                showAuditRecent('warn', bc, `이미 처리됨 (스캔 ${scannedQty}, 출고 ${outboundQty})`);
+                feedback('error', '이미 처리됨');
+                speak('이미 처리됨');
+            } else {
+                // 진짜 초과 (다 스캔으로 찍힘)
+                showAuditRecent('over', bc, `이미 ${item.qty}개 다 찍었습니다 (초과)`);
+                feedback('error', '초과 스캔');
+                speak('초과');
+            }
             return;
         }
 
@@ -2730,14 +2759,30 @@
         countLabel.textContent = `${doneQty} / ${totalQty}`;
 
         const html = items.map(it => {
-            const done = (it.qty || 0) - (it.remaining || 0);
-            const isDone = it.remaining === 0;
+            const qty = it.qty || 0;
+            const remaining = it.remaining || 0;
+            const outbound = it.outbound_qty || 0;
+            const done = qty - remaining;
+            const scanned = done - outbound;  // 작업자 직접 스캔분
+            const isDone = remaining === 0;
             const isPartial = done > 0 && !isDone;
             const cls = isDone ? 'done' : (isPartial ? 'partial' : '');
+
+            // 차감 출처 뱃지
+            let badge = '';
+            if (outbound > 0 && scanned > 0) {
+                badge = `<span class="src-badge mixed">혼합 ${scanned}+${outbound}</span>`;
+            } else if (outbound > 0) {
+                badge = `<span class="src-badge out">출고 ${outbound}</span>`;
+            } else if (scanned > 0) {
+                badge = `<span class="src-badge scan">스캔 ${scanned}</span>`;
+            }
+
             return `<div class="audit-loc-item ${cls}">
                 <span class="bc">${escapeHtml(it.bc)}</span>
                 <span class="qty-info">
-                    <span class="done-num">${done}</span> / ${it.qty || 0}
+                    ${badge}
+                    <span class="done-num">${done}</span> / ${qty}
                 </span>
             </div>`;
         }).join('');
