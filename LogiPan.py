@@ -10485,6 +10485,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                      bd=1, relief="solid", padx=10, pady=8)
         manage_card.pack(fill="x")
 
+        tk.Button(manage_card, text="🔧 초과(-) 항목 0으로 보정",
+                  command=lambda: fix_over_items(),
+                  bg="#EF4444", fg="white",
+                  activebackground="#DC2626",
+                  font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=8, pady=6, cursor="hand2").pack(fill="x", pady=2)
         tk.Button(manage_card, text="✅ 세션 완료 표시",
                   command=lambda: close_session(),
                   bg="#10B981", fg="white",
@@ -10895,6 +10901,73 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 messagebox.showerror("저장 실패", str(e), parent=win)
 
         # ═══ 세션 관리 ═══
+        def fix_over_items():
+            """remaining < 0 인 모든 항목을 0으로 일괄 보정"""
+            # 1) 초과 항목 찾기
+            over_items = {key: it for key, it in state["items"].items()
+                          if it.get("remaining", 0) < 0}
+            if not over_items:
+                messagebox.showinfo("초과 항목 없음",
+                    "현재 remaining이 음수인 항목이 없습니다.",
+                    parent=win)
+                return
+
+            # 통계: 몇 건? 총 음수 합계는?
+            total_count = len(over_items)
+            total_over = sum(abs(it.get("remaining", 0)) for it in over_items.values())
+
+            if not messagebox.askyesno("초과 항목 보정",
+                f"초과(-) 상태 항목을 일괄 보정합니다.\n\n"
+                f"보정 대상: {total_count:,}건\n"
+                f"음수 누계: -{total_over:,}\n\n"
+                f"모두 remaining=0으로 변경됩니다.\n"
+                f"※ 작업자 스캔 + 출고 파일 중복 처리된 경우 사용\n\n"
+                f"진행할까요?", parent=win):
+                return
+
+            # 2) 보정 실행
+            try:
+                ts_ms = int(datetime.now().timestamp() * 1000)
+                correction_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/correction_log")
+                applied_log = []
+
+                for idx, (key, it) in enumerate(over_items.items()):
+                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
+                    old_remaining = it.get("remaining", 0)
+                    item_ref.set(0)
+                    state["items"][key]["remaining"] = 0  # 로컬 갱신
+                    applied_log.append({
+                        "loc": it.get("loc", ""),
+                        "bc": it.get("bc", ""),
+                        "from": old_remaining,
+                        "to": 0,
+                        "ts": ts_ms,
+                        "reason": "over_fix",
+                    })
+
+                # 보정 로그 저장 (batch)
+                if applied_log and correction_log_ref:
+                    try:
+                        updates = {}
+                        for log_item in applied_log:
+                            new_id = correction_log_ref.push().key
+                            updates[new_id] = log_item
+                        correction_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"보정 로그 저장 실패: {e}")
+
+                messagebox.showinfo("✅ 보정 완료",
+                    f"{total_count:,}건의 초과 항목을 0으로 보정했습니다.\n"
+                    f"보정 기록은 RTDB의 correction_log에 남았습니다.",
+                    parent=win)
+
+                update_progress()
+                render_items_table()
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("보정 실패", f"{e}", parent=win)
+
         def close_session():
             if not messagebox.askyesno("세션 완료",
                 f"이 세션을 '완료'로 표시할까요?\n\n작업자 앱에서 더 이상 선택할 수 없게 됩니다.\n(데이터는 그대로 남음)",
