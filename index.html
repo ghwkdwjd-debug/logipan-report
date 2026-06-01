@@ -475,6 +475,8 @@
         .audit-loc-item:last-child { border-bottom: none; }
         .audit-loc-item.done { background: #f0fdf4; }
         .audit-loc-item.partial { background: #fffbeb; }
+        .audit-loc-item.auto-added { background: #fff7ed; opacity: 0.75; }   /* 신규입고 자동완료 - 연 오렌지, 흐리게 */
+        .audit-loc-item.auto-moved { background: #f3f4f6; opacity: 0.75; }   /* 재고이동 자동완료 - 회색, 흐리게 */
         .audit-loc-item .bc {
             font-family: 'Consolas', monospace;
             font-weight: bold;
@@ -490,8 +492,10 @@
         }
         .audit-loc-item .qty-info .done-num { color: #16a34a; font-weight: bold; }
         .audit-loc-item.done .qty-info::after { content: ' ✓'; color: #16a34a; }
+        .audit-loc-item.auto-added .qty-info::after { content: ' (작업불필요)'; color: #9a3412; font-size: 10px; }
+        .audit-loc-item.auto-moved .qty-info::after { content: ' (작업불필요)'; color: #6b7280; font-size: 10px; }
 
-        /* 차감 출처 뱃지 (스캔/출고/혼합) */
+        /* 차감 출처 뱃지 (스캔/출고/혼합/신규입고/재고이동) */
         .src-badge {
             display: inline-block;
             font-size: 9px;
@@ -504,6 +508,8 @@
         .src-badge.scan { background: #dcfce7; color: #166534; }
         .src-badge.out { background: #dbeafe; color: #1e40af; }
         .src-badge.mixed { background: #e0e7ff; color: #4338ca; }
+        .src-badge.added { background: #ffedd5; color: #9a3412; }
+        .src-badge.moved { background: #e5e7eb; color: #4b5563; }
 
         /* 전체 진행 */
         .audit-total-counter {
@@ -2757,11 +2763,23 @@
 
         // 2) 이 로케에 있는 바코드 → 차감 시도
         if (item.remaining <= 0) {
-            // 출고로 빠진 건지, 작업자가 다 찍은 건지 구분
+            // 어떤 경로로 처리된 건지 구분
             const outboundQty = item.outbound_qty || 0;
-            const scannedQty = (item.qty || 0) - item.remaining - outboundQty;
+            const addedQty = item.qty_added || 0;
+            const movedInQty = item.qty_moved_in || 0;
+            const scannedQty = (item.qty || 0) - item.remaining - outboundQty - addedQty - movedInQty;
 
-            if (outboundQty > 0 && scannedQty === 0) {
+            if (addedQty > 0 && scannedQty <= 0) {
+                // 신규입고로 자동완료된 상품 (작업자가 찍을 필요 없음)
+                showAuditRecent('warn', bc, `🆕 신규입고 상품입니다 - 작업 불필요`);
+                feedback('error', '신규입고');
+                speak('신규입고 상품입니다');
+            } else if (movedInQty > 0 && scannedQty <= 0) {
+                // 재고이동으로 자동완료된 상품 (작업자가 찍을 필요 없음)
+                showAuditRecent('warn', bc, `🔄 재고이동 상품입니다 - 작업 불필요`);
+                feedback('error', '재고이동');
+                speak('재고이동 상품입니다');
+            } else if (outboundQty > 0 && scannedQty === 0) {
                 // 출고로만 빠진 상품
                 showAuditRecent('warn', bc, `📤 출고된 상품입니다 - 출고 작업장으로`);
                 feedback('error', '출고 상품');
@@ -2916,15 +2934,28 @@
             const qty = it.qty || 0;
             const remaining = it.remaining || 0;
             const outbound = it.outbound_qty || 0;
+            const addedQty = it.qty_added || 0;
+            const movedInQty = it.qty_moved_in || 0;
             const done = qty - remaining;
-            const scanned = done - outbound;  // 작업자 직접 스캔분
+            // 작업자 직접 스캔분 = 처리된 양 - 출고 - 신규입고 - 재고이동
+            const scanned = done - outbound - addedQty - movedInQty;
             const isDone = remaining === 0;
             const isPartial = done > 0 && !isDone;
-            const cls = isDone ? 'done' : (isPartial ? 'partial' : '');
 
-            // 차감 출처 뱃지
+            // 자동완료 케이스: 작업자 스캔분 없이 받은 분만으로 완료
+            const isAutoAdded = isDone && addedQty > 0 && scanned <= 0 && outbound === 0;
+            const isAutoMoved = isDone && movedInQty > 0 && scanned <= 0 && outbound === 0 && !isAutoAdded;
+            const cls = isAutoAdded ? 'auto-added' :
+                        isAutoMoved ? 'auto-moved' :
+                        (isDone ? 'done' : (isPartial ? 'partial' : ''));
+
+            // 차감 출처 뱃지 - 우선순위 자동완료 표시
             let badge = '';
-            if (outbound > 0 && scanned > 0) {
+            if (isAutoAdded) {
+                badge = `<span class="src-badge added">🆕 신규입고 ${addedQty}</span>`;
+            } else if (isAutoMoved) {
+                badge = `<span class="src-badge moved">🔄 재고이동 ${movedInQty}</span>`;
+            } else if (outbound > 0 && scanned > 0) {
                 badge = `<span class="src-badge mixed">혼합 ${scanned}+${outbound}</span>`;
             } else if (outbound > 0) {
                 badge = `<span class="src-badge out">출고 ${outbound}</span>`;
