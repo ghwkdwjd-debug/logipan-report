@@ -9655,13 +9655,14 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 return
             try:
                 col_idx = int(col_id.replace("#", "")) - 1
+                # 로케(0)/바코드(1) 컬럼만 복사. 나머지 컬럼은 선택 동작 그대로 유지.
+                if col_idx not in (0, 1):
+                    return
                 values = tree.item(row_id, "values")
                 if 0 <= col_idx < len(values):
                     cell_value = str(values[col_idx])
-                    # 숫자 포맷팅된 거 (1,234) → 그대로 복사 (필요 시 컴마 빼고 싶으면 여기서 처리)
                     win.clipboard_clear()
                     win.clipboard_append(cell_value)
-                    # 작은 토스트 띄우기 (간단히)
                     show_copy_toast(cell_value)
             except Exception as e:
                 print(f"셀 복사 실패: {e}")
