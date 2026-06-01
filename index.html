@@ -428,6 +428,7 @@
         .audit-loc-item:last-child { border-bottom: none; }
         .audit-loc-item.done { background: #f0fdf4; }
         .audit-loc-item.partial { background: #fffbeb; }
+        .audit-loc-item.moved { background: #f3f4f6; opacity: 0.75; }
         .audit-loc-item .bc {
             font-family: 'Consolas', monospace;
             font-weight: bold;
@@ -443,8 +444,9 @@
         }
         .audit-loc-item .qty-info .done-num { color: #16a34a; font-weight: bold; }
         .audit-loc-item.done .qty-info::after { content: ' ✓'; color: #16a34a; }
+        .audit-loc-item.moved .qty-info::after { content: ' (작업불필요)'; color: #6b7280; font-size: 10px; }
 
-        /* 차감 출처 뱃지 (스캔/출고/혼합) */
+        /* 차감 출처 뱃지 (스캔/출고/혼합/이동) */
         .src-badge {
             display: inline-block;
             font-size: 9px;
@@ -457,6 +459,7 @@
         .src-badge.scan { background: #dcfce7; color: #166534; }
         .src-badge.out { background: #dbeafe; color: #1e40af; }
         .src-badge.mixed { background: #e0e7ff; color: #4338ca; }
+        .src-badge.moved { background: #e5e7eb; color: #4b5563; }
 
         /* 전체 진행 */
         .audit-total-counter {
@@ -2674,8 +2677,9 @@
 
         // 2) 이 로케에 있는 바코드 → 차감 시도
         if (item.remaining <= 0) {
-            // 출고로 빠진 건지, 작업자가 다 찍은 건지 구분
+            // 출고로 빠진 건지, 작업자가 다 찍은 건지, 재고이동으로 자동완료된 건지 구분
             const outboundQty = item.outbound_qty || 0;
+            const movedInQty = item.qty_moved_in || 0;
             const scannedQty = (item.qty || 0) - item.remaining - outboundQty;
 
             if (outboundQty > 0 && scannedQty === 0) {
@@ -2683,6 +2687,11 @@
                 showAuditRecent('warn', bc, `📤 출고된 상품입니다 - 출고 작업장으로`);
                 feedback('error', '출고 상품');
                 speak('출고된 상품');
+            } else if (movedInQty > 0 && scannedQty === movedInQty && outboundQty === 0) {
+                // 재고이동으로 자동 완료된 상품만 있음 (작업자가 찍을 필요 없음)
+                showAuditRecent('warn', bc, `🔄 재고이동 완료된 상품입니다 - 작업 불필요`);
+                feedback('error', '재고이동 완료');
+                speak('재고이동 완료');
             } else if (outboundQty > 0 && scannedQty > 0) {
                 // 일부는 스캔, 일부는 출고 - 다 처리됨
                 showAuditRecent('warn', bc, `이미 처리됨 (스캔 ${scannedQty}, 출고 ${outboundQty})`);
@@ -2833,18 +2842,28 @@
             const qty = it.qty || 0;
             const remaining = it.remaining || 0;
             const outbound = it.outbound_qty || 0;
+            const movedIn = it.qty_moved_in || 0;
+            const movedOut = it.qty_moved_out || 0;
             const done = qty - remaining;
             const scanned = done - outbound;  // 작업자 직접 스캔분
             const isDone = remaining === 0;
             const isPartial = done > 0 && !isDone;
-            const cls = isDone ? 'done' : (isPartial ? 'partial' : '');
+            // 재고이동 완료된 항목인지 (받은 상품만 있고 미스캔 없음, 또는 전부 빠짐)
+            const isMoved = (movedIn > 0 && remaining === 0 && outbound === 0)
+                            || (movedOut > 0 && qty === 0);
+            const cls = isMoved ? 'moved' : (isDone ? 'done' : (isPartial ? 'partial' : ''));
 
-            // 차감 출처 뱃지
+            // 차감 출처 뱃지 - 재고이동 우선 표시
             let badge = '';
-            if (outbound > 0 && scanned > 0) {
+            if (isMoved) {
+                badge = `<span class="src-badge moved">🔄 이동완료</span>`;
+            } else if (outbound > 0 && scanned > 0) {
                 badge = `<span class="src-badge mixed">혼합 ${scanned}+${outbound}</span>`;
             } else if (outbound > 0) {
                 badge = `<span class="src-badge out">출고 ${outbound}</span>`;
+            } else if (movedIn > 0 && scanned > 0) {
+                // 이동된 상품 + 작업자 스캔 혼합
+                badge = `<span class="src-badge mixed">스캔${scanned}+이동${movedIn}</span>`;
             } else if (scanned > 0) {
                 badge = `<span class="src-badge scan">스캔 ${scanned}</span>`;
             }
