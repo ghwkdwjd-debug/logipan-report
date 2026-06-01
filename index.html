@@ -511,6 +511,84 @@
         .src-badge.added { background: #ffedd5; color: #9a3412; }
         .src-badge.moved { background: #e5e7eb; color: #4b5563; }
 
+        /* 같은 라인 미스캔 로케 안내 박스 */
+        .audit-line-status {
+            margin-top: 10px;
+            background: white;
+            border-radius: 10px;
+            border: 1px solid #e0e0e0;
+            overflow: hidden;
+        }
+        .audit-line-status.all-done .audit-line-status-header {
+            background: #ecfdf5;
+            color: #065f46;
+        }
+        .audit-line-status-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            font-size: 13px;
+            font-weight: bold;
+            color: #1f2937;
+            background: #fffbeb;
+            cursor: pointer;
+            user-select: none;
+            border-bottom: 1px solid transparent;
+        }
+        .audit-line-status-header:hover { background: #fef3c7; }
+        .audit-line-status.expanded .audit-line-status-header { border-bottom-color: #e0e0e0; }
+        .audit-line-status-header .title { flex: 0 0 auto; }
+        .audit-line-status-header #audit-line-prefix {
+            font-family: 'Consolas', monospace;
+            color: #1d4ed8;
+        }
+        .audit-line-status-header .summary {
+            flex: 1;
+            text-align: right;
+            font-weight: normal;
+            font-size: 12px;
+            color: #6b7280;
+            margin-right: 8px;
+        }
+        .audit-line-status-header .arrow {
+            flex: 0 0 auto;
+            font-size: 14px;
+            color: #6b7280;
+            transition: transform 0.15s;
+        }
+        .audit-line-status.expanded .arrow { transform: rotate(180deg); }
+        .audit-line-status-body {
+            max-height: 240px;
+            overflow-y: auto;
+        }
+        .audit-line-loc {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 7px 12px;
+            border-bottom: 1px solid #f3f4f6;
+            font-size: 12px;
+        }
+        .audit-line-loc:last-child { border-bottom: none; }
+        .audit-line-loc.current { background: #dbeafe; }
+        .audit-line-loc .loc {
+            font-family: 'Consolas', monospace;
+            font-weight: bold;
+            color: #1f2937;
+        }
+        .audit-line-loc.current .loc::after {
+            content: ' (현재)';
+            font-size: 10px;
+            color: #1d4ed8;
+            font-weight: normal;
+        }
+        .audit-line-loc .miss-count {
+            font-size: 11px;
+            color: #b45309;
+            font-weight: bold;
+        }
+
         /* 전체 진행 */
         .audit-total-counter {
             margin-top: 10px;
@@ -920,6 +998,18 @@
                         <span id="audit-loc-progress-count">0 / 0</span>
                     </div>
                     <div class="items" id="audit-loc-items">
+                        <!-- 동적 생성 -->
+                    </div>
+                </div>
+
+                <!-- 같은 라인 내 미스캔 로케 안내 (현재 로케 prefix 기준) -->
+                <div class="audit-line-status" id="audit-line-status" style="display:none;">
+                    <div class="audit-line-status-header" id="audit-line-status-header" onclick="toggleAuditLineStatus()">
+                        <span class="title">📍 <span id="audit-line-prefix">-</span> 라인</span>
+                        <span class="summary" id="audit-line-status-summary">-</span>
+                        <span class="arrow" id="audit-line-arrow">▾</span>
+                    </div>
+                    <div class="audit-line-status-body" id="audit-line-status-body" style="display:none;">
                         <!-- 동적 생성 -->
                     </div>
                 </div>
@@ -2671,6 +2761,7 @@
             .map(k => ({ key: k, ...auditState.master[k] }));
 
         renderAuditLocItems(items);
+        updateAuditLineStatus(loc);   // 같은 라인 미스캔 안내 갱신
         updateAuditTotalProgress();  // 전체 진행률도 같이 갱신
 
         if (items.length === 0) {
@@ -2819,6 +2910,7 @@
                 // 로컬 마스터 갱신
                 item.remaining = result.snapshot.val() || 0;
                 renderAuditLocItems(getCurrentLocItems());
+                updateAuditLineStatus(loc);
                 return;
             }
 
@@ -2828,6 +2920,7 @@
             // 5) UI 갱신
             renderAuditLocItems(getCurrentLocItems());
             updateAuditTotalProgress();
+            updateAuditLineStatus(loc);   // 라인 미스캔 카운트도 갱신
 
             const doneNow = item.qty - item.remaining;
             const isItemDone = item.remaining === 0;
@@ -2912,6 +3005,77 @@
         el.querySelector('.top').textContent = topMap[type] || '최근 스캔';
         el.querySelector('.bc').textContent = code;
         el.querySelector('.sub').textContent = sub || '';
+    }
+
+    // 로케 prefix (앞 2그룹) 추출. 'AA-13-01-01' → 'AA-13'
+    function getLinePrefix(loc) {
+        if (!loc || typeof loc !== 'string') return null;
+        const parts = loc.split('-');
+        if (parts.length < 2) return null;
+        return parts.slice(0, 2).join('-');
+    }
+
+    // 같은 라인의 미스캔 로케 안내 갱신
+    function updateAuditLineStatus(currentLoc) {
+        const box = document.getElementById('audit-line-status');
+        const prefix = getLinePrefix(currentLoc);
+        if (!prefix || !auditState.master) {
+            box.style.display = 'none';
+            return;
+        }
+
+        // 같은 prefix의 항목들 중 미스캔(remaining > 0) → 로케별 미스캔 개수 집계
+        const locMissCount = {};
+        for (const v of Object.values(auditState.master)) {
+            if (!v.loc) continue;
+            const lp = getLinePrefix(v.loc);
+            if (lp !== prefix) continue;
+            const rem = v.remaining || 0;
+            if (rem > 0) {
+                locMissCount[v.loc] = (locMissCount[v.loc] || 0) + rem;
+            }
+        }
+
+        const missLocs = Object.entries(locMissCount).sort((a, b) => a[0].localeCompare(b[0]));
+        const totalMiss = missLocs.reduce((s, [_, n]) => s + n, 0);
+
+        document.getElementById('audit-line-prefix').textContent = prefix;
+        const summaryEl = document.getElementById('audit-line-status-summary');
+        const bodyEl = document.getElementById('audit-line-status-body');
+
+        if (missLocs.length === 0) {
+            // 라인 전부 완료
+            box.classList.add('all-done');
+            summaryEl.textContent = '✓ 모두 완료';
+            bodyEl.innerHTML = '<div style="padding:12px;text-align:center;color:#065f46;font-size:12px;">이 라인의 모든 로케 작업이 완료되었습니다 👍</div>';
+        } else {
+            box.classList.remove('all-done');
+            summaryEl.textContent = `남은 로케 ${missLocs.length}곳 · 미스캔 ${totalMiss}개`;
+            bodyEl.innerHTML = missLocs.map(([loc, cnt]) => {
+                const isCurrent = loc === currentLoc;
+                return `<div class="audit-line-loc ${isCurrent ? 'current' : ''}">
+                    <span class="loc">${escapeHtml(loc)}</span>
+                    <span class="miss-count">미스캔 ${cnt}개</span>
+                </div>`;
+            }).join('');
+        }
+
+        box.style.display = 'block';
+    }
+
+    // 라인 미스캔 박스 펼치기/접기
+    function toggleAuditLineStatus() {
+        const box = document.getElementById('audit-line-status');
+        const body = document.getElementById('audit-line-status-body');
+        if (!box || !body) return;
+        const isOpen = box.classList.contains('expanded');
+        if (isOpen) {
+            box.classList.remove('expanded');
+            body.style.display = 'none';
+        } else {
+            box.classList.add('expanded');
+            body.style.display = 'block';
+        }
     }
 
     function renderAuditLocItems(items) {
@@ -3133,6 +3297,14 @@
             // UI 갱신
             if (auditState.currentLoc && newVal.loc === auditState.currentLoc) {
                 renderAuditLocItems(getCurrentLocItems());
+            }
+            // 변경된 항목이 현재 라인에 속하면 라인 상태도 갱신
+            if (auditState.currentLoc && newVal.loc) {
+                const currentPrefix = getLinePrefix(auditState.currentLoc);
+                const changedPrefix = getLinePrefix(newVal.loc);
+                if (currentPrefix && currentPrefix === changedPrefix) {
+                    updateAuditLineStatus(auditState.currentLoc);
+                }
             }
             updateAuditTotalProgress();
         });
