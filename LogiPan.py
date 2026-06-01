@@ -9577,6 +9577,13 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                   cursor="hand2", activebackground="#059669",
                                   command=lambda: on_tree_complete_selected())
         complete_btn.pack(side="right", padx=(4, 0))
+        delete_btn = tk.Button(filter_row, text="🗑️ 선택 항목 삭제",
+                                bg="#DC2626", fg="white",
+                                font=("맑은 고딕", 9, "bold"),
+                                bd=0, relief="flat", padx=10, pady=3,
+                                cursor="hand2", activebackground="#B91C1C",
+                                command=lambda: on_tree_delete_selected())
+        delete_btn.pack(side="right", padx=(4, 0))
         tk.Label(filter_row, text="(Ctrl/Shift로 다중 선택)", bg="white",
                  font=("맑은 고딕", 8), fg="#888").pack(side="right", padx=(0, 4))
 
@@ -9762,11 +9769,109 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 print(traceback.format_exc())
                 messagebox.showerror("완료 처리 실패", f"{e}", parent=win)
 
+        def on_tree_delete_selected():
+            """선택된 항목들을 마스터에서 삭제 (영구)"""
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("선택 없음",
+                    "삭제할 항목을 먼저 선택하세요.\n(Ctrl+클릭 또는 Shift+클릭으로 다중 선택)",
+                    parent=win)
+                return
+
+            # state["items"]에 실제 있는 것만
+            targets = []
+            for iid in sel:
+                it = state["items"].get(iid)
+                if it:
+                    targets.append((iid, it))
+            if not targets:
+                messagebox.showinfo("대상 없음", "선택한 항목이 마스터에 없습니다.", parent=win)
+                return
+
+            # 미리보기
+            preview = "\n".join([
+                f"  • {it.get('loc','')} / {it.get('bc','')} "
+                f"(원래수량 {it.get('qty',0)}, 남음 {it.get('remaining',0)})"
+                for iid, it in targets[:5]
+            ])
+            if len(targets) > 5:
+                preview += f"\n  ... 외 {len(targets)-5}개"
+
+            total_qty_del = sum(it.get("qty", 0) for _, it in targets)
+            scanned_del = sum(
+                it.get("qty", 0) - it.get("remaining", 0) - it.get("outbound_qty", 0)
+                for _, it in targets
+            )
+
+            # 위험 작업이므로 강한 확인
+            warning_msg = (
+                f"⚠️ 선택한 {len(targets):,}건을 마스터에서 영구 삭제합니다.\n"
+                f"(원래수량 합 {total_qty_del:,}개)\n\n"
+                f"{preview}\n\n"
+            )
+            if scanned_del > 0:
+                warning_msg += (
+                    f"❗ 주의: 이미 스캔된 수량 {scanned_del:,}개가 포함되어 있습니다.\n"
+                    f"   삭제하면 작업자 스캔 기록의 합산이 줄어듭니다.\n\n"
+                )
+            warning_msg += "되돌릴 수 없습니다. 진행할까요?"
+
+            if not messagebox.askyesno("⚠️ 영구 삭제", warning_msg, parent=win):
+                return
+
+            # 실행
+            try:
+                ts_ms = int(datetime.now().timestamp() * 1000)
+                correction_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/correction_log")
+                applied_log = []
+
+                for key, it in targets:
+                    # RTDB에서 삭제
+                    self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}").delete()
+                    # 로컬 state에서도 제거
+                    state["items"].pop(key, None)
+                    # 트리에서도 제거
+                    if tree.exists(key):
+                        tree.delete(key)
+                    # 삭제 로그
+                    applied_log.append({
+                        "loc": it.get("loc", ""),
+                        "bc": it.get("bc", ""),
+                        "from": it.get("qty", 0),
+                        "to": 0,
+                        "ts": ts_ms,
+                        "reason": "manual_delete",
+                    })
+
+                if applied_log and correction_log_ref:
+                    try:
+                        updates = {}
+                        for log_item in applied_log:
+                            new_id = correction_log_ref.push().key
+                            updates[new_id] = log_item
+                        correction_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"삭제 로그 저장 실패: {e}")
+
+                show_copy_toast(f"🗑️ {len(targets)}건 삭제됨")
+                update_progress()
+                render_items_table()
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("삭제 실패", f"{e}", parent=win)
+
         # 우클릭 메뉴
         ctx_menu = tk.Menu(win, tearoff=0, font=("맑은 고딕", 9))
         ctx_menu.add_command(
             label="✅ 선택 항목 완료 처리",
             command=on_tree_complete_selected
+        )
+        ctx_menu.add_separator()
+        ctx_menu.add_command(
+            label="🗑️ 선택 항목 삭제",
+            command=on_tree_delete_selected,
+            foreground="#DC2626"
         )
 
         def show_context_menu(event):
@@ -10698,6 +10803,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             total_item_count = len(items)
             total_qty = sum(it.get("qty", 0) for it in items.values())
             remaining_qty = sum(it.get("remaining", 0) for it in items.values())
+            outbound_qty = sum(it.get("outbound_qty", 0) for it in items.values())
+            available_qty = total_qty - outbound_qty  # 출고 제외 가용재고
             done_qty = total_qty - remaining_qty
             pct = (done_qty / total_qty * 100) if total_qty else 0
 
@@ -10713,7 +10820,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 fg="#10B981" if pct >= 100 else "#1877F2"
             )
             progress_sub.config(
-                text=f"잔여 {remaining_qty:,}개  ·  {meta.get('creator', '-')} 생성"
+                text=f"잔여 {remaining_qty:,}개  ·  출고제외 가용재고 {available_qty:,}개  ·  {meta.get('creator', '-')} 생성"
             )
             stat_total.config(text=f"{total_item_count:,}")
             stat_done.config(text=f"{done_count:,}")
