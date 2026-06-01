@@ -9593,6 +9593,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             (" 초과 ",  "#FEE2E2"),
             (" 🆕신규입고 ", "#FED7AA"),
             (" 🔄재고이동완료 ", "#E5E7EB"),
+            (" 🔧임의완료 ", "#D1D5DB"),
         ]:
             tk.Label(legend_row, text=txt, bg=color, fg="#333",
                      font=("맑은 고딕", 8), bd=1, relief="solid").pack(side="left", padx=1)
@@ -9632,7 +9633,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tree.tag_configure("newly_added", background="#FED7AA")  # 오렌지 (신규 입고분 있음)
         tree.tag_configure("moved_in", background="#CFFAFE")     # 하늘 (재고이동으로 들어옴)
         tree.tag_configure("moved_out", background="#F5D0FE")    # 핑크 (재고이동으로 빠짐)
-        tree.tag_configure("moved_done", background="#E5E7EB")   # 회색 (전부 이동되어 빈 항목)
+        tree.tag_configure("moved_done", background="#E5E7EB")   # 회색 (재고이동 완료)
+        tree.tag_configure("force_done", background="#D1D5DB")   # 진한 회색 (임의 완료)
 
         # ─── [추가] 셀 클릭 시 그 값을 클립보드에 복사 ───
         def on_tree_cell_click(event):
@@ -9722,10 +9724,17 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 applied_log = []
 
                 for key, it in targets:
-                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
                     old_remaining = it.get("remaining", 0)
-                    item_ref.set(0)
+                    # remaining=0 + force_completed 플래그 같이 저장 (임의완료 추적)
+                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}")
+                    item_ref.update({
+                        "remaining": 0,
+                        "force_completed": True,
+                        "force_completed_at": ts_ms,
+                    })
                     state["items"][key]["remaining"] = 0
+                    state["items"][key]["force_completed"] = True
+                    state["items"][key]["force_completed_at"] = ts_ms
                     applied_log.append({
                         "loc": it.get("loc", ""),
                         "bc": it.get("bc", ""),
@@ -10641,6 +10650,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                      bd=1, relief="solid", padx=10, pady=8)
         manage_card.pack(fill="x")
 
+        tk.Button(manage_card, text="🔧 이전 이동 데이터 복원 (1회성)",
+                  command=lambda: migrate_old_moves(),
+                  bg="#8B5CF6", fg="white",
+                  activebackground="#7C3AED",
+                  font=("맑은 고딕", 9, "bold"),
+                  relief="flat", padx=8, pady=6, cursor="hand2").pack(fill="x", pady=2)
         tk.Button(manage_card, text="🔧 초과(-) 항목 0으로 보정",
                   command=lambda: fix_over_items(),
                   bg="#EF4444", fg="white",
@@ -10792,9 +10807,14 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         status = f"🔄+{qty_moved_in} {status}"
                         if tag == "":
                             tag = "moved_in"
+                elif it.get("force_completed") and remaining <= 0:
+                    # [추가] 임의 완료 처리된 항목 (재고이동 없는 경우)
+                    # → "🔧 임의 완료"로 명확히 표시 (작업자 실제 검수와 구분)
+                    status = "🔧 임의 완료"
+                    tag = "force_done"
 
                 # 필터
-                if filter_mode == "done" and tag not in ("done", "outbound", "mixed", "moved_done"): continue
+                if filter_mode == "done" and tag not in ("done", "outbound", "mixed", "moved_done", "force_done"): continue
                 if filter_mode == "partial" and tag != "partial": continue
                 if filter_mode == "pending" and tag not in ("", "newly_added", "moved_in", "moved_out"): continue
                 if filter_mode == "over" and tag != "over": continue
@@ -11132,6 +11152,142 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 messagebox.showerror("저장 실패", str(e), parent=win)
 
         # ═══ 세션 관리 ═══
+        def migrate_old_moves():
+            """[일회성] 구버전 LogiPan으로 적용된 재고이동 데이터를 새 정책으로 복원.
+            move_log를 훑어서 각 항목에 qty_moved_in/out 누적 + 받은 분 자동완료 처리."""
+            # 0) 이미 마이그레이션 됐는지 확인
+            meta_ref = self._rtdb_ref(f"stocktake_sessions/{session_id}/meta")
+            meta_snap = meta_ref.get()
+            already_done = bool(meta_snap and meta_snap.get("migrated_v1"))
+            if already_done:
+                if not messagebox.askyesno("이미 완료됨",
+                    "이 세션은 이미 마이그레이션이 완료되었습니다.\n"
+                    "다시 실행하면 받은 항목의 remaining이 중복 차감될 수 있습니다.\n\n"
+                    "그래도 진행하시겠습니까? (권장하지 않음)",
+                    parent=win):
+                    return
+
+            # 1) move_log 읽기
+            move_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/move_log")
+            move_log = move_log_ref.get() or {}
+            if not move_log:
+                messagebox.showinfo("이동 기록 없음",
+                    "이전 재고이동 기록이 없습니다.",
+                    parent=win)
+                return
+
+            log_count = len(move_log)
+
+            # 2) 확인 다이얼로그
+            if not messagebox.askyesno("이전 이동 데이터 복원",
+                f"이전 재고이동 기록 {log_count:,}건을 새 정책으로 복원합니다.\n\n"
+                f"• 받은 항목 중 미스캔 상태인 분만 자동완료\n"
+                f"• 작업자가 이미 다 찍은 항목은 ✅ 완료 그대로 유지\n"
+                f"• 부분 처리 항목은 받은 분만 자동완료, 미스캔은 그대로\n\n"
+                f"⚠️ 이 작업은 일회성 도구입니다.\n"
+                f"새 재고이동 적용 *전*에 한 번만 실행하세요.\n\n"
+                f"진행할까요?", parent=win):
+                return
+
+            # 3) 키 치환 함수 (LogiPan 업로드/이동과 동일 규칙)
+            def make_key(loc, bc):
+                return f"{loc}__{bc}".replace("/", "_").replace(".", "_") \
+                                     .replace("#", "_").replace("$", "_") \
+                                     .replace("[", "_").replace("]", "_")
+
+            # 4) 로그 훑어서 누계 계산
+            from_accum = {}  # from_key -> 총 반출 누계
+            to_accum = {}    # to_key -> 총 반입 누계
+            skipped = 0
+            for log_id, log in move_log.items():
+                try:
+                    from_loc = str(log.get("from", "")).strip()
+                    to_loc = str(log.get("to", "")).strip()
+                    bc = str(log.get("bc", "")).strip()
+                    qty = int(log.get("qty", 0))
+                except (ValueError, TypeError):
+                    skipped += 1
+                    continue
+                if not from_loc or not to_loc or not bc or qty <= 0:
+                    skipped += 1
+                    continue
+                fk = make_key(from_loc, bc)
+                tk_key = make_key(to_loc, bc)
+                from_accum[fk] = from_accum.get(fk, 0) + qty
+                to_accum[tk_key] = to_accum.get(tk_key, 0) + qty
+
+            # 5) 항목 업데이트
+            try:
+                ts_ms = int(datetime.now().timestamp() * 1000)
+                updated_from = 0
+                updated_to = 0
+                auto_completed = 0  # 자동완료로 전환된 수량
+                already_complete = 0  # 작업자가 이미 다 찍어서 건너뛴 항목
+                missing = 0  # 마스터에 없는 키 (이미 다 빠진 항목 등)
+
+                # 반출 쪽: qty_moved_out 덮어쓰기 (멱등)
+                for fk, total_out in from_accum.items():
+                    item = state["items"].get(fk)
+                    if not item:
+                        missing += 1
+                        continue
+                    updates = {"qty_moved_out": total_out, "moved_at": ts_ms}
+                    self._rtdb_ref(f"stocktake_data/{session_id}/items/{fk}").update(updates)
+                    for k, v in updates.items():
+                        state["items"][fk][k] = v
+                    updated_from += 1
+
+                # 반입 쪽: 작업자가 이미 다 찍은 항목은 건너뛰고,
+                # 미스캔/진행중 항목만 qty_moved_in 저장 + remaining 자동완료 처리
+                for tk_key, total_in in to_accum.items():
+                    item = state["items"].get(tk_key)
+                    if not item:
+                        missing += 1
+                        continue
+
+                    current_remaining = item.get("remaining", 0)
+
+                    # 작업자가 이미 다 찍은 항목 (remaining=0) → 손대지 않음
+                    # 작업자 검수 결과(✅ 완료)를 그대로 유지
+                    if current_remaining <= 0:
+                        already_complete += 1
+                        continue
+
+                    # 미스캔/진행중 항목: 받은 분만큼 자동완료 처리
+                    updates = {"qty_moved_in": total_in, "moved_at": ts_ms}
+                    if not already_done:
+                        new_remaining = max(0, current_remaining - total_in)
+                        completed = current_remaining - new_remaining
+                        updates["remaining"] = new_remaining
+                        auto_completed += completed
+                    self._rtdb_ref(f"stocktake_data/{session_id}/items/{tk_key}").update(updates)
+                    for k, v in updates.items():
+                        state["items"][tk_key][k] = v
+                    updated_to += 1
+
+                # 6) 플래그 저장
+                meta_ref.update({"migrated_v1": True, "migrated_at": ts_ms})
+
+                # 7) 결과 알림
+                messagebox.showinfo("✅ 마이그레이션 완료",
+                    f"이전 재고이동 데이터 복원 완료\n\n"
+                    f"📋 처리한 이동 기록: {log_count:,}건"
+                    + (f" (스킵 {skipped:,}건)" if skipped else "") + "\n"
+                    f"📤 반출 항목 업데이트: {updated_from:,}건\n"
+                    f"📥 반입 항목 자동완료: {updated_to:,}건\n"
+                    f"   ↳ 자동 완료 전환: {auto_completed:,}개\n"
+                    f"✅ 작업자 검수 완료 유지: {already_complete:,}건\n"
+                    + (f"⚠️ 마스터에 없는 키: {missing:,}건\n" if missing else "")
+                    + f"\n이제 새 재고이동 적용해도 정상 동작합니다.",
+                    parent=win)
+
+                update_progress()
+                render_items_table()
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("마이그레이션 실패", f"{e}", parent=win)
+
         def fix_over_items():
             """remaining < 0 인 모든 항목을 0으로 일괄 보정"""
             # 1) 초과 항목 찾기
@@ -11268,10 +11424,16 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 applied_log = []
 
                 for idx, (key, it) in enumerate(target_items.items()):
-                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}/remaining")
                     old_remaining = it.get("remaining", 0)
-                    item_ref.set(0)
+                    item_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}")
+                    item_ref.update({
+                        "remaining": 0,
+                        "force_completed": True,
+                        "force_completed_at": ts_ms,
+                    })
                     state["items"][key]["remaining"] = 0
+                    state["items"][key]["force_completed"] = True
+                    state["items"][key]["force_completed_at"] = ts_ms
                     applied_log.append({
                         "loc": it.get("loc", ""),
                         "bc": it.get("bc", ""),
