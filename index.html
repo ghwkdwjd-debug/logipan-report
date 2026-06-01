@@ -1003,10 +1003,10 @@
                 </div>
 
                 <!-- 같은 라인 내 미스캔 로케 안내 (현재 로케 prefix 기준) -->
-                <div class="audit-line-status" id="audit-line-status" style="display:none;">
+                <div class="audit-line-status" id="audit-line-status">
                     <div class="audit-line-status-header" id="audit-line-status-header" onclick="toggleAuditLineStatus()">
-                        <span class="title">📍 <span id="audit-line-prefix">-</span> 라인</span>
-                        <span class="summary" id="audit-line-status-summary">-</span>
+                        <span class="title">📍 <span id="audit-line-prefix">라인 정보</span></span>
+                        <span class="summary" id="audit-line-status-summary">로케를 스캔하세요</span>
                         <span class="arrow" id="audit-line-arrow">▾</span>
                     </div>
                     <div class="audit-line-status-body" id="audit-line-status-body" style="display:none;">
@@ -3018,9 +3018,19 @@
     // 같은 라인의 미스캔 로케 안내 갱신
     function updateAuditLineStatus(currentLoc) {
         const box = document.getElementById('audit-line-status');
+        if (!box) return;
+        // 박스는 항상 표시 - 라인 정보가 없으면 안내만 표시
+        box.style.display = 'block';
+
         const prefix = getLinePrefix(currentLoc);
+        const prefixEl = document.getElementById('audit-line-prefix');
+        const summaryEl = document.getElementById('audit-line-status-summary');
+        const bodyEl = document.getElementById('audit-line-status-body');
+
         if (!prefix || !auditState.master) {
-            box.style.display = 'none';
+            prefixEl.textContent = '라인 정보';
+            summaryEl.textContent = '로케를 스캔하세요';
+            bodyEl.innerHTML = '';
             return;
         }
 
@@ -3039,14 +3049,11 @@
         const missLocs = Object.entries(locMissCount).sort((a, b) => a[0].localeCompare(b[0]));
         const totalMiss = missLocs.reduce((s, [_, n]) => s + n, 0);
 
-        document.getElementById('audit-line-prefix').textContent = prefix;
-        const summaryEl = document.getElementById('audit-line-status-summary');
-        const bodyEl = document.getElementById('audit-line-status-body');
+        prefixEl.textContent = prefix;
 
         if (missLocs.length === 0) {
-            // 라인 전부 완료
             box.classList.add('all-done');
-            summaryEl.textContent = '✓ 모두 완료';
+            summaryEl.textContent = '✓ 라인 모두 완료';
             bodyEl.innerHTML = '<div style="padding:12px;text-align:center;color:#065f46;font-size:12px;">이 라인의 모든 로케 작업이 완료되었습니다 👍</div>';
         } else {
             box.classList.remove('all-done');
@@ -3059,8 +3066,6 @@
                 </div>`;
             }).join('');
         }
-
-        box.style.display = 'block';
     }
 
     // 라인 미스캔 박스 펼치기/접기
