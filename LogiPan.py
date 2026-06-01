@@ -9567,6 +9567,19 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tk.Label(filter_row, text="(로케/바코드)", bg="white",
                  font=("맑은 고딕", 8), fg="#888").pack(side="left", padx=(2, 0))
 
+        # [추가] 선택 항목 일괄 완료 버튼 (우클릭 메뉴 대체)
+        # 우클릭이 환경 따라 안 먹는 경우가 있어서 항상 보이는 버튼으로 동일 기능 제공.
+        # on_tree_complete_selected는 아래에서 정의되므로 lambda로 지연 호출.
+        complete_btn = tk.Button(filter_row, text="✅ 선택 항목 완료",
+                                  bg="#10B981", fg="white",
+                                  font=("맑은 고딕", 9, "bold"),
+                                  bd=0, relief="flat", padx=10, pady=3,
+                                  cursor="hand2", activebackground="#059669",
+                                  command=lambda: on_tree_complete_selected())
+        complete_btn.pack(side="right", padx=(4, 0))
+        tk.Label(filter_row, text="(Ctrl/Shift로 다중 선택)", bg="white",
+                 font=("맑은 고딕", 8), fg="#888").pack(side="right", padx=(0, 4))
+
         # Treeview
         cols = ("loc", "bc", "qty", "scanned", "outbound", "added", "remaining", "status")
         tree = ttk.Treeview(left, columns=cols, show="headings", height=20)
