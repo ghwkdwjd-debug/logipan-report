@@ -400,6 +400,53 @@
         .audit-recent .sub { font-size: 11px; opacity: 0.85; margin-top: 3px; }
         .audit-recent.idle .bc { font-size: 14px; opacity: 0.7; }
 
+        /* 큰 경고 박스 (장갑끼고 OK 버튼 못 누르는 문제 해결)
+           다음 바코드 스캔하면 자동으로 사라짐 */
+        .audit-big-alert {
+            margin: 10px 0;
+            padding: 16px 14px;
+            border-radius: 12px;
+            background: #fee2e2;
+            border: 3px solid #dc2626;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(220,38,38,0.25);
+            animation: bigAlertPop 0.2s ease;
+        }
+        @keyframes bigAlertPop {
+            from { transform: scale(0.85); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .audit-big-alert.warn {
+            background: #fef3c7;
+            border-color: #f57c00;
+            box-shadow: 0 4px 12px rgba(245,124,0,0.25);
+        }
+        .audit-big-alert-icon {
+            font-size: 36px;
+            line-height: 1;
+            margin-bottom: 6px;
+        }
+        .audit-big-alert-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #991b1b;
+            margin-bottom: 6px;
+        }
+        .audit-big-alert.warn .audit-big-alert-title { color: #92400e; }
+        .audit-big-alert-body {
+            font-size: 15px;
+            color: #1f2937;
+            line-height: 1.4;
+            font-family: 'Consolas', monospace;
+            word-break: break-all;
+            margin-bottom: 8px;
+        }
+        .audit-big-alert-hint {
+            font-size: 11px;
+            color: #6b7280;
+            font-style: italic;
+        }
+
         /* 이 로케 진행 상황 */
         .audit-loc-progress {
             margin-top: 10px;
@@ -428,7 +475,6 @@
         .audit-loc-item:last-child { border-bottom: none; }
         .audit-loc-item.done { background: #f0fdf4; }
         .audit-loc-item.partial { background: #fffbeb; }
-        .audit-loc-item.moved { background: #f3f4f6; opacity: 0.75; }
         .audit-loc-item .bc {
             font-family: 'Consolas', monospace;
             font-weight: bold;
@@ -444,9 +490,8 @@
         }
         .audit-loc-item .qty-info .done-num { color: #16a34a; font-weight: bold; }
         .audit-loc-item.done .qty-info::after { content: ' ✓'; color: #16a34a; }
-        .audit-loc-item.moved .qty-info::after { content: ' (작업불필요)'; color: #6b7280; font-size: 10px; }
 
-        /* 차감 출처 뱃지 (스캔/출고/혼합/이동) */
+        /* 차감 출처 뱃지 (스캔/출고/혼합) */
         .src-badge {
             display: inline-block;
             font-size: 9px;
@@ -459,7 +504,6 @@
         .src-badge.scan { background: #dcfce7; color: #166534; }
         .src-badge.out { background: #dbeafe; color: #1e40af; }
         .src-badge.mixed { background: #e0e7ff; color: #4338ca; }
-        .src-badge.moved { background: #e5e7eb; color: #4b5563; }
 
         /* 전체 진행 */
         .audit-total-counter {
@@ -853,6 +897,14 @@
                     <div class="top">최근 스캔</div>
                     <div class="bc">아직 스캔 안 함</div>
                     <div class="sub"></div>
+                </div>
+
+                <!-- 큰 경고 박스 (alert 대체) - 다음 스캔하면 자동으로 사라짐 -->
+                <div class="audit-big-alert" id="audit-big-alert" style="display:none;">
+                    <div class="audit-big-alert-icon" id="audit-big-alert-icon">⚠️</div>
+                    <div class="audit-big-alert-title" id="audit-big-alert-title">알림</div>
+                    <div class="audit-big-alert-body" id="audit-big-alert-body"></div>
+                    <div class="audit-big-alert-hint">다음 바코드 스캔하면 자동으로 닫힙니다</div>
                 </div>
 
                 <!-- 이 로케의 진행 상황 -->
@@ -2557,6 +2609,25 @@
     let auditScanLog = [];
 
     // ─── 로케 스캔 처리 ─────────────────────────
+    // ─── 큰 경고 박스 (장갑끼고 OK 안 눌러도 됨, 다음 스캔하면 자동 닫힘) ───
+    function showAuditBigAlert(level, title, body) {
+        const box = document.getElementById('audit-big-alert');
+        const icon = document.getElementById('audit-big-alert-icon');
+        const titleEl = document.getElementById('audit-big-alert-title');
+        const bodyEl = document.getElementById('audit-big-alert-body');
+        if (!box) return;
+        // level: 'warn' (오렌지) | 'error' (빨강, 기본)
+        box.classList.toggle('warn', level === 'warn');
+        icon.textContent = level === 'warn' ? '⚠️' : '⛔';
+        titleEl.textContent = title;
+        bodyEl.innerHTML = body;
+        box.style.display = 'block';
+    }
+    function closeAuditBigAlert() {
+        const box = document.getElementById('audit-big-alert');
+        if (box) box.style.display = 'none';
+    }
+
     async function handleAuditLocation(loc) {
         if (!auditState.master) {
             showAuditRecent('error', loc, '먼저 세션을 선택하세요');
@@ -2664,22 +2735,30 @@
                 showAuditRecent('warn', bc, `이 바코드는 [${otherLocs[0]}] 로케 상품입니다`);
                 feedback('error', '다른 로케 상품');
                 speak('다른 로케 상품');
-                alert(`⚠️ 위치 불일치\n\n이 바코드(${bc})는\n현재 로케 [${loc}]가 아닌\n[${otherLocs.slice(0, 3).join(', ')}] 로케의 상품입니다.\n\n해당 로케로 이동 후 다시 스캔하세요.`);
+                showAuditBigAlert('warn', '위치 불일치',
+                    `바코드 <b>${escapeHtml(bc)}</b><br>` +
+                    `현재 [${escapeHtml(loc)}] 아닌<br>` +
+                    `[${escapeHtml(otherLocs.slice(0, 3).join(', '))}] 로케의 상품입니다.<br>` +
+                    `<br>해당 로케로 이동 후 다시 스캔하세요.`
+                );
             } else {
                 // 마스터에 아예 없음
                 showAuditRecent('error', bc, '마스터에 없는 바코드');
                 feedback('error', '없는 바코드');
                 speak('없는 바코드');
-                alert(`⚠️ 없는 바코드\n\n바코드 ${bc}는\n마스터 재고에 없습니다.\n\n확인 후 다시 스캔하세요.`);
+                showAuditBigAlert('error', '없는 바코드',
+                    `<b>${escapeHtml(bc)}</b><br>` +
+                    `마스터 재고에 없습니다.<br>` +
+                    `<br>확인 후 다시 스캔하세요.`
+                );
             }
             return;
         }
 
         // 2) 이 로케에 있는 바코드 → 차감 시도
         if (item.remaining <= 0) {
-            // 출고로 빠진 건지, 작업자가 다 찍은 건지, 재고이동으로 자동완료된 건지 구분
+            // 출고로 빠진 건지, 작업자가 다 찍은 건지 구분
             const outboundQty = item.outbound_qty || 0;
-            const movedInQty = item.qty_moved_in || 0;
             const scannedQty = (item.qty || 0) - item.remaining - outboundQty;
 
             if (outboundQty > 0 && scannedQty === 0) {
@@ -2687,11 +2766,6 @@
                 showAuditRecent('warn', bc, `📤 출고된 상품입니다 - 출고 작업장으로`);
                 feedback('error', '출고 상품');
                 speak('출고된 상품');
-            } else if (movedInQty > 0 && scannedQty === movedInQty && outboundQty === 0) {
-                // 재고이동으로 자동 완료된 상품만 있음 (작업자가 찍을 필요 없음)
-                showAuditRecent('warn', bc, `🔄 재고이동 완료된 상품입니다 - 작업 불필요`);
-                feedback('error', '재고이동 완료');
-                speak('재고이동 완료');
             } else if (outboundQty > 0 && scannedQty > 0) {
                 // 일부는 스캔, 일부는 출고 - 다 처리됨
                 showAuditRecent('warn', bc, `이미 처리됨 (스캔 ${scannedQty}, 출고 ${outboundQty})`);
@@ -2842,28 +2916,18 @@
             const qty = it.qty || 0;
             const remaining = it.remaining || 0;
             const outbound = it.outbound_qty || 0;
-            const movedIn = it.qty_moved_in || 0;
-            const movedOut = it.qty_moved_out || 0;
             const done = qty - remaining;
             const scanned = done - outbound;  // 작업자 직접 스캔분
             const isDone = remaining === 0;
             const isPartial = done > 0 && !isDone;
-            // 재고이동 완료된 항목인지 (받은 상품만 있고 미스캔 없음, 또는 전부 빠짐)
-            const isMoved = (movedIn > 0 && remaining === 0 && outbound === 0)
-                            || (movedOut > 0 && qty === 0);
-            const cls = isMoved ? 'moved' : (isDone ? 'done' : (isPartial ? 'partial' : ''));
+            const cls = isDone ? 'done' : (isPartial ? 'partial' : '');
 
-            // 차감 출처 뱃지 - 재고이동 우선 표시
+            // 차감 출처 뱃지
             let badge = '';
-            if (isMoved) {
-                badge = `<span class="src-badge moved">🔄 이동완료</span>`;
-            } else if (outbound > 0 && scanned > 0) {
+            if (outbound > 0 && scanned > 0) {
                 badge = `<span class="src-badge mixed">혼합 ${scanned}+${outbound}</span>`;
             } else if (outbound > 0) {
                 badge = `<span class="src-badge out">출고 ${outbound}</span>`;
-            } else if (movedIn > 0 && scanned > 0) {
-                // 이동된 상품 + 작업자 스캔 혼합
-                badge = `<span class="src-badge mixed">스캔${scanned}+이동${movedIn}</span>`;
             } else if (scanned > 0) {
                 badge = `<span class="src-badge scan">스캔 ${scanned}</span>`;
             }
@@ -3248,6 +3312,8 @@
         // ═══ 모드별 분기 ═══
         // 재고조사 모드면 audit 핸들러로
         if (scanState.mode === 'audit') {
+            // 이전 큰 알림 박스가 있으면 자동 닫기 (작업자가 OK 안 눌러도 됨)
+            closeAuditBigAlert();
             if (isLocationBarcode(value)) {
                 handleAuditLocation(value.toUpperCase());
             } else {
