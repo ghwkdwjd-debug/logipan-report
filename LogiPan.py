@@ -9598,7 +9598,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             (" 혼합 ",  "#E0E7FF"),
             (" 진행중 ", "#FEF3C7"),
             (" 초과 ",  "#FEE2E2"),
-            (" 🆕신규입고 ", "#FED7AA"),
+            (" 🆕신규입고완료 ", "#FFEDD5"),
             (" 🔄재고이동완료 ", "#E5E7EB"),
             (" 🔧임의완료 ", "#D1D5DB"),
         ]:
@@ -9637,7 +9637,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tree.tag_configure("mixed", background="#E0E7FF")      # 보라 (스캔+출고 혼합 완료)
         tree.tag_configure("partial", background="#FEF3C7")    # 노랑 (진행중)
         tree.tag_configure("over", background="#FEE2E2")       # 빨강 (초과)
-        tree.tag_configure("newly_added", background="#FED7AA")  # 오렌지 (신규 입고분 있음)
+        tree.tag_configure("newly_added", background="#FED7AA")  # 오렌지 (신규 입고분 + 미스캔 혼재)
+        tree.tag_configure("newly_added_done", background="#FFEDD5")  # 연 오렌지 (신규입고 완료)
         tree.tag_configure("moved_in", background="#CFFAFE")     # 하늘 (재고이동으로 들어옴)
         tree.tag_configure("moved_out", background="#F5D0FE")    # 핑크 (재고이동으로 빠짐)
         tree.tag_configure("moved_done", background="#E5E7EB")   # 회색 (재고이동 완료)
@@ -10562,8 +10563,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 moved = 0
                 not_found = 0  # 반출 로케에 없는 경우
                 insufficient = 0  # 반출 수량이 부족한 경우
-                auto_completed_qty = 0  # [추가] 자동완료 처리된 상품 누계 (스캔→이동)
-                new_unscanned_qty = 0   # [추가] 받는 쪽 미스캔으로 추가된 상품 누계
+                auto_completed_qty = 0  # 자동완료 처리된 상품 누계 (받은 분 전체)
                 applied_log = []
                 ts_ms = int(datetime.now().timestamp() * 1000)
 
@@ -10597,18 +10597,13 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         # 그래도 가능한 만큼만 이동? → 일단 스킵
                         continue
 
-                    # 2) 반출 항목 차감 ([수정] 스캔된 상품 우선 이동 규칙)
-                    # ZZ에 스캔 완료된 상품이 있으면 그것부터 이동된다고 가정
-                    from_outbound = from_item.get("outbound_qty", 0)
-                    scanned_in_from = max(0, from_qty - from_remaining - from_outbound)
-                    moved_scanned = min(qty, scanned_in_from)   # 이동분 중 스캔된 양
-                    moved_unscanned = qty - moved_scanned        # 이동분 중 미스캔 양
-
+                    # 2) 반출 항목 차감
+                    # 사용자 운영: 재고이동 엑셀은 스캐너로 검수해서 만든 거라
+                    # 이동되는 분은 전부 검수된 상태로 간주 → 보낸 쪽 remaining에서도 차감
                     new_from_qty = from_qty - qty
-                    # remaining에서는 미스캔분만 빼야 scanned 보존됨
-                    new_from_remaining = max(0, from_remaining - moved_unscanned)
+                    new_from_remaining = max(0, from_remaining - qty)
 
-                    # [추가] 이동 추적: qty_moved_out 누적, moved_at 기록
+                    # 이동 추적: qty_moved_out 누적, moved_at 기록
                     prev_moved_out = from_item.get("qty_moved_out", 0)
                     from_updates = {
                         "qty": new_from_qty,
@@ -10621,14 +10616,14 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     for k, v in from_updates.items():
                         state["items"][from_key][k] = v
 
-                    # 3) 반입 항목 처리 ([수정] 스캔된 분은 자동 완료 처리)
+                    # 3) 반입 항목 처리 - 받은 분은 무조건 자동완료
                     if to_key in state["items"]:
-                        # 기존 항목에 추가 (스캔된 분만큼은 remaining 안 늘림 → 자동 완료)
+                        # 기존 항목에 추가: qty만 늘리고 remaining은 그대로 (받은 분 자동완료)
                         to_item = state["items"][to_key]
                         prev_moved_in = to_item.get("qty_moved_in", 0)
                         to_updates = {
                             "qty": to_item.get("qty", 0) + qty,
-                            "remaining": to_item.get("remaining", 0) + moved_unscanned,
+                            # remaining 안 늘림 → 받은 분은 자동 완료
                             "qty_moved_in": prev_moved_in + qty,
                             "moved_at": ts_ms,
                         }
@@ -10637,12 +10632,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         for k, v in to_updates.items():
                             state["items"][to_key][k] = v
                     else:
-                        # 반입 로케에 신규 생성 (스캔된 분은 자동 완료, 미스캔분만 remaining에)
+                        # 반입 로케에 신규 생성: remaining=0 (전량 자동완료)
                         new_item = {
                             "loc": to_loc,
                             "bc": bc,
                             "qty": qty,
-                            "remaining": moved_unscanned,  # 스캔된 상품은 자동 완료
+                            "remaining": 0,  # 받은 분은 전부 자동완료 (스캐너로 검수된 상태)
                             "outbound_qty": 0,
                             "qty_added": 0,
                             "qty_moved_in": qty,
@@ -10657,9 +10652,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         to_ref.set(new_item)
                         state["items"][to_key] = new_item
 
-                    # [추가] 결과 카운트 누적
-                    auto_completed_qty += moved_scanned
-                    new_unscanned_qty += moved_unscanned
+                    # 결과 카운트
+                    auto_completed_qty += qty
 
                     moved += 1
                     applied_log.append({
@@ -10686,8 +10680,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 messagebox.showinfo("✅ 재고이동 완료",
                     f"재고이동 적용 완료\n\n"
                     f"✅ 이동 성공: {moved:,}건\n"
-                    f"  · 자동 완료 처리: {auto_completed_qty:,}개 (스캔된 상품이 이동됨)\n"
-                    f"  · 신규 위치 미스캔: {new_unscanned_qty:,}개 (이동 후 스캔 필요)\n"
+                    f"  · 자동 완료 처리: {auto_completed_qty:,}개 (받은 분 전체)\n"
                     f"⚠️ 반출 로케 없음: {not_found:,}건\n"
                     f"⛔ 수량 부족: {insufficient:,}건",
                     parent=win)
@@ -10871,41 +10864,40 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 qty_moved_out = it.get("qty_moved_out", 0)
                 status, tag, scanned, outbound_qty = compute_item_status(it)
 
-                # 신규 입고 표시 - 상태 라벨 앞에 🆕 추가
+                # 신규 입고 표시 - 받은 분은 자동완료, 명확한 라벨
                 if qty_added > 0:
-                    status = f"🆕 {status}"
-                    # 미스캔이면 tag를 newly_added로 (오렌지 음영)
-                    if tag == "":
-                        tag = "newly_added"
+                    if remaining <= 0:
+                        # 받은 분만 있고 미스캔 없음 → 자동완료
+                        status = f"🆕 신규입고 완료 ({qty_added}개)"
+                        tag = "newly_added_done"
+                    else:
+                        # 받은 분 + 원래 미스캔 혼재 (이전 버전 잔재일 가능성)
+                        status = f"🆕+{qty_added} {status}"
+                        if tag == "":
+                            tag = "newly_added"
 
-                # [추가] 재고이동 표시 - 단순화: 이동 일어나면 "재고이동 완료" 통일
-                # 단, 받은 쪽에 원래 미스캔 상품이 섞여있으면 진행중 표시 (안전장치)
-                if qty_moved_out > 0 and qty == 0:
-                    # 전부 빠져나간 경우 - 명확한 이동완료
-                    status = f"🔄 재고이동 완료 ({qty_moved_out}개)"
-                    tag = "moved_done"
-                elif qty_moved_out > 0:
-                    # 일부만 빠진 경우 - 빠진 박스는 검수된 것으로 간주
+                # 재고이동 표시 - 받은/보낸 모두 자동완료 통일
+                if qty_moved_out > 0:
+                    # 보낸 쪽 (qty 줄어듦) - 빠진 분은 검수 완료된 것
                     status = f"🔄 재고이동 완료 ({qty_moved_out}개)"
                     tag = "moved_done"
                 elif qty_moved_in > 0:
                     if remaining <= 0:
-                        # 받은 상품만 있고 미스캔 없음 → 자동 완료
+                        # 받은 분만 있고 미스캔 없음 → 자동완료
                         status = f"🔄 재고이동 완료 ({qty_moved_in}개)"
                         tag = "moved_done"
                     else:
-                        # 받은 상품 + 원래 미스캔 상품 혼재 → 진행중 + 마커 (작업자가 미스캔 인지)
+                        # 받은 분 + 원래 미스캔 혼재 (이전 버전 잔재일 가능성)
                         status = f"🔄+{qty_moved_in} {status}"
                         if tag == "":
                             tag = "moved_in"
                 elif it.get("force_completed") and remaining <= 0:
-                    # [추가] 임의 완료 처리된 항목 (재고이동 없는 경우)
-                    # → "🔧 임의 완료"로 명확히 표시 (작업자 실제 검수와 구분)
+                    # 임의 완료 처리된 항목 (재고이동/신규입고 없는 경우)
                     status = "🔧 임의 완료"
                     tag = "force_done"
 
                 # 필터
-                if filter_mode == "done" and tag not in ("done", "outbound", "mixed", "moved_done", "force_done"): continue
+                if filter_mode == "done" and tag not in ("done", "outbound", "mixed", "moved_done", "force_done", "newly_added_done"): continue
                 if filter_mode == "partial" and tag != "partial": continue
                 if filter_mode == "pending" and tag not in ("", "newly_added", "moved_in", "moved_out"): continue
                 if filter_mode == "over" and tag != "over": continue
