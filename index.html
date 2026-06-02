@@ -852,8 +852,9 @@
         <input type="text" id="scan-label" placeholder="예: ADIDAS26_3월1주차">
 
         <!-- 현재 로케이션 (스캐너 또는 수동 입력 후 Enter) -->
-        <label>📍 현재 로케이션</label>
-        <input type="text" id="scan-loc-input" placeholder="로케 스캔하거나 직접 입력 후 Enter" autocomplete="off" style="text-transform: uppercase; font-family: monospace; letter-spacing: 1px; font-weight: bold;">
+        <!-- [숨김] 로케 input - PDA 스캔이 자동 포커스 잡혀버려서 처리가 안 되는 문제 있어서 숨김.
+                  수동 입력은 아래 '⌨️ 수동입력' 버튼으로 가능. -->
+        <input type="text" id="scan-loc-input" placeholder="로케 스캔하거나 직접 입력 후 Enter" autocomplete="off" style="display:none;">
 
         <!-- 현재 로케 큰 표시 -->
         <div class="loc-display empty" id="pda-loc-display">
@@ -861,15 +862,11 @@
             <div class="val" id="pda-loc-value">로케를 먼저 스캔하세요</div>
         </div>
 
-        <!-- 카운터 -->
+        <!-- 카운터 - 스캔 수량 하나만 -->
         <div class="pda-counter-row">
-            <div class="pda-counter total">
+            <div class="pda-counter total" style="flex:1;">
                 <div class="n" id="pda-cnt-total">0</div>
-                <div class="l">전체 박스</div>
-            </div>
-            <div class="pda-counter cur">
-                <div class="n" id="pda-cnt-cur">0</div>
-                <div class="l">현재 로케</div>
+                <div class="l">스캔 수량</div>
             </div>
         </div>
 
@@ -2302,6 +2299,7 @@
     function feedbackScanSuccess(value) {
         beep(1200, 80);               // 짧고 높은 띡
         vibrate(50);
+        speak("스캔");
         showScanFlash('product', value);
     }
     function feedbackLocChanged(loc) {
@@ -3710,11 +3708,32 @@
     }
 
 
+    // 입고 바코드 형식 검증
+    //  - 패턴 A: 영문대문자+숫자 정확히 19자
+    //  - 패턴 B: 1-XXXXXXXXXX (1자리 + 하이픈 + 10자리 숫자, 총 12자)
+    function isValidProductBarcode(bc) {
+        if (!bc) return false;
+        // 영문/숫자 19자
+        if (/^[A-Z0-9]{19}$/.test(bc)) return true;
+        // 1자리+하이픈+10자리숫자 (예: 1-1567920001)
+        if (/^[0-9]-[0-9]{10}$/.test(bc)) return true;
+        return false;
+    }
+
     function handleProductScan(barcode) {
         if (!scanState.currentLoc) {
             // 큰 표시 + 음성 둘 다
             showPdaRecent('error', barcode, '로케를 먼저 스캔하세요');
             feedbackError("로케이션이 없어요");
+            speak('로케 먼저');
+            return;
+        }
+
+        // [추가] 형식 검증 - 이상한 바코드 (잘못 찍힌 거 등) 거르기
+        if (!isValidProductBarcode(barcode)) {
+            showPdaRecent('error', barcode, '⛔ 잘못된 바코드 형식 (19자 영숫자 또는 1-XXXXXXXXXX)');
+            feedbackError('잘못된 바코드');
+            speak('잘못된 바코드');
             return;
         }
 
@@ -3728,11 +3747,11 @@
             renderScanList();
             saveScanDraft();
             updatePdaCounters();
-            showPdaRecent('duplicate', barcode, `${scanState.currentLoc} · 수량 ${existing.qty}개`);
-            // 중복용 짧은 피드백
+            showPdaRecent('duplicate', barcode, `${scanState.currentLoc} · 수량 ${existing.qty}개 (중복 스캔)`);
+            // 중복 알림 - 큰 박스+음성+진동
             beep(600, 60);
             vibrate([30, 30, 30]);
-            speak('중복');
+            speak('중복 스캔');
         } else {
             const item = {
                 barcode: barcode,
