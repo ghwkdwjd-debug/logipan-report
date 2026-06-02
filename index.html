@@ -3560,6 +3560,15 @@
             console.log('[한영변환]', beforeHan, '→', value);
         }
 
+        // [대문자 자동 변환] 바코드/로케 모두 대문자로 통일
+        // 스캐너 설정이나 한영변환 결과로 소문자가 섞이면 매칭 실패하므로 일괄 대문자화.
+        // 실제 바코드는 영문 대문자 + 숫자만 사용하므로 안전.
+        const beforeUpper = value;
+        value = value.toUpperCase();
+        if (beforeUpper !== value) {
+            console.log('[대문자 변환]', beforeUpper, '→', value);
+        }
+
         // [역순 보정] PDA가 바코드를 거꾸로 출력하는 경우 자동 뒤집기
         // - 로케 바코드(AA-00-00-00 패턴)는 뒤집으면 깨지므로 제외
         // - 수동 입력은 그대로
