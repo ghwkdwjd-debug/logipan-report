@@ -3385,15 +3385,12 @@
     function handlePdaKeydown(e) {
         // 스캔 탭이 안 열려있으면 무시
         const scanSection = document.getElementById('section-scan');
-        if (!scanSection || scanSection.style.display === 'none') {
-            if (e.key === 'Enter') console.log('[PDA진단] section-scan 안 보임');
-            return;
-        }
+        if (!scanSection || scanSection.style.display === 'none') return;
 
         // 사용자가 input/textarea에 포커스 두고 직접 타이핑 중이면 무시
+        // (그 input의 자체 keydown 핸들러가 처리)
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
-            if (e.key === 'Enter') console.log('[PDA진단] input 포커스 잡힘:', active.tagName, active.id || '(no id)');
             return;
         }
 
@@ -3410,7 +3407,6 @@
             e.preventDefault();
             const raw = pdaBuffer.trim();
             pdaBuffer = '';
-            console.log('[PDA진단] Enter 받음. 버퍼:', JSON.stringify(raw));
             if (raw) processPdaScan(raw, true);
             return;
         }
@@ -3608,8 +3604,6 @@
         }
         lastScanText = value;
         lastScanAt = now;
-
-        console.log('[PDA진단] processPdaScan value:', value, 'mode:', scanState.mode, 'isLoc:', isLocationBarcode(value));
 
         // ═══ 모드별 분기 ═══
         // 재고조사 모드면 audit 핸들러로
@@ -3924,6 +3918,18 @@
             }
         }
         if (typeof saveScanDraft === 'function') saveScanDraft();
+
+        // [중요] prompt가 닫히면 그 박스에 포커스 남을 수 있어서 강제로 해제 → PDA 모드 진입
+        setTimeout(() => {
+            if (document.activeElement && document.activeElement.blur) {
+                document.activeElement.blur();
+            }
+            // 그래도 안전하게 body로 포커스
+            if (document.body && document.body.focus) {
+                document.body.setAttribute('tabindex', '-1');
+                document.body.focus();
+            }
+        }, 50);
     }
 
     async function sendScanSession() {
