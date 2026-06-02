@@ -3385,21 +3385,21 @@
     function handlePdaKeydown(e) {
         // 스캔 탭이 안 열려있으면 무시
         const scanSection = document.getElementById('section-scan');
-        if (!scanSection || scanSection.style.display === 'none') return;
-
-        // 사용자가 input/textarea에 포커스 두고 직접 타이핑 중이면 무시
-        // (그 input의 자체 keydown 핸들러가 처리)
-        const active = document.activeElement;
-        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+        if (!scanSection || scanSection.style.display === 'none') {
+            if (e.key === 'Enter') console.log('[PDA진단] section-scan 안 보임');
             return;
         }
 
-        // 확인 다이얼로그/alert 같은 거 떠있으면 무시 (안전장치)
+        // 사용자가 input/textarea에 포커스 두고 직접 타이핑 중이면 무시
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+            if (e.key === 'Enter') console.log('[PDA진단] input 포커스 잡힘:', active.tagName, active.id || '(no id)');
+            return;
+        }
+
         if (e.defaultPrevented) return;
 
         const now = Date.now();
-
-        // 버퍼 타임아웃: 사람이 키를 천천히 누른 거면 PDA가 아니므로 버퍼 리셋
         if (now - pdaBufferLastAt > 500) {
             pdaBuffer = '';
         }
@@ -3410,16 +3410,16 @@
             e.preventDefault();
             const raw = pdaBuffer.trim();
             pdaBuffer = '';
-            if (raw) processPdaScan(raw, true);  // PDA로 들어옴 → 역순 보정 대상
+            console.log('[PDA진단] Enter 받음. 버퍼:', JSON.stringify(raw));
+            if (raw) processPdaScan(raw, true);
             return;
         }
 
-        // 문자 키만 버퍼에 누적 (길이 1인 인쇄 가능한 문자)
+        // 문자 키만 버퍼에 누적
         if (e.key && e.key.length === 1) {
             pdaBuffer += e.key;
-            e.preventDefault();  // 다른 핸들러로 전파 안 함 (포커스 가는 곳 없으니 safe)
+            e.preventDefault();
         }
-        // 그 외 키(Shift, Ctrl, Tab 등)는 그냥 통과
     }
 
     // 페이지 전역에 keydown 리스너 1개만 부착
@@ -3608,6 +3608,8 @@
         }
         lastScanText = value;
         lastScanAt = now;
+
+        console.log('[PDA진단] processPdaScan value:', value, 'mode:', scanState.mode, 'isLoc:', isLocationBarcode(value));
 
         // ═══ 모드별 분기 ═══
         // 재고조사 모드면 audit 핸들러로
