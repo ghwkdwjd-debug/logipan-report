@@ -3909,8 +3909,8 @@
         sendBtn.innerText = '📤 전송 중...';
 
         try {
-            // Firestore에 저장
-            await db.collection("scan_sessions").add({
+            // 1) scan_sessions에 저장 (실제 박스 데이터)
+            const sessionRef = await db.collection("scan_sessions").add({
                 user: name,
                 mode: scanState.mode,
                 label: label,
@@ -3923,6 +3923,28 @@
                 item_count: scanState.items.length,
                 status: "pending",
                 created_at: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            // 2) field_reports에 카드 생성 (LogiPan에서 보이도록)
+            //    LogiPan은 source==='scan'인 field_reports 카드에 '📥 입고탭으로 보내기' 버튼을 붙임
+            const totalBoxes = scanState.items.length;
+            const totalQty = scanState.items.reduce((s, it) => s + (it.qty || 1), 0);
+            await db.collection("field_reports").add({
+                user: name,
+                title: `[입고스캔] ${label}`,
+                work_category: '입고',
+                text: `PWA 스캔 ${totalBoxes}건 / 총 ${totalQty}개`,
+                date: getFormattedDate(),
+                imageUrl: '',
+                status: "⏳ 처리중",
+                comment_count: 0,
+                has_attached_image: false,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                // 스캔 카드 식별용 필드
+                source: 'scan',
+                scan_session_id: sessionRef.id,
+                scan_item_count: totalBoxes,
+                scan_quality: 'normal'
             });
 
             feedbackSent();
