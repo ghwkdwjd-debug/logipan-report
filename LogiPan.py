@@ -918,6 +918,9 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         make_modern_btn(action_outer, "🎫  Jira 상신",
                          bg="#8B5CF6", hover_bg="#7C3AED",
                          command=self.save_csv_with_jira)
+        make_modern_btn(action_outer, "🧪 스캔이력 테스트",
+                         bg="#0EA5E9", hover_bg="#0284C7",
+                         command=self.test_scan_archive_only)
 
         # ========== [📝 리포트 카드 - 하단 (버튼 위)] ==========
         report_card_outer = tk.Frame(container, bg="#F5F6F8")
@@ -6098,6 +6101,153 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             f"✅ 저장됨: {fn}\n\n"
             f"💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
 
+    def test_scan_archive_only(self):
+        """[테스트] 스캔 이력 시트 자동 저장만 단독 실행 (Jira/슬랙 안 거침)
+        - _pending_scan_session이 있으면 실제 PWA 데이터로 시트 저장
+        - 없으면 가짜 테스트 데이터로 동작 (단독 동작 확인용)
+        """
+        # 1) 브랜드명 확인
+        brand = self.ent_brand_in.get().strip() if hasattr(self, 'ent_brand_in') else ''
+        if not brand:
+            messagebox.showwarning("브랜드명 없음",
+                "브랜드명을 먼저 입력해주세요.\n(상단 '브랜드' 입력칸)")
+            return
+
+        # 2) 데이터 소스 결정
+        pending = getattr(self, '_pending_scan_session', None)
+        use_real = bool(pending and pending.get('items'))
+
+        if use_real:
+            # 실제 PWA 데이터 사용 - pending 그대로 사용
+            data_info = (
+                f"📦 실제 PWA 데이터 사용\n\n"
+                f"세션 ID: {pending.get('scan_session_id', '-')}\n"
+                f"작업자: {pending.get('worker', '-')}\n"
+                f"작업명: {pending.get('label', '-')}\n"
+                f"품질: {pending.get('quality', 'normal')}\n"
+                f"박스 수: {len(pending.get('items', []))}개"
+            )
+            test_pending = pending
+        else:
+            # 가짜 데이터 (PWA 데이터 없을 때)
+            from datetime import datetime
+            ts = int(datetime.now().timestamp() * 1000)
+            test_pending = {
+                'scan_session_id': f'TEST_{ts}',
+                'report_doc_id': None,
+                'worker': '테스트작업자',
+                'label': f'테스트_{datetime.now().strftime("%m%d_%H%M")}',
+                'quality': 'normal',
+                'items': [
+                    {'barcode': 'TESTBARCODE001', 'qty': 1, 'location': 'AA-01-01-01', 'ts': ts},
+                    {'barcode': 'TESTBARCODE002', 'qty': 1, 'location': 'AA-01-01-02', 'ts': ts},
+                    {'barcode': 'TESTBARCODE003', 'qty': 1, 'location': 'ZZ-00-00-00', 'ts': ts},
+                ],
+                'item_count': 3,
+            }
+            data_info = (
+                f"⚠️ PWA 실제 데이터 없음 - 가짜 데이터로 테스트\n\n"
+                f"실제 데이터로 테스트하려면 먼저\n"
+                f"PWA 카드에서 '📥 입고탭으로 보내기'를 눌러주세요.\n\n"
+                f"가짜 데이터: 3건 (ABC/DEF/ZZ 각 1개)"
+            )
+
+        # 3) 확인 다이얼로그
+        if not messagebox.askyesno("스캔 이력 시트 테스트",
+                f"{data_info}\n\n"
+                f"브랜드명: {brand}\n\n"
+                f"이번 달 탭(예: 26년 6월)에 데이터가 추가됩니다.\n"
+                f"진행할까요? (지라/슬랙은 안 거침)"):
+            return
+
+        # 4) 실행
+        try:
+            ok, msg = self._archive_scan_to_sheet(
+                pending=test_pending,
+                brand=brand,
+                md_name='테스트MD',
+                jira_key='TEST-0000',
+                jira_url='https://test.example.com/TEST-0000'
+            )
+            if ok:
+                result_label = "실제 PWA 데이터" if use_real else "가짜 데이터"
+                messagebox.showinfo(f"✅ 스캔 이력 테스트 성공 ({result_label})",
+                    f"스캔 이력 시트 저장 완료!\n\n{msg}\n\n"
+                    f"구글 시트에서 이번 달 탭 확인해주세요.")
+            else:
+                messagebox.showerror("❌ 스캔 이력 테스트 실패", f"저장 실패:\n\n{msg}")
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            messagebox.showerror("❌ 예외 발생", str(e))
+
+    def test_silch_only(self):
+        """[테스트] 실측시트 자동 기입만 단독 실행 (Jira/슬랙 안 거침)
+        - 현재 입고 탭의 last_scan_detail에서 ZZ 로케 바코드 추출
+        - 브랜드명은 입력칸에서 가져옴
+        - 시트에 새 탭 만들고 데이터 들어가는지 확인용
+        """
+        # 1) 데이터 확인
+        detail = getattr(self, 'last_scan_detail', None) or []
+        if not detail:
+            messagebox.showwarning("데이터 없음",
+                "5열 형식 스캔 데이터가 없습니다.\n\n"
+                "입고 탭에서 5열 양식(바코드/정상수/불량수/정상로케/불량로케)으로\n"
+                "스캔 데이터를 입력하거나, '대조 분석' 한 번 돌려주세요.")
+            return
+
+        # 2) 브랜드명 확인
+        brand = self.ent_brand_in.get().strip() if hasattr(self, 'ent_brand_in') else ''
+        if not brand:
+            messagebox.showwarning("브랜드명 없음",
+                "브랜드명을 먼저 입력해주세요.\n(상단 '브랜드' 입력칸)")
+            return
+
+        # 3) ZZ 바코드 미리 카운트 (사용자에게 확인 다이얼로그)
+        zz_count = 0
+        for r in detail:
+            bc = (r.get('바코드') or '').strip()
+            if not bc:
+                continue
+            normal_loc = (r.get('정상로케') or '').strip()
+            defect_loc = (r.get('불량로케') or '').strip()
+            if normal_loc == 'ZZ-00-00-00' or defect_loc == 'ZZ-00-00-00':
+                zz_count += 1
+
+        if zz_count == 0:
+            messagebox.showinfo("ZZ 바코드 없음",
+                f"현재 스캔 데이터에 ZZ-00-00-00 로케 바코드가 없습니다.\n"
+                f"전체 행: {len(detail)}\n\n"
+                f"테스트하려면 5열 양식에서 정상로케 또는 불량로케를\n"
+                f"ZZ-00-00-00 으로 박아주세요.\n\n"
+                f"예시:\n"
+                f"  TESTBARCODE001  1  0  ZZ-00-00-00  00-00-00-00")
+            return
+
+        if not messagebox.askyesno("실측시트 테스트",
+                f"실측시트에 ZZ 바코드 {zz_count}건을 기입합니다.\n\n"
+                f"브랜드명: {brand}\n"
+                f"  → 시트에 '{brand}' 탭이 새로 생성됩니다\n"
+                f"    (이미 있으면 '{brand}_2' 식으로 자동 부여)\n\n"
+                f"진행할까요? (지라/슬랙은 안 거침)"):
+            return
+
+        # 4) 실행
+        try:
+            ok, msg = self._archive_silch_to_sheet(brand)
+            if ok is True:
+                messagebox.showinfo("✅ 실측 테스트 성공",
+                    f"실측시트 기입 완료!\n\n{msg}\n\n"
+                    f"구글 시트에서 '{brand}' 탭(또는 _2/_3) 확인해주세요.")
+            elif ok is False:
+                messagebox.showerror("❌ 실측 테스트 실패", f"기입 실패:\n\n{msg}")
+            else:  # None - ZZ 바코드 없음 (위에서 미리 거름)
+                messagebox.showinfo("스킵", msg)
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            messagebox.showerror("❌ 예외 발생", str(e))
+
     def save_csv_with_jira(self):
         """CSV 저장 + Jira 티켓 자동 상신"""
         if not self.is_matched:
@@ -6196,6 +6346,19 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             except Exception as e:
                 scan_archive_msg = f"\n\n⚠️ 스캔 이력 처리 오류: {e}"
                 print(f"❌ 스캔 이력 처리 오류: {e}")
+
+            # [추가] 실측시트 자동 기입 (ZZ-00-00-00 로케 바코드만)
+            silch_msg = ""
+            try:
+                silch_ok, silch_result = self._archive_silch_to_sheet(brand)
+                if silch_ok is True:
+                    silch_msg = f"\n\n📐 실측시트 기입 완료\n{silch_result}"
+                elif silch_ok is False:
+                    silch_msg = f"\n\n⚠️ 실측시트 기입 실패\n{silch_result}"
+                # silch_ok가 None이면 ZZ 바코드 없어서 스킵 - 메시지 안 띄움
+            except Exception as e:
+                silch_msg = f"\n\n⚠️ 실측시트 처리 오류: {e}"
+                print(f"❌ 실측시트 처리 오류: {e}")
 
             # [추가] Slack 알림 (활성화된 경우)
             slack_msg = ""
@@ -6382,7 +6545,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
             messagebox.showinfo("Jira 상신 완료",
                 f"✅ CSV 저장 + Jira 티켓 생성 완료!\n\n"
-                f"📄 파일: {fn}{jira_msg}{slack_msg}{scan_archive_msg}\n\n"
+                f"📄 파일: {fn}{jira_msg}{slack_msg}{scan_archive_msg}{silch_msg}\n\n"
                 f"💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
         else:
             messagebox.showerror("Jira 상신 실패",
@@ -8584,8 +8747,72 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
     # ========== [추가] 스캔 데이터 입고탭으로 보내기 ==========
     # 시트 ID 하드코딩 (너 만든 [로지판] 스캔 이력 시트)
     SCAN_HISTORY_SHEET_ID = "1MB4coyKRNMZTL68LEYqdSDdWqEJhZayxvrZymxlIWJY"
+    # [추가] 2026 실측리스트 - ZZ 로케 바코드를 자동 기입할 시트
+    # 인수인계 탭을 복제해서 브랜드명으로 새 탭 만들고 데이터 기입
+    SILCH_SHEET_ID = "1YEBJn7iXe-v_84nGj0AqSVNb0EMucVFyuVm3p5dihjU"
+    SILCH_TEMPLATE_TAB = "인수인계"
     # 서비스 계정 키 파일 (스캔 이력 시트만 권한 부여됨, 안전)
     SERVICE_ACCOUNT_FILE = "service_account.json"
+
+    # ========== [추가] 2026 실측리스트 시트 - ZZ 로케 바코드 자동 기입 ==========
+    # 시트 URL에서 /d/와 /edit 사이 부분. 실측리스트 시트의 인수인계 탭을 템플릿으로 사용.
+    # ※ 서비스 계정에 이 시트도 편집자 권한 추가 필요
+    SURVEY_SHEET_ID = ""  # ← 여기에 실측리스트 시트 ID 채우세요
+    SURVEY_TEMPLATE_TAB = "인수인계"  # 복제 원본 탭 이름
+
+    def _service_account_config_path(self):
+        """저장된 service_account.json 경로를 보관할 작은 설정 파일"""
+        try:
+            home = os.path.expanduser("~")
+            cfg_dir = os.path.join(home, ".logipan")
+            os.makedirs(cfg_dir, exist_ok=True)
+            return os.path.join(cfg_dir, "service_account_path.txt")
+        except Exception:
+            return None
+
+    def _load_service_account_path(self):
+        """저장해둔 service_account.json 경로 불러오기"""
+        try:
+            cfg = self._service_account_config_path()
+            if cfg and os.path.exists(cfg):
+                with open(cfg, "r", encoding="utf-8") as f:
+                    path = f.read().strip()
+                if path and os.path.exists(path):
+                    return path
+        except Exception as e:
+            print(f"서비스계정 경로 로드 실패: {e}")
+        return None
+
+    def _save_service_account_path(self, path):
+        """선택한 경로 저장"""
+        try:
+            cfg = self._service_account_config_path()
+            if cfg:
+                with open(cfg, "w", encoding="utf-8") as f:
+                    f.write(path)
+                return True
+        except Exception as e:
+            print(f"서비스계정 경로 저장 실패: {e}")
+        return False
+
+    def _prompt_service_account_path(self):
+        """파일 다이얼로그로 service_account.json 직접 선택"""
+        from tkinter import filedialog
+        messagebox.showinfo("서비스 계정 파일 선택 필요",
+            "구글 시트 연동을 위해 service_account.json 파일이 필요합니다.\n\n"
+            "안내가 닫히면 파일 선택 창이 열립니다.\n"
+            "json 파일을 선택해주세요. (한 번 선택하면 다음부터 기억됩니다)")
+        path = filedialog.askopenfilename(
+            title="service_account.json 선택",
+            filetypes=[("JSON 파일", "*.json"), ("모든 파일", "*.*")],
+            initialdir=os.path.expanduser("~/Desktop"),
+        )
+        if path and os.path.exists(path):
+            # 저장
+            if self._save_service_account_path(path):
+                messagebox.showinfo("저장됨", f"경로가 저장되었습니다.\n다음부터 자동으로 사용됩니다.\n\n{path}")
+            return path
+        return None
 
     def _get_service_account_sheets_service(self):
         """[추가] 서비스 계정으로 Google Sheets API 서비스 객체 생성.
@@ -8599,23 +8826,56 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             import os, sys
 
             # JSON 키 파일 경로 찾기
-            # 1) 실행 파일과 같은 폴더
-            # 2) 현재 작업 디렉토리
+            # 1) 사용자가 직접 지정한 경로 (config에 저장됨)
+            # 2) 실행 파일과 같은 폴더
+            # 3) 현재 작업 디렉토리
+            # 4) 데스크탑, 데스크탑\로지판_설치파일, 데스크탑\LogiPan 등
+            # 5) 다운로드 폴더
             candidates = []
+
+            # (1) 사용자가 직접 지정한 경로 (json 설정)
+            saved_path = self._load_service_account_path()
+            if saved_path:
+                candidates.append(saved_path)
+
+            # (2) 실행파일 폴더 (.exe로 빌드된 경우)
             if getattr(sys, 'frozen', False):
                 exe_dir = os.path.dirname(sys.executable)
                 candidates.append(os.path.join(exe_dir, self.SERVICE_ACCOUNT_FILE))
+
+            # (3) 현재 작업 디렉토리
             candidates.append(os.path.join(os.getcwd(), self.SERVICE_ACCOUNT_FILE))
             candidates.append(self.SERVICE_ACCOUNT_FILE)
 
+            # (4)(5) 사용자 폴더 기반 자주 쓰는 위치들
+            try:
+                home = os.path.expanduser("~")
+                common_dirs = [
+                    home,
+                    os.path.join(home, "Desktop"),
+                    os.path.join(home, "Desktop", "로지판_설치파일"),
+                    os.path.join(home, "Desktop", "LogiPan"),
+                    os.path.join(home, "Desktop", "로지판"),
+                    os.path.join(home, "Downloads"),
+                    os.path.join(home, "Documents"),
+                ]
+                for d in common_dirs:
+                    candidates.append(os.path.join(d, self.SERVICE_ACCOUNT_FILE))
+            except Exception:
+                pass
+
             key_path = None
             for p in candidates:
-                if os.path.exists(p):
+                if p and os.path.exists(p):
                     key_path = p
                     break
 
             if not key_path:
-                return None, f"service_account.json 파일을 찾을 수 없음 (확인 경로: {candidates})"
+                # 못 찾았으면 사용자에게 파일 선택 다이얼로그
+                key_path = self._prompt_service_account_path()
+                if not key_path:
+                    return None, ("service_account.json 파일을 찾을 수 없습니다.\n"
+                                   "파일을 LogiPan.py 폴더에 넣거나, 다음에 다시 선택해주세요.")
 
             SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
             creds = service_account.Credentials.from_service_account_file(
@@ -8789,6 +9049,102 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         except Exception as e:
             import traceback
             print(f"❌ 시트 저장 오류: {e}")
+            print(traceback.format_exc())
+            return False, str(e)
+
+    def _archive_silch_to_sheet(self, brand_name):
+        """[추가] 입고 대조 데이터 중 ZZ-00-00-00 로케 바코드를 실측리스트 시트에 기입.
+        - 인수인계 탭을 복제 → 새 탭 이름은 브랜드명 (중복 시 _2, _3...)
+        - A=순번, B=날짜, C=브랜드명, D=바코드, E=비고(빈칸)
+        - last_scan_detail의 정상로케/불량로케 어느 쪽이든 ZZ-00-00-00이면 포함
+        - 반환: (ok, msg)
+        """
+        try:
+            # 1) ZZ 로케 바코드 추출 (정상로케 또는 불량로케 어느 쪽이든 ZZ면 포함)
+            detail = getattr(self, 'last_scan_detail', None) or []
+            zz_barcodes = []
+            for r in detail:
+                bc = (r.get('바코드') or '').strip()
+                if not bc:
+                    continue
+                normal_loc = (r.get('정상로케') or '').strip()
+                defect_loc = (r.get('불량로케') or '').strip()
+                if normal_loc == 'ZZ-00-00-00' or defect_loc == 'ZZ-00-00-00':
+                    zz_barcodes.append(bc)
+
+            if not zz_barcodes:
+                return None, "ZZ-00-00-00 로케 바코드 없음 (실측 시트 기입 건너뜀)"
+
+            # 2) 서비스 계정 인증
+            service, err = self._get_service_account_sheets_service()
+            if not service:
+                return False, err
+
+            # 3) 시트 메타 확인 - 인수인계 탭 존재 여부 + 새 탭명 결정
+            meta = service.spreadsheets().get(spreadsheetId=self.SILCH_SHEET_ID).execute()
+            sheets_meta = meta.get('sheets', [])
+            existing_tabs = [s['properties']['title'] for s in sheets_meta]
+
+            template_sheet = None
+            template_sheet_index = None
+            for s in sheets_meta:
+                if s['properties']['title'] == self.SILCH_TEMPLATE_TAB:
+                    template_sheet = s['properties']
+                    template_sheet_index = s['properties'].get('index', 0)
+                    break
+            if not template_sheet:
+                return False, f"'{self.SILCH_TEMPLATE_TAB}' 탭을 시트에서 찾을 수 없습니다."
+
+            template_sheet_id = template_sheet['sheetId']
+
+            # 새 탭명 결정 (중복 시 _2, _3...)
+            base_name = brand_name.strip()
+            new_tab_name = base_name
+            counter = 2
+            while new_tab_name in existing_tabs:
+                new_tab_name = f"{base_name}_{counter}"
+                counter += 1
+
+            # 4) 인수인계 탭을 복제해서 새 탭 만들기 (인수인계 바로 오른쪽에 배치)
+            duplicate_req = {
+                'duplicateSheet': {
+                    'sourceSheetId': template_sheet_id,
+                    'newSheetName': new_tab_name,
+                    'insertSheetIndex': template_sheet_index + 1,
+                }
+            }
+            dup_result = service.spreadsheets().batchUpdate(
+                spreadsheetId=self.SILCH_SHEET_ID,
+                body={'requests': [duplicate_req]}
+            ).execute()
+            print(f"✅ 실측시트 새 탭 생성: {new_tab_name} (인수인계 오른쪽)")
+
+            # 5) 데이터 기입
+            # 시트 구조: 1행=타이틀("실측 전달"), 2행=컬럼헤더, 3행부터=데이터
+            # A=순번 / B=날짜 / C=브랜드 / D=바코드 / E=비고
+            # 순번(A)은 인수인계 양식에 이미 1,2,3,...로 박혀있어서 그대로 둠.
+            # B,C,D만 update.
+            from datetime import datetime, timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+            today = datetime.now(kst).strftime('%Y-%m-%d')
+
+            rows = []
+            for bc in zz_barcodes:
+                rows.append([today, base_name, bc])  # B/C/D 컬럼 데이터
+
+            # B3부터 시작 (데이터 첫 줄)
+            range_str = f"'{new_tab_name}'!B3:D{2 + len(rows)}"
+            service.spreadsheets().values().update(
+                spreadsheetId=self.SILCH_SHEET_ID,
+                range=range_str,
+                valueInputOption='USER_ENTERED',
+                body={'values': rows}
+            ).execute()
+
+            return True, f"{len(zz_barcodes)}건 → '{new_tab_name}' 탭"
+        except Exception as e:
+            import traceback
+            print(f"❌ 실측시트 저장 오류: {e}")
             print(traceback.format_exc())
             return False, str(e)
 
@@ -9513,11 +9869,11 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         stats_row.pack(side="right")
 
         def make_stat_card(parent, label, color):
-            box = tk.Frame(parent, bg="white", padx=14, pady=4)
-            box.pack(side="left", padx=4)
+            box = tk.Frame(parent, bg="white", padx=7, pady=2)
+            box.pack(side="left", padx=2)
             lbl = tk.Label(box, text=label, font=("맑은 고딕", 8), bg="white", fg="#888")
             lbl.pack()
-            val = tk.Label(box, text="-", font=("맑은 고딕", 14, "bold"), bg="white", fg=color)
+            val = tk.Label(box, text="-", font=("맑은 고딕", 12, "bold"), bg="white", fg=color)
             val.pack()
             return val
 
@@ -9525,6 +9881,34 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         stat_done = make_stat_card(stats_row, "완료", "#10B981")
         stat_partial = make_stat_card(stats_row, "진행중", "#F59E0B")
         stat_pending = make_stat_card(stats_row, "미스캔", "#9CA3AF")
+
+        # 새로고침 버튼 (RTDB에서 마스터 다시 가져옴)
+        def refresh_master():
+            """RTDB에서 최신 마스터 다시 fetch + 화면 갱신"""
+            refresh_btn.config(state="disabled", text="🔄 새로고침 중...")
+            win.update()
+            try:
+                items_ref = self._rtdb_ref(f"stocktake_data/{session_id}/items")
+                fresh_items = items_ref.get() or {}
+                state["items"] = fresh_items
+                update_progress()
+                render_items_table()
+                show_copy_toast(f"🔄 새로고침 완료 ({len(fresh_items):,}건)")
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("새로고침 실패", str(e), parent=win)
+            finally:
+                refresh_btn.config(state="normal", text="🔄 새로고침")
+
+        refresh_btn = tk.Button(stats_row, text="🔄 새로고침",
+                                command=refresh_master,
+                                bg="#3B82F6", fg="white",
+                                activebackground="#2563EB",
+                                font=("맑은 고딕", 9, "bold"),
+                                bd=0, relief="flat",
+                                padx=8, pady=4, cursor="hand2")
+        refresh_btn.pack(side="left", padx=(8, 2))
 
         # 진행률 바
         bar_frame = tk.Frame(header, bg="#E5E7EB", height=10)
@@ -9577,6 +9961,13 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                   cursor="hand2", activebackground="#059669",
                                   command=lambda: on_tree_complete_selected())
         complete_btn.pack(side="right", padx=(4, 0))
+        undo_btn = tk.Button(filter_row, text="➖ -1 되돌리기",
+                              bg="#F59E0B", fg="white",
+                              font=("맑은 고딕", 9, "bold"),
+                              bd=0, relief="flat", padx=10, pady=3,
+                              cursor="hand2", activebackground="#D97706",
+                              command=lambda: on_tree_undo_scan_one())
+        undo_btn.pack(side="right", padx=(4, 0))
         delete_btn = tk.Button(filter_row, text="🗑️ 선택 항목 삭제",
                                 bg="#DC2626", fg="white",
                                 font=("맑은 고딕", 9, "bold"),
@@ -9863,11 +10254,109 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 print(traceback.format_exc())
                 messagebox.showerror("삭제 실패", f"{e}", parent=win)
 
+        def on_tree_undo_scan_one():
+            """선택된 항목들의 스캔을 1개씩 되돌리기 (더블 스캔 회수용).
+            remaining +1, 단 qty 초과 못 함."""
+            sel = tree.selection()
+            if not sel:
+                messagebox.showinfo("선택 없음",
+                    "되돌릴 항목을 먼저 선택하세요.\n(Ctrl+클릭 또는 Shift+클릭으로 다중 선택)",
+                    parent=win)
+                return
+
+            # state["items"]에 실제 있는 것만 + 되돌릴 여지 있는 것만
+            targets = []
+            skipped_max = []  # 이미 qty 꽉 차서 못 늘림
+            for iid in sel:
+                it = state["items"].get(iid)
+                if not it:
+                    continue
+                qty = it.get("qty", 0)
+                remaining = it.get("remaining", 0)
+                if remaining >= qty:
+                    # 이미 한 번도 스캔 안 된 상태 - 되돌릴 게 없음
+                    skipped_max.append(it)
+                    continue
+                targets.append((iid, it))
+
+            if not targets:
+                if skipped_max:
+                    messagebox.showinfo("되돌릴 항목 없음",
+                        f"선택한 {len(skipped_max)}건 모두 이미 미스캔(remaining=qty) 상태입니다.\n되돌릴 스캔이 없습니다.",
+                        parent=win)
+                else:
+                    messagebox.showinfo("대상 없음", "선택한 항목이 마스터에 없습니다.", parent=win)
+                return
+
+            # 미리보기
+            preview = "\n".join([
+                f"  • {it.get('loc','')} / {it.get('bc','')} "
+                f"(남음 {it.get('remaining',0)} → {it.get('remaining',0)+1})"
+                for iid, it in targets[:5]
+            ])
+            if len(targets) > 5:
+                preview += f"\n  ... 외 {len(targets)-5}개"
+
+            skip_note = ""
+            if skipped_max:
+                skip_note = f"\n\n⚠️ {len(skipped_max)}건은 이미 미스캔 상태라 건너뜁니다."
+
+            if not messagebox.askyesno("➖ 스캔 1개 되돌리기",
+                    f"선택한 {len(targets)}건의 스캔을 1개씩 되돌립니다.\n"
+                    f"(remaining을 +1, 즉 미스캔으로 1개 복원)\n\n"
+                    f"{preview}{skip_note}\n\n"
+                    f"진행할까요?", parent=win):
+                return
+
+            # 실행
+            try:
+                ts_ms = int(datetime.now().timestamp() * 1000)
+                correction_log_ref = self._rtdb_ref(f"stocktake_data/{session_id}/correction_log")
+                applied_log = []
+
+                for key, it in targets:
+                    new_remaining = it.get("remaining", 0) + 1
+                    new_remaining = min(new_remaining, it.get("qty", 0))  # 안전장치
+                    self._rtdb_ref(f"stocktake_data/{session_id}/items/{key}").update({
+                        "remaining": new_remaining
+                    })
+                    state["items"][key]["remaining"] = new_remaining
+                    applied_log.append({
+                        "loc": it.get("loc", ""),
+                        "bc": it.get("bc", ""),
+                        "from": it.get("remaining", 0),
+                        "to": new_remaining,
+                        "ts": ts_ms,
+                        "reason": "undo_scan_one",
+                    })
+
+                if applied_log and correction_log_ref:
+                    try:
+                        updates = {}
+                        for log_item in applied_log:
+                            new_id = correction_log_ref.push().key
+                            updates[new_id] = log_item
+                        correction_log_ref.update(updates)
+                    except Exception as e:
+                        print(f"되돌리기 로그 저장 실패: {e}")
+
+                show_copy_toast(f"➖ {len(targets)}건 스캔 되돌림 (-1)")
+                update_progress()
+                render_items_table()
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("되돌리기 실패", f"{e}", parent=win)
+
         # 우클릭 메뉴
         ctx_menu = tk.Menu(win, tearoff=0, font=("맑은 고딕", 9))
         ctx_menu.add_command(
             label="✅ 선택 항목 완료 처리",
             command=on_tree_complete_selected
+        )
+        ctx_menu.add_command(
+            label="➖ 스캔 1개 되돌리기 (더블스캔 회수)",
+            command=on_tree_undo_scan_one
         )
         ctx_menu.add_separator()
         ctx_menu.add_command(
