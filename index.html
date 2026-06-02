@@ -3489,6 +3489,60 @@
         console.log('✅ PDA 스캐너 입력 활성화 (document-level, 키보드 안 뜸)');
     }
 
+    // ─── 한글 자모 → 영문 자판 위치 매핑 (두벌식 KS표준 기준) ─────────
+    // 블루투스 스캐너가 iOS에서 한글 모드로 잡힐 때 한글 자모로 들어오는 문제 우회.
+    // 영문 키 위치 그대로 복원 (실제 바코드는 영문/숫자이므로 깨질 일 없음).
+    const HANGUL_TO_EN = {
+        // 소문자 자리
+        'ㅂ':'q','ㅈ':'w','ㄷ':'e','ㄱ':'r','ㅅ':'t','ㅛ':'y','ㅕ':'u','ㅑ':'i','ㅐ':'o','ㅔ':'p',
+        'ㅁ':'a','ㄴ':'s','ㅇ':'d','ㄹ':'f','ㅎ':'g','ㅗ':'h','ㅓ':'j','ㅏ':'k','ㅣ':'l',
+        'ㅋ':'z','ㅌ':'x','ㅊ':'c','ㅍ':'v','ㅠ':'b','ㅜ':'n','ㅡ':'m',
+        // 대문자 자리 (Shift)
+        'ㅃ':'Q','ㅉ':'W','ㄸ':'E','ㄲ':'R','ㅆ':'T','ㅒ':'O','ㅖ':'P',
+    };
+
+    // 완성형 한글까지 처리하려면 분해 필요한데, 스캐너는 보통 자모 그대로 흘리거나
+    // 완성형으로 합쳐서 보냄. 완성형도 대응: 가장 가까운 영문키로 복원 시도.
+    // 완성형 한글의 초성/중성/종성을 분해 후 각 자모를 영문으로 매핑.
+    function decomposeHangul(ch) {
+        const code = ch.charCodeAt(0);
+        if (code < 0xAC00 || code > 0xD7A3) return null;  // 완성형 한글 범위 밖
+        const idx = code - 0xAC00;
+        const CHO = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
+        const JUNG = ['ㅏ','ㅐ','ㅑ','ㅒ','ㅓ','ㅔ','ㅕ','ㅖ','ㅗ','ㅘ','ㅙ','ㅚ','ㅛ','ㅜ','ㅝ','ㅞ','ㅟ','ㅠ','ㅡ','ㅢ','ㅣ'];
+        const JONG = ['','ㄱ','ㄲ','ㄳ','ㄴ','ㄵ','ㄶ','ㄷ','ㄹ','ㄺ','ㄻ','ㄼ','ㄽ','ㄾ','ㄿ','ㅀ','ㅁ','ㅂ','ㅄ','ㅅ','ㅆ','ㅇ','ㅈ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
+        const c = Math.floor(idx / (21 * 28));
+        const j = Math.floor((idx % (21 * 28)) / 28);
+        const t = idx % 28;
+        return CHO[c] + JUNG[j] + JONG[t];
+    }
+
+    function koreanToEnglishKeyboard(text) {
+        if (!text) return text;
+        // 빠른 검사: 한글 문자가 하나도 없으면 그대로 반환 (성능)
+        if (!/[\u3131-\u318E\uAC00-\uD7A3]/.test(text)) return text;
+
+        let result = '';
+        for (const ch of text) {
+            // 1) 자모(ㄱ~ㅣ) 직접 매핑
+            if (HANGUL_TO_EN[ch]) {
+                result += HANGUL_TO_EN[ch];
+                continue;
+            }
+            // 2) 완성형 한글이면 분해 후 각 자모 변환
+            const decomposed = decomposeHangul(ch);
+            if (decomposed) {
+                for (const dch of decomposed) {
+                    result += HANGUL_TO_EN[dch] || dch;
+                }
+                continue;
+            }
+            // 3) 그 외 문자는 그대로
+            result += ch;
+        }
+        return result;
+    }
+
     // ─── 스캔 분기 처리 ─────────────────────────
     // 입력값이 로케 패턴이면 로케 등록, 아니면 바코드로 처리
     // fromPda: true면 PDA로 들어온 값 (역순 보정 적용 대상)
@@ -3497,6 +3551,14 @@
         if (!raw) return;
         let value = raw.trim();
         if (!value) return;
+
+        // [한영 자동 변환] iOS 블루투스 스캐너에서 한글로 들어오는 경우 영문으로 복원
+        // 한글이 없으면 그대로 통과되므로 정상 입력엔 영향 없음
+        const beforeHan = value;
+        value = koreanToEnglishKeyboard(value);
+        if (beforeHan !== value) {
+            console.log('[한영변환]', beforeHan, '→', value);
+        }
 
         // [역순 보정] PDA가 바코드를 거꾸로 출력하는 경우 자동 뒤집기
         // - 로케 바코드(AA-00-00-00 패턴)는 뒤집으면 깨지므로 제외
