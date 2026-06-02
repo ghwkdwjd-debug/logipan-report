@@ -3380,9 +3380,19 @@
         if (!scanSection || scanSection.style.display === 'none') return;
 
         // 사용자가 input/textarea에 포커스 두고 직접 타이핑 중이면 무시
-        // (그 input의 자체 keydown 핸들러가 처리)
+        // 단, 작업명/로케 input은 PDA 입력을 가로채면 안 되므로 자동으로 포커스 해제
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+            // 작업명/로케 input에 포커스가 자동으로 잡혀버려서 PDA가 안 먹는 문제 우회.
+            // 수동입력 input은 작업자가 의도적으로 키보드 입력 중이라 무시 그대로.
+            const id = active.id || '';
+            if (id === 'scan-label' || id === 'scan-loc-input') {
+                active.blur();
+                // 이 키 이벤트는 input이 먹었을 수 있으니 이번 키는 버리고
+                // 다음 키부터 정상 PDA 처리. 한 글자 정도 손실은 안 일어남
+                // (PDA가 보통 첫 키 보내고 다음 키 사이에 ms 단위 텀 있음).
+                return;
+            }
             return;
         }
 
