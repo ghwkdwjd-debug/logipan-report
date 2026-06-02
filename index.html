@@ -847,13 +847,17 @@
         <!-- ═══════════ 📥 입고 모드 UI ═══════════ -->
         <div id="inbound-mode-ui">
 
-        <!-- 작업명 -->
+        <!-- 작업명 (input 대신 박스 - 누르면 prompt로 입력) -->
         <label>📌 작업명</label>
-        <div style="display:flex; gap:6px;">
-            <input type="text" id="scan-label" placeholder="예: ADIDAS26_3월1주차" style="flex:1;">
-            <button type="button" onclick="document.getElementById('scan-label').blur(); document.activeElement.blur();"
-                    style="padding:0 14px; background:#10B981; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">✅</button>
+        <div id="scan-label-box"
+             onclick="promptScanLabel()"
+             style="padding:12px; background:#f0f2f5; border-radius:8px; cursor:pointer;
+                    font-size:14px; min-height:42px; display:flex; align-items:center;
+                    border:1px dashed #cbd5e1; color:#64748b;">
+            (탭해서 작업명 입력)
         </div>
+        <!-- scan-label input은 호환성용 hidden으로 유지 (다른 코드에서 .value 읽음) -->
+        <input type="hidden" id="scan-label" value="">
 
         <!-- 현재 로케이션 (스캐너 또는 수동 입력 후 Enter) -->
         <!-- [숨김] 로케 input - PDA 스캔이 자동 포커스 잡혀버려서 처리가 안 되는 문제 있어서 숨김.
@@ -3896,6 +3900,30 @@
     }
 
     // ─── 전송 (Firestore) ─────────────────────────
+    // 작업명 입력 - prompt로 받음 (화면 input 없애서 PDA 입력 방해 안 함)
+    function promptScanLabel() {
+        const current = (document.getElementById('scan-label').value || '').trim();
+        const v = window.prompt('📌 작업명을 입력하세요\n(예: ADIDAS26_3월1주차)', current);
+        if (v === null) return;  // 취소
+        const trimmed = v.trim();
+        document.getElementById('scan-label').value = trimmed;
+        const box = document.getElementById('scan-label-box');
+        if (box) {
+            if (trimmed) {
+                box.textContent = trimmed;
+                box.style.color = '#1f2937';
+                box.style.fontWeight = 'bold';
+                box.style.borderStyle = 'solid';
+            } else {
+                box.textContent = '(탭해서 작업명 입력)';
+                box.style.color = '#64748b';
+                box.style.fontWeight = 'normal';
+                box.style.borderStyle = 'dashed';
+            }
+        }
+        if (typeof saveScanDraft === 'function') saveScanDraft();
+    }
+
     async function sendScanSession() {
         const name = localStorage.getItem("logipan_user_name");
         if (!name) {
