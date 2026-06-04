@@ -611,7 +611,7 @@ class JiraIntegrationMixin:
                         'jql': jql,
                         'maxResults': max_results,
                         'fields': ['summary', 'status', 'assignee', 'reporter',
-                                    'created', 'updated', 'description'],
+                                    'created', 'updated', 'description', 'attachment'],
                     }
                     body_bytes = json.dumps(body).encode('utf-8')
 
@@ -633,6 +633,18 @@ class JiraIntegrationMixin:
                         desc_raw = fields.get('description')
                         desc_text = self._extract_description_text(desc_raw)
 
+                        # 첨부파일 파싱
+                        attachments = []
+                        for att in (fields.get('attachment') or []):
+                            attachments.append({
+                                'id': att.get('id', ''),
+                                'filename': att.get('filename', ''),
+                                'size': att.get('size', 0),
+                                'mimeType': att.get('mimeType', ''),
+                                'content': att.get('content', ''),  # 다운로드 URL
+                                'created': att.get('created', ''),
+                            })
+
                         results.append({
                             'key': issue.get('key'),
                             'summary': fields.get('summary', ''),
@@ -640,9 +652,11 @@ class JiraIntegrationMixin:
                             'assignee': (assignee.get('displayName') if assignee else None),
                             'assignee_id': (assignee.get('accountId') or assignee.get('name')) if assignee else None,
                             'reporter': (reporter.get('displayName') if reporter else None),
+                            'reporter_id': (reporter.get('accountId') or reporter.get('name')) if reporter else None,
                             'created': fields.get('created', ''),
                             'updated': fields.get('updated', ''),
                             'description': desc_text,
+                            'attachments': attachments,
                             'url': f"https://{domain}/browse/{issue.get('key')}",
                         })
                     return True, results
@@ -664,6 +678,39 @@ class JiraIntegrationMixin:
         except Exception as e:
             import traceback
             print(traceback.format_exc())
+            return False, str(e)
+
+    # ─────────────────────────────────────────────────────────────
+    # [추가] Jira 첨부파일 다운로드
+    # ─────────────────────────────────────────────────────────────
+    def download_jira_attachment(self, content_url, save_path):
+        """Jira 첨부파일 다운로드.
+        content_url: attachment의 'content' URL
+        save_path: 저장할 로컬 경로
+        Returns: (성공여부, 메시지)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64
+            import urllib.request, urllib.error
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            req = urllib.request.Request(content_url, headers={
+                'Authorization': auth_header,
+            }, method='GET')
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                with open(save_path, 'wb') as f:
+                    f.write(resp.read())
+            return True, save_path
+        except Exception as e:
             return False, str(e)
 
     def _extract_description_text(self, desc):
@@ -692,3 +739,311 @@ class JiraIntegrationMixin:
             _walk(desc)
             return ''.join(texts).strip()
         return str(desc)
+
+    # ─────────────────────────────────────────────────────────────
+    # [추가] Jira 티켓 댓글 추가
+    # ─────────────────────────────────────────────────────────────
+    def update_jira_description(self, issue_key, new_description):
+        """Jira 티켓 본문(description) 수정.
+        Returns: (성공여부, 메시지)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            last_error = ""
+            for api_v in ['3', '2']:
+                try:
+                    url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}"
+                    if api_v == '3':
+                        body = {"fields": {"description": {
+                            "type": "doc", "version": 1,
+                            "content": [{"type": "paragraph",
+                                         "content": [{"type": "text", "text": new_description}]}]
+                        }}}
+                    else:
+                        body = {"fields": {"description": new_description}}
+                    body_bytes = json.dumps(body).encode('utf-8')
+                    req = urllib.request.Request(url, data=body_bytes, headers={
+                        'Authorization': auth_header,
+                        'Content-Type': 'application/json',
+                    }, method='PUT')
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        return True, "본문 수정 완료"
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}"
+                    try: last_error += f": {e.read().decode()[:200]}"
+                    except: pass
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
+
+    def add_jira_comment(self, issue_key, comment_text):
+        """Jira 티켓에 댓글 추가.
+        Returns: (성공여부, 메시지)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            last_error = ""
+            for api_v in ['3', '2']:
+                try:
+                    url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}/comment"
+                    if api_v == '3':
+                        body = {
+                            "body": {
+                                "type": "doc", "version": 1,
+                                "content": [{"type": "paragraph",
+                                             "content": [{"type": "text", "text": comment_text}]}]
+                            }
+                        }
+                    else:
+                        body = {"body": comment_text}
+                    body_bytes = json.dumps(body).encode('utf-8')
+                    req = urllib.request.Request(url, data=body_bytes, headers={
+                        'Authorization': auth_header,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    }, method='POST')
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        return True, "댓글 등록 완료"
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}"
+                    try: last_error += f": {e.read().decode()[:200]}"
+                    except: pass
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
+
+    # ─────────────────────────────────────────────────────────────
+    # [추가] Jira 티켓 상태 전환 (완료 처리 등)
+    # ─────────────────────────────────────────────────────────────
+    def get_jira_transitions(self, issue_key):
+        """티켓의 가능한 상태 전환 목록 조회.
+        Returns: (성공여부, [{'id': '31', 'name': '완료'}, ...] 또는 에러메시지)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            last_error = ""
+            for api_v in ['3', '2']:
+                try:
+                    url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}/transitions"
+                    req = urllib.request.Request(url, headers={
+                        'Authorization': auth_header,
+                        'Accept': 'application/json',
+                    }, method='GET')
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        data = json.loads(resp.read().decode())
+                    transitions = [
+                        {'id': t['id'], 'name': t.get('name', '')}
+                        for t in data.get('transitions', [])
+                    ]
+                    return True, transitions
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}"
+                    try: last_error += f": {e.read().decode()[:200]}"
+                    except: pass
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
+
+    def transition_jira_ticket(self, issue_key, transition_id):
+        """Jira 티켓 상태 전환 실행.
+        Returns: (성공여부, 메시지)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            last_error = ""
+            for api_v in ['3', '2']:
+                try:
+                    url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}/transitions"
+                    body = {"transition": {"id": str(transition_id)}}
+                    body_bytes = json.dumps(body).encode('utf-8')
+                    req = urllib.request.Request(url, data=body_bytes, headers={
+                        'Authorization': auth_header,
+                        'Content-Type': 'application/json',
+                    }, method='POST')
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        return True, "상태 변경 완료"
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}"
+                    try: last_error += f": {e.read().decode()[:200]}"
+                    except: pass
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
+
+    # ─────────────────────────────────────────────────────────────
+    # [추가] Jira 티켓 담당자 지정
+    # ─────────────────────────────────────────────────────────────
+    def assign_jira_ticket(self, issue_key, account_id):
+        """Jira 티켓 담당자 변경.
+        account_id: Jira accountId 또는 username (Server)
+        Returns: (성공여부, 메시지)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            last_error = ""
+            for api_v in ['3', '2']:
+                try:
+                    url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}/assignee"
+                    body = {"accountId": account_id}
+                    body_bytes = json.dumps(body).encode('utf-8')
+                    req = urllib.request.Request(url, data=body_bytes, headers={
+                        'Authorization': auth_header,
+                        'Content-Type': 'application/json',
+                    }, method='PUT')
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        return True, "담당자 변경 완료"
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}"
+                    try: last_error += f": {e.read().decode()[:200]}"
+                    except: pass
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
+
+    # ─────────────────────────────────────────────────────────────
+    # [추가] Jira 사용자 검색 (담당자 지정용)
+    # ─────────────────────────────────────────────────────────────
+    def search_jira_users(self, query, max_results=10):
+        """Jira 사용자 검색.
+        query: 이름 또는 이메일 일부
+        Returns: (성공여부, [{'accountId': '...', 'displayName': '...', 'email': '...'}, ...] 또는 에러)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error, urllib.parse
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            last_error = ""
+            # Cloud: /rest/api/3/user/search?query=...
+            # Server: /rest/api/2/user/search?username=...
+            endpoints = [
+                ('3', f"https://{domain}/rest/api/3/user/search?query={urllib.parse.quote(query)}&maxResults={max_results}"),
+                ('2', f"https://{domain}/rest/api/2/user/search?username={urllib.parse.quote(query)}&maxResults={max_results}"),
+            ]
+            for api_v, url in endpoints:
+                try:
+                    req = urllib.request.Request(url, headers={
+                        'Authorization': auth_header,
+                        'Accept': 'application/json',
+                    }, method='GET')
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = json.loads(resp.read().decode())
+                    users = []
+                    for u in data:
+                        users.append({
+                            'accountId': u.get('accountId') or u.get('name', ''),
+                            'displayName': u.get('displayName', ''),
+                            'email': u.get('emailAddress', ''),
+                        })
+                    return True, users
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}"
+                    try: last_error += f": {e.read().decode()[:200]}"
+                    except: pass
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
