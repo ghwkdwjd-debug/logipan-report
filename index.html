@@ -709,6 +709,27 @@
             cursor: pointer; margin-top: 12px;
         }
         .send-btn:disabled { background: #ccc; cursor: not-allowed; }
+
+        /* 거래 유형 버튼 */
+        .trade-type-btn {
+            flex: 1;
+            padding: 12px 8px;
+            background: #f0f2f5;
+            color: #475569;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .trade-type-btn:hover { background: #e2e8f0; }
+        .trade-type-btn.active {
+            background: #1877F2;
+            color: white;
+            border-color: #1554b0;
+            box-shadow: 0 2px 6px rgba(24,119,242,0.3);
+        }
         .clear-btn {
             width: 100%; padding: 12px; background: white; color: #DC2626;
             border: 1px solid #DC2626; border-radius: 10px; font-size: 14px;
@@ -846,6 +867,20 @@
 
         <!-- ═══════════ 📥 입고 모드 UI ═══════════ -->
         <div id="inbound-mode-ui">
+
+        <!-- 거래 유형 (매입/위탁/반납/기타) - 작업명 입력 전에 선택 -->
+        <label>📑 거래 유형</label>
+        <div id="scan-trade-type-row" style="display:flex; gap:6px; margin-bottom:8px;">
+            <button type="button" class="trade-type-btn" data-type="매입"
+                    onclick="selectTradeType('매입')">매입</button>
+            <button type="button" class="trade-type-btn" data-type="위탁"
+                    onclick="selectTradeType('위탁')">위탁</button>
+            <button type="button" class="trade-type-btn" data-type="반납"
+                    onclick="selectTradeType('반납')">반납</button>
+            <button type="button" class="trade-type-btn" data-type="기타"
+                    onclick="selectTradeType('기타')">기타</button>
+        </div>
+        <input type="hidden" id="scan-trade-type" value="">
 
         <!-- 작업명 (input 대신 박스 - 누르면 prompt로 입력) -->
         <label>📌 작업명</label>
@@ -2156,6 +2191,7 @@
     let scanState = {
         mode: 'inbound',        // inbound | move | audit
         label: '',
+        tradeType: '',          // 매입 | 위탁 | 반납 | 기타 (입고 모드용)
         currentLoc: '',         // 입고/조사용 현재 로케
         fromLoc: '',            // 재고이동: 출발
         toLoc: '',              // 재고이동: 도착
@@ -3339,6 +3375,22 @@
                 scanState = Object.assign(scanState, obj);
                 // UI 반영
                 document.getElementById('scan-label').value = scanState.label || '';
+                // 작업명 박스 UI 복원
+                const labelBox = document.getElementById('scan-label-box');
+                if (labelBox && scanState.label) {
+                    labelBox.textContent = scanState.label;
+                    labelBox.style.color = '#1f2937';
+                    labelBox.style.fontWeight = 'bold';
+                    labelBox.style.borderStyle = 'solid';
+                }
+                // 거래 유형 UI 복원
+                if (scanState.tradeType) {
+                    const ttInput = document.getElementById('scan-trade-type');
+                    if (ttInput) ttInput.value = scanState.tradeType;
+                    document.querySelectorAll('.trade-type-btn').forEach(btn => {
+                        btn.classList.toggle('active', btn.dataset.type === scanState.tradeType);
+                    });
+                }
                 if (scanState.currentLoc) {
                     updateLocUI(scanState.currentLoc);
                 }
@@ -3896,6 +3948,22 @@
     }
 
     // ─── 전송 (Firestore) ─────────────────────────
+    // 거래 유형 선택 (매입/위탁/반납/기타)
+    function selectTradeType(type) {
+        document.getElementById('scan-trade-type').value = type;
+        scanState.tradeType = type;
+        document.querySelectorAll('.trade-type-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.type === type);
+        });
+        if (typeof saveScanDraft === 'function') saveScanDraft();
+        // PDA 모드 진입 위해 포커스 해제
+        setTimeout(() => {
+            if (document.activeElement && document.activeElement.blur) {
+                document.activeElement.blur();
+            }
+        }, 50);
+    }
+
     // 작업명 입력 - prompt로 받음 (화면 input 없애서 PDA 입력 방해 안 함)
     function promptScanLabel() {
         const current = (document.getElementById('scan-label').value || '').trim();
@@ -3903,6 +3971,7 @@
         if (v === null) return;  // 취소
         const trimmed = v.trim();
         document.getElementById('scan-label').value = trimmed;
+        scanState.label = trimmed;
         const box = document.getElementById('scan-label-box');
         if (box) {
             if (trimmed) {
@@ -3947,6 +4016,11 @@
             feedbackError("작업명을 입력하세요");
             return;
         }
+        const tradeType = (document.getElementById('scan-trade-type').value || '').trim();
+        if (!tradeType) {
+            feedbackError("거래 유형을 선택하세요 (매입/위탁/반납/기타)");
+            return;
+        }
 
         const sendBtn = document.getElementById('scan-send-btn');
         const originalText = sendBtn.innerText;
@@ -3959,6 +4033,7 @@
                 user: name,
                 mode: scanState.mode,
                 label: label,
+                trade_type: tradeType,
                 items: scanState.items.map(it => ({
                     barcode: it.barcode,
                     qty: it.qty,
@@ -3971,14 +4046,14 @@
             });
 
             // 2) field_reports에 카드 생성 (LogiPan에서 보이도록)
-            //    LogiPan은 source==='scan'인 field_reports 카드에 '📥 입고탭으로 보내기' 버튼을 붙임
+            //    제목 형식: [매입] ADIDAS26_3월1주차 (입고스캔)
             const totalBoxes = scanState.items.length;
             const totalQty = scanState.items.reduce((s, it) => s + (it.qty || 1), 0);
             await db.collection("field_reports").add({
                 user: name,
-                title: `[입고스캔] ${label}`,
+                title: `[${tradeType}] ${label} (입고스캔)`,
                 work_category: '입고',
-                text: `PWA 스캔 ${totalBoxes}건 / 총 ${totalQty}개`,
+                text: `[${tradeType}] PWA 스캔 ${totalBoxes}건 / 총 ${totalQty}개`,
                 date: getFormattedDate(),
                 imageUrl: '',
                 status: "⏳ 처리중",
@@ -3998,8 +4073,19 @@
             // 초기화
             scanState.items = [];
             scanState.label = '';
+            scanState.tradeType = '';
             scanState.currentLoc = '';
             document.getElementById('scan-label').value = '';
+            document.getElementById('scan-trade-type').value = '';
+            document.querySelectorAll('.trade-type-btn').forEach(btn => btn.classList.remove('active'));
+            // 작업명 박스도 placeholder 상태로
+            const labelBox = document.getElementById('scan-label-box');
+            if (labelBox) {
+                labelBox.textContent = '(탭해서 작업명 입력)';
+                labelBox.style.color = '#64748b';
+                labelBox.style.fontWeight = 'normal';
+                labelBox.style.borderStyle = 'dashed';
+            }
             updateLocUI('');
             updatePdaLocDisplay('');
             updatePdaCounters();
