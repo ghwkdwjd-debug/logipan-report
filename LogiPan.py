@@ -918,9 +918,6 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         make_modern_btn(action_outer, "🎫  Jira 상신",
                          bg="#8B5CF6", hover_bg="#7C3AED",
                          command=self.save_csv_with_jira)
-        make_modern_btn(action_outer, "🧪 스캔이력 테스트",
-                         bg="#0EA5E9", hover_bg="#0284C7",
-                         command=self.test_scan_archive_only)
 
         # ========== [📝 리포트 카드 - 하단 (버튼 위)] ==========
         report_card_outer = tk.Frame(container, bg="#F5F6F8")
