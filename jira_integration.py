@@ -538,3 +538,157 @@ class JiraIntegrationMixin:
         }, method='POST')
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read()
+
+    # ─────────────────────────────────────────────────────────────
+    # [추가] Jira 티켓 검색 - [출고] 같은 prefix로 필터링해서 조회
+    # ─────────────────────────────────────────────────────────────
+    def search_jira_tickets(self, prefix="[출고]", project_key=None, max_results=50, status_filter=None):
+        """JQL로 Jira 티켓 검색.
+        - prefix: summary에 포함된 prefix (예: "[출고]")
+        - project_key: 프로젝트 키 (None이면 설정값 사용)
+        - max_results: 최대 가져올 개수
+        - status_filter: ["미해결", "처리중"] 같은 상태 필터 (None이면 전체)
+
+        Returns: (성공여부, 결과리스트 또는 에러메시지)
+            결과 항목: {
+                'key': 'PROJ-123',
+                'summary': '[출고] 매장명 ...',
+                'status': '처리중',
+                'assignee': '담당자명' or None,
+                'reporter': '작성자명',
+                'created': '2026-06-04T10:30:00.000+0900',
+                'updated': '...',
+                'description': '본문 텍스트',
+                'url': 'https://domain/browse/PROJ-123',
+            }
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled", False):
+            return False, "Jira 비활성화됨"
+
+        try:
+            import base64, json
+            import urllib.request, urllib.parse, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+            project = project_key or cfg.get("project_key", "")
+            if not project:
+                return False, "프로젝트 키가 설정되지 않았습니다."
+
+            # JQL 조립
+            # 대괄호 "[출고]"는 JQL 텍스트 검색에서 특수문자 취급되어 까다로움.
+            # → 대괄호 빼고 "출고"로 검색 (어차피 [출고] 포함하는 티켓이 매칭됨)
+            jql_parts = [f'project = "{project}"']
+            if prefix:
+                # [출고] → 출고 만 추출 (대괄호 떼기)
+                safe_text = prefix.replace('[', '').replace(']', '').replace('"', '\\"').strip()
+                if safe_text:
+                    jql_parts.append(f'summary ~ "{safe_text}"')
+            if status_filter:
+                statuses = ', '.join(f'"{s}"' for s in status_filter)
+                jql_parts.append(f'status in ({statuses})')
+            jql_body = ' AND '.join(jql_parts)
+            jql = jql_body + ' ORDER BY created DESC'
+
+            # 인증 헤더 - Basic만 사용 (Cloud는 Bearer 거부)
+            # email 없으면 token만 (Server 환경)
+            if email:
+                auth_str = f"{email}:{token}"
+                auth_b64 = base64.b64encode(auth_str.encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            # API v3는 /search/jql (신규), v2는 /search (구형 호환)
+            api_candidates = [('3', 'search/jql'), ('2', 'search')]
+            last_error = ""
+
+            for api_v, search_path in api_candidates:
+                try:
+                    search_url = f"https://{domain}/rest/api/{api_v}/{search_path}"
+                    body = {
+                        'jql': jql,
+                        'maxResults': max_results,
+                        'fields': ['summary', 'status', 'assignee', 'reporter',
+                                    'created', 'updated', 'description'],
+                    }
+                    body_bytes = json.dumps(body).encode('utf-8')
+
+                    req = urllib.request.Request(search_url, data=body_bytes, headers={
+                        'Authorization': auth_header,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                    }, method='POST')
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        data = json.loads(resp.read().decode())
+
+                    results = []
+                    for issue in data.get('issues', []):
+                        fields = issue.get('fields', {})
+                        assignee = fields.get('assignee')
+                        reporter = fields.get('reporter')
+                        status = fields.get('status', {})
+
+                        desc_raw = fields.get('description')
+                        desc_text = self._extract_description_text(desc_raw)
+
+                        results.append({
+                            'key': issue.get('key'),
+                            'summary': fields.get('summary', ''),
+                            'status': status.get('name', '') if status else '',
+                            'assignee': (assignee.get('displayName') if assignee else None),
+                            'assignee_id': (assignee.get('accountId') or assignee.get('name')) if assignee else None,
+                            'reporter': (reporter.get('displayName') if reporter else None),
+                            'created': fields.get('created', ''),
+                            'updated': fields.get('updated', ''),
+                            'description': desc_text,
+                            'url': f"https://{domain}/browse/{issue.get('key')}",
+                        })
+                    return True, results
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}: {e.reason}"
+                    try:
+                        err_body = e.read().decode()
+                        last_error += f" - {err_body[:300]}"
+                    except Exception:
+                        pass
+                    print(f"[Jira 검색] API v{api_v}/{search_path} 실패: {last_error}")
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    print(f"[Jira 검색] API v{api_v}/{search_path} 예외: {e}")
+                    continue
+
+            return False, f"검색 실패: {last_error}"
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            return False, str(e)
+
+    def _extract_description_text(self, desc):
+        """Jira description을 plain text로 변환 (API v3 ADF 또는 v2 string 둘 다 지원)"""
+        if not desc:
+            return ''
+        if isinstance(desc, str):
+            return desc
+        if isinstance(desc, dict):
+            # ADF (Atlassian Document Format) - 재귀로 text 추출
+            texts = []
+            def _walk(node):
+                if isinstance(node, dict):
+                    if node.get('type') == 'text':
+                        texts.append(node.get('text', ''))
+                    elif node.get('type') == 'hardBreak':
+                        texts.append('\n')
+                    for child in node.get('content', []) or []:
+                        _walk(child)
+                    # paragraph 끝나면 줄바꿈
+                    if node.get('type') == 'paragraph':
+                        texts.append('\n')
+                elif isinstance(node, list):
+                    for c in node:
+                        _walk(c)
+            _walk(desc)
+            return ''.join(texts).strip()
+        return str(desc)
