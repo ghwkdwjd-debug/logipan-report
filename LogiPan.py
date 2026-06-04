@@ -2959,23 +2959,25 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             return
 
         # [추가] 바코드 형식 검증 (영문/숫자 19자 또는 1-XXXXXXXXXX)
+        # 검증 대상은 '바코드' 컬럼 (상품메모1=품번은 사내 코드라 형식 별개)
         invalid_rows = []
         for idx, r in enumerate(rows, start=1):
-            품번 = (r.get('품번') or '').strip().upper()
-            if not 품번:
+            bc = (r.get('바코드') or '').strip().upper()
+            if not bc:
                 continue
-            if not self._is_valid_product_barcode(품번):
-                invalid_rows.append((idx, 품번, r.get('상품명') or r.get('상품명_상세') or '-'))
+            if not self._is_valid_product_barcode(bc):
+                invalid_rows.append((idx, bc,
+                    r.get('품번') or r.get('상품명') or r.get('상품명_상세') or '-'))
 
         if invalid_rows:
             preview = "\n".join([
-                f"  {idx}행) {bc}  ({name[:20]})"
+                f"  {idx}행) 바코드: {bc}  ({name[:20]})"
                 for idx, bc, name in invalid_rows[:10]
             ])
             if len(invalid_rows) > 10:
                 preview += f"\n  ... 외 {len(invalid_rows)-10}건"
             messagebox.showerror("⛔ 바코드 형식 오류",
-                f"마스터 등록 가능한 바코드 형식이 아닙니다.\n"
+                f"바코드 형식이 맞지 않는 행이 있습니다.\n"
                 f"수정 후 다시 시도해주세요.\n\n"
                 f"허용 형식:\n"
                 f"  · 영문(대문자)+숫자 19자  (예: SOMW261NRTS005BK000)\n"
