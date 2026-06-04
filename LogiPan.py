@@ -4628,6 +4628,34 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         self._update_chip_styles()
 
+        # ========== [스캔 병합 액션 바 - 체크된 스캔 카드 있을 때 표시] ==========
+        self._scan_card_checks = {}  # scan_session_id → {doc_id, var(BooleanVar)}
+        # wrapper는 항상 pack된 상태, 내부 bar만 show/hide
+        self._scan_merge_wrapper = tk.Frame(container, bg="#F5F6F8")
+        self._scan_merge_wrapper.pack(fill="x", padx=30, pady=(0, 0))
+
+        self._scan_merge_bar = tk.Frame(self._scan_merge_wrapper, bg="#DBEAFE",
+                                         highlightthickness=1, highlightbackground="#93C5FD")
+        # 초기에는 숨김 (pack 안 함)
+        merge_inner = tk.Frame(self._scan_merge_bar, bg="#DBEAFE", padx=12, pady=8)
+        merge_inner.pack(fill="x")
+        self._scan_merge_count_label = tk.Label(merge_inner, text="",
+                                                  font=("맑은 고딕", 10, "bold"),
+                                                  bg="#DBEAFE", fg="#1E40AF")
+        self._scan_merge_count_label.pack(side="left")
+        tk.Button(merge_inner, text="📥 합쳐서 입고탭으로",
+                  command=self._on_send_merged_scans_to_inbound,
+                  bg="#1877F2", fg="white",
+                  font=("맑은 고딕", 10, "bold"),
+                  relief="flat", padx=14, pady=5,
+                  cursor="hand2").pack(side="left", padx=(12, 0))
+        tk.Button(merge_inner, text="전체 해제",
+                  command=self._clear_scan_checks,
+                  bg="#E5E7EB", fg="#374151",
+                  font=("맑은 고딕", 9),
+                  relief="flat", padx=10, pady=5,
+                  cursor="hand2").pack(side="left", padx=(8, 0))
+
         # ========== [카드 리스트 영역 - 스크롤] ==========
         list_outer = tk.Frame(container, bg="#F5F6F8")
         list_outer.pack(side="top", expand=True, fill="both", padx=30, pady=(0, 15))
@@ -8998,6 +9026,9 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         # 1. 기존 카드 모두 제거
         for w in self.cards_frame.winfo_children():
             w.destroy()
+        # 스캔 체크 상태도 초기화
+        self._scan_card_checks.clear()
+        self._scan_merge_bar.pack_forget()
 
         try:
             search_keyword = self.search_var.get().strip().lower()
@@ -9281,7 +9312,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                          font=("맑은 고딕", 9, "bold"),
                          anchor="w", justify="left").pack(fill="x", anchor="w", pady=(2, 0))
 
-        # [추가] 스캔 카드 - "📥 입고탭으로 보내기" 버튼 (처리 안 한 거만)
+        # [추가] 스캔 카드 - 체크박스 + 버튼 (처리 안 한 거만)
         if is_scan and status != "✅ 완료":
             scan_btn_frame = tk.Frame(content, bg=card_bg)
             scan_btn_frame.pack(fill="x", anchor="w", pady=(8, 0))
@@ -9289,8 +9320,17 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             scan_session_id = data.get('scan_session_id', '')
             scan_item_count = data.get('scan_item_count', 0)
 
+            # 병합용 체크박스
+            chk_var = tk.BooleanVar(value=False)
+            chk = tk.Checkbutton(scan_btn_frame, text="선택",
+                                  variable=chk_var,
+                                  bg=card_bg, font=("맑은 고딕", 9),
+                                  command=lambda sid=scan_session_id, did=doc_id, v=chk_var:
+                                      self._on_scan_check_toggle(sid, did, v))
+            chk.pack(side="left", padx=(0, 6))
+
             send_btn = tk.Button(scan_btn_frame,
-                                  text=f"📥 입고탭으로 보내기 ({scan_item_count}개)",
+                                  text=f"📥 입고탭으로 ({scan_item_count}개)",
                                   bg="#1877F2" if scan_quality == 'normal' else "#DC2626",
                                   fg="white",
                                   font=("맑은 고딕", 9, "bold"),
@@ -9299,6 +9339,16 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                   cursor="hand2",
                                   command=lambda sid=scan_session_id, did=doc_id: self._on_send_scan_to_inbound(sid, did))
             send_btn.pack(side="left")
+
+            # 스캔 내역 미리보기 버튼
+            tk.Button(scan_btn_frame,
+                      text="📋 스캔 내역",
+                      bg="#6B7280", fg="white",
+                      font=("맑은 고딕", 9, "bold"),
+                      relief="flat", padx=10, pady=6,
+                      cursor="hand2",
+                      command=lambda sid=scan_session_id: self._preview_scan_session(sid)
+                      ).pack(side="left", padx=(6, 0))
 
         # 클릭/우클릭 이벤트 (카드 + 모든 자식 위젯에 바인딩)
         def on_click(e):
@@ -9898,6 +9948,253 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             messagebox.showerror("오류", f"스캔 데이터 로드 실패:\n{e}")
             print(f"❌ 스캔 데이터 로드 오류: {e}")
 
+
+    # ─── 스캔 병합 체크박스 관련 ───
+    def _on_scan_check_toggle(self, scan_session_id, doc_id, var):
+        """스캔 카드 체크박스 토글"""
+        if var.get():
+            self._scan_card_checks[scan_session_id] = {'doc_id': doc_id, 'var': var}
+        else:
+            self._scan_card_checks.pop(scan_session_id, None)
+        self._update_scan_merge_bar()
+
+    def _update_scan_merge_bar(self):
+        """체크된 스캔 카드 수에 따라 병합 바 표시/숨김"""
+        checked = {k: v for k, v in self._scan_card_checks.items() if v['var'].get()}
+        if len(checked) >= 1:
+            self._scan_merge_count_label.config(text=f"☑ {len(checked)}건 선택됨")
+            self._scan_merge_bar.pack(fill="x", pady=(0, 6))
+        else:
+            self._scan_merge_bar.pack_forget()
+
+    def _clear_scan_checks(self):
+        """모든 스캔 체크박스 해제"""
+        for info in self._scan_card_checks.values():
+            info['var'].set(False)
+        self._scan_card_checks.clear()
+        self._scan_merge_bar.pack_forget()
+
+    def _on_send_merged_scans_to_inbound(self):
+        """체크된 스캔 세션들을 합쳐서 입고탭으로 보내기"""
+        checked = {k: v for k, v in self._scan_card_checks.items() if v['var'].get()}
+        if not checked:
+            messagebox.showwarning("선택 없음", "스캔 카드를 선택해주세요.")
+            return
+
+        # Firestore에서 모든 선택된 세션 가져오기
+        all_items = []
+        session_ids = []
+        report_ids = []
+        workers = []
+        labels = []
+        quality = 'normal'
+        work_type = '매입'
+
+        for sid, info in checked.items():
+            try:
+                doc = self.db.collection('scan_sessions').document(sid).get()
+                if not doc.exists:
+                    print(f"세션 {sid} 없음 (스킵)")
+                    continue
+                sdata = doc.to_dict()
+                items = sdata.get('items', [])
+                all_items.extend(items)
+                session_ids.append(sid)
+                report_ids.append(info['doc_id'])
+                w = sdata.get('user', '')
+                if w and w not in workers:
+                    workers.append(w)
+                lbl = sdata.get('label', '')
+                if lbl and lbl not in labels:
+                    labels.append(lbl)
+                if sdata.get('quality') == 'defect':
+                    quality = 'defect'
+                work_type = sdata.get('work_type', work_type)
+            except Exception as e:
+                print(f"세션 {sid} 로드 실패: {e}")
+
+        if not all_items:
+            messagebox.showwarning("오류", "선택한 세션에 데이터가 없습니다.")
+            return
+
+        total = len(all_items)
+        worker_str = ', '.join(workers)
+        if not messagebox.askyesno("📥 합쳐서 입고탭으로",
+                f"선택한 {len(session_ids)}건을 합쳐서 보냅니다.\n\n"
+                f"작업자: {worker_str}\n"
+                f"총 수량: {total}개\n\n"
+                f"진행할까요?"):
+            return
+
+        # 입고 탭 전환
+        try:
+            self.nb.select(self.t_in)
+        except Exception:
+            pass
+
+        # 5열 양식 생성
+        lines = []
+        EMPTY_LOC = "00-00-00-00"
+        is_defect = (quality == 'defect')
+        for it in all_items:
+            barcode = it.get('barcode', '').strip()
+            location = it.get('location', '').strip() or EMPTY_LOC
+            qty = it.get('qty', 1)
+            if not barcode:
+                continue
+            if is_defect:
+                lines.append(f"{barcode}\t0\t{qty}\t{EMPTY_LOC}\t{location}")
+            else:
+                lines.append(f"{barcode}\t{qty}\t0\t{location}\t{EMPTY_LOC}")
+
+        scan_text = "\n".join(lines)
+
+        # 스캔 칸에 넣기 (기존 데이터 있으면 합칠지 확인)
+        try:
+            existing = self.txt_in_scan.get("1.0", tk.END).strip()
+            if existing:
+                choice = messagebox.askyesnocancel(
+                    "📥 기존 데이터 있음",
+                    f"스캔 칸에 기존 데이터가 있습니다.\n\n"
+                    f"[예] = 합치기  [아니오] = 덮어쓰기  [취소] = 중단")
+                if choice is None:
+                    return
+                if choice:
+                    self.txt_in_scan.insert(tk.END, "\n" + scan_text)
+                else:
+                    self.txt_in_scan.delete("1.0", tk.END)
+                    self.txt_in_scan.insert("1.0", scan_text)
+            else:
+                self.txt_in_scan.delete("1.0", tk.END)
+                self.txt_in_scan.insert("1.0", scan_text)
+            self.count_total_qty(self.txt_in_scan, self.lbl_in_s, "스캔 수량")
+        except Exception as e:
+            print(f"스캔 칸 입력 실패: {e}")
+
+        # _pending_scan_session 설정
+        self._pending_scan_session = {
+            'scan_session_id': session_ids[0],
+            'scan_session_ids': session_ids,
+            'report_doc_id': report_ids[0],
+            'report_doc_ids': report_ids,
+            'items': all_items,
+            'work_type': work_type,
+            'quality': quality,
+            'label': labels[0] if labels else '',
+            'labels': labels,
+            'worker': worker_str,
+            'workers': workers,
+            'item_count': total
+        }
+
+        # 배지 표시
+        try:
+            self._show_pwa_scan_badge(worker_str, labels[0] if labels else '', quality, total)
+        except Exception:
+            pass
+
+        # 체크 초기화
+        self._clear_scan_checks()
+
+        messagebox.showinfo("✅ 병합 완료",
+            f"📦 {len(session_ids)}건 합쳐서 {total}개 가져옴.\n\n"
+            f"브랜드명, 담당MD 입력 후\n"
+            f"대조 분석 → Jira 상신 또는 반품 저장 진행하세요.")
+
+    def _preview_scan_session(self, scan_session_id):
+        """스캔 세션 미리보기 팝업 - 바코드/로케/수량 표시"""
+        if not scan_session_id:
+            messagebox.showwarning("오류", "스캔 세션 ID가 없습니다.")
+            return
+        try:
+            session_doc = self.db.collection('scan_sessions').document(scan_session_id).get()
+            if not session_doc.exists:
+                messagebox.showwarning("오류", "스캔 세션이 삭제되었거나 없습니다.")
+                return
+            sdata = session_doc.to_dict()
+            items = sdata.get('items', [])
+            worker = sdata.get('user', '')
+            label = sdata.get('label', '')
+            quality = sdata.get('quality', 'normal')
+        except Exception as e:
+            messagebox.showerror("오류", f"데이터 로드 실패: {e}")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(f"📋 스캔 내역 - {label}")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 700, 520)
+        except Exception:
+            win.geometry("700x520")
+        win.transient(self.root)
+        win.grab_set()
+        self._bind_esc_close(win)
+
+        # 헤더
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        tk.Label(head, text="📋", font=("맑은 고딕", 16), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="스캔 내역 미리보기",
+                 font=("맑은 고딕", 13, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+
+        # 요약 정보
+        quality_text = "🟢 정상" if quality == 'normal' else "🔴 불량"
+        # 로케별 집계
+        loc_counts = {}
+        for it in items:
+            loc = it.get('location', '(없음)') or '(없음)'
+            loc_counts[loc] = loc_counts.get(loc, 0) + it.get('qty', 1)
+
+        info = tk.Frame(win, bg="#F5F6F8")
+        info.pack(fill="x", padx=18, pady=(0, 8))
+        tk.Label(info, text=f"👤 {worker}  ·  {quality_text}  ·  총 {len(items)}건  ·  로케 {len(loc_counts)}곳",
+                 font=("맑은 고딕", 10), bg="#F5F6F8", fg="#374151").pack(side="left")
+
+        # Treeview (바코드 / 로케이션 / 수량)
+        tree_frame = tk.Frame(win, bg="white", relief="solid", bd=1)
+        tree_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
+
+        cols = ("barcode", "location", "qty")
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=18)
+        tree.heading("barcode", text="바코드")
+        tree.heading("location", text="로케이션")
+        tree.heading("qty", text="수량")
+        tree.column("barcode", width=250, anchor="w")
+        tree.column("location", width=200, anchor="center")
+        tree.column("qty", width=80, anchor="center")
+
+        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+
+        # 데이터 삽입 (로케이션별 정렬)
+        sorted_items = sorted(items, key=lambda x: (x.get('location', ''), x.get('barcode', '')))
+        for it in sorted_items:
+            bc = it.get('barcode', '')
+            loc = it.get('location', '')
+            qty = it.get('qty', 1)
+            tree.insert("", tk.END, values=(bc, loc, qty))
+
+        # 하단: 로케별 집계 + 닫기
+        bottom = tk.Frame(win, bg="#F5F6F8")
+        bottom.pack(fill="x", padx=18, pady=(0, 14))
+
+        # 로케 요약 텍스트
+        loc_summary = " · ".join(f"{loc} ({cnt}개)" for loc, cnt in
+                                  sorted(loc_counts.items(), key=lambda x: x[0]))
+        tk.Label(bottom, text=f"📍 {loc_summary}",
+                 font=("맑은 고딕", 9), bg="#F5F6F8", fg="#6B7280",
+                 wraplength=550, justify="left", anchor="w").pack(side="left", fill="x", expand=True)
+
+        tk.Button(bottom, text="닫기",
+                  command=win.destroy,
+                  bg="#E5E7EB", fg="#374151",
+                  font=("맑은 고딕", 10),
+                  bd=0, relief="flat", padx=16, pady=5,
+                  cursor="hand2").pack(side="right")
 
     def _open_report_detail(self, doc_id):
         """카드 더블클릭 시 상세 팝업 열기 - 기존 on_message_double_click 호환"""
