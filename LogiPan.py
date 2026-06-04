@@ -247,6 +247,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
         self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
         self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊 마감재고")
+        self.t_jira = tk.Frame(self.nb, bg="#F5F6F8"); self.nb.add(self.t_jira, text="🎫 Jira 대기")
 
         self.setup_inbound()
         self.setup_outbound()
@@ -258,6 +259,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.setup_stocktake()
         self.setup_field_comm(self.t_field)
         self.setup_board_system(self.t_board)
+        self.setup_jira_waiting()
 
         # [추가] 탭 알림 시스템 초기화 (모든 탭 만든 다음에)
         self.setup_tab_alert_system()
@@ -918,6 +920,9 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         make_modern_btn(action_outer, "🎫  Jira 상신",
                          bg="#8B5CF6", hover_bg="#7C3AED",
                          command=self.save_csv_with_jira)
+        make_modern_btn(action_outer, "📦  반품 저장",
+                         bg="#F97316", hover_bg="#EA580C",
+                         command=self.save_csv_return)
 
         # ========== [📝 리포트 카드 - 하단 (버튼 위)] ==========
         report_card_outer = tk.Frame(container, bg="#F5F6F8")
@@ -4065,7 +4070,462 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                  bg="#FFFBEB", fg="#78350F",
                  font=("맑은 고딕", 9),
                  justify="center").pack(pady=(6, 20))
-    
+
+    # --- [탭: Jira 대기] - [출고] 등 외부에서 올린 티켓 모니터링 ---
+    def setup_jira_waiting(self):
+        """Jira에서 [출고] 같은 prefix로 올라온 티켓 모니터링 + 처리"""
+        container = self.t_jira
+        container.configure(bg="#F5F6F8")
+
+        # ========== 상단 헤더 ==========
+        header = tk.Frame(container, bg="white", relief="flat", bd=0)
+        header.pack(fill="x", padx=18, pady=(12, 8))
+        inner = tk.Frame(header, bg="white")
+        inner.pack(fill="x", padx=14, pady=12)
+
+        tk.Label(inner, text="🎫 Jira 대기 티켓",
+                 font=("맑은 고딕", 14, "bold"), bg="white", fg="#1F2937").pack(side="left")
+        tk.Label(inner, text="매장/엠프티에서 올린 [출고] 등 티켓을 여기서 확인하세요",
+                 font=("맑은 고딕", 9), bg="white", fg="#6B7280").pack(side="left", padx=(10, 0))
+
+        # ========== 컨트롤 행 (필터 + 새로고침) ==========
+        ctrl = tk.Frame(container, bg="#F5F6F8")
+        ctrl.pack(fill="x", padx=18, pady=(0, 8))
+
+        # prefix 필터
+        tk.Label(ctrl, text="🔖 Prefix:", font=("맑은 고딕", 9, "bold"),
+                 bg="#F5F6F8", fg="#374151").pack(side="left")
+        self._jira_prefix_var = tk.StringVar(value="[출고]")
+        prefix_entry = tk.Entry(ctrl, textvariable=self._jira_prefix_var,
+                                 font=("맑은 고딕", 10), width=12,
+                                 relief="solid", bd=1)
+        prefix_entry.pack(side="left", padx=(4, 12))
+
+        # 키워드 검색
+        tk.Label(ctrl, text="🔍 검색:", font=("맑은 고딕", 9, "bold"),
+                 bg="#F5F6F8", fg="#374151").pack(side="left")
+        self._jira_keyword_var = tk.StringVar()
+        kw_entry = tk.Entry(ctrl, textvariable=self._jira_keyword_var,
+                             font=("맑은 고딕", 10), width=20,
+                             relief="solid", bd=1)
+        kw_entry.pack(side="left", padx=(4, 12))
+        # 키워드 변경 시 즉시 필터
+        self._jira_keyword_var.trace_add("write", lambda *_: self._render_jira_tickets())
+
+        # 미해결만 토글
+        self._jira_open_only_var = tk.BooleanVar(value=True)
+        open_chk = tk.Checkbutton(ctrl, text="미해결만",
+                                    variable=self._jira_open_only_var,
+                                    bg="#F5F6F8", font=("맑은 고딕", 9),
+                                    command=lambda: self._render_jira_tickets())
+        open_chk.pack(side="left", padx=(0, 12))
+
+        # 새로고침 버튼
+        refresh_btn = tk.Button(ctrl, text="🔄 새로고침",
+                                  command=self.refresh_jira_tickets,
+                                  bg="#3B82F6", fg="white",
+                                  activebackground="#2563EB",
+                                  font=("맑은 고딕", 9, "bold"),
+                                  bd=0, relief="flat",
+                                  padx=12, pady=4, cursor="hand2")
+        refresh_btn.pack(side="left")
+
+        # 카운트 표시
+        self._jira_count_label = tk.Label(ctrl, text="", font=("맑은 고딕", 9),
+                                            bg="#F5F6F8", fg="#6B7280")
+        self._jira_count_label.pack(side="right")
+
+        # ========== 담당자 필터 (ctrl 행에 버튼 + 체크박스) ==========
+        self._jira_assignee_filter_enabled = tk.BooleanVar(value=False)
+
+        # 필터 활성화 상태 파일에서 복원
+        try:
+            _apath = self._jira_assignees_config_path()
+            if _apath and os.path.exists(_apath):
+                with open(_apath, 'r', encoding='utf-8') as _af:
+                    _adata = json.load(_af)
+                if isinstance(_adata, dict):
+                    self._jira_assignee_filter_enabled.set(bool(_adata.get('filter_enabled', False)))
+        except Exception:
+            pass
+
+        # ctrl 행 두 번째 줄 (담당자 설정 버튼 + 필터 체크박스)
+        ctrl2 = tk.Frame(container, bg="#F5F6F8")
+        ctrl2.pack(fill="x", padx=18, pady=(0, 6))
+
+        tk.Button(ctrl2, text="👥 담당자 설정",
+                  command=self._open_jira_assignee_settings,
+                  bg="#E5E7EB", fg="#1F2937",
+                  activebackground="#D1D5DB",
+                  font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat", padx=10, pady=4, cursor="hand2"
+                  ).pack(side="left")
+
+        tk.Checkbutton(ctrl2,
+                       text="☑ 담당자 필터 활성화 (체크 시 등록된 사람 티켓만 표시)",
+                       variable=self._jira_assignee_filter_enabled,
+                       bg="#F5F6F8", font=("맑은 고딕", 9),
+                       command=lambda: (self._save_jira_assignees(), self._render_jira_tickets())
+                       ).pack(side="left", padx=(10, 0))
+
+        # ========== 본문: 좌측 티켓 목록 + 우측 상세 ==========
+        body = tk.Frame(container, bg="#F5F6F8")
+        body.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+
+        # ─── 좌측: 티켓 목록 (Treeview) ───
+        left = tk.Frame(body, bg="white", relief="solid", bd=1)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        cols = ("status", "key", "summary", "reporter", "created")
+        self._jira_tree = ttk.Treeview(left, columns=cols, show="headings", height=20)
+        self._jira_tree.heading("status", text="상태")
+        self._jira_tree.heading("key", text="티켓")
+        self._jira_tree.heading("summary", text="제목")
+        self._jira_tree.heading("reporter", text="담당자/요청자")
+        self._jira_tree.heading("created", text="생성일")
+        self._jira_tree.column("status", width=80, anchor="center")
+        self._jira_tree.column("key", width=100, anchor="center")
+        self._jira_tree.column("summary", width=350, anchor="w")
+        self._jira_tree.column("reporter", width=100, anchor="center")
+        self._jira_tree.column("created", width=130, anchor="center")
+        self._jira_tree.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+
+        # 스크롤
+        sb = ttk.Scrollbar(left, orient="vertical", command=self._jira_tree.yview)
+        sb.pack(side="right", fill="y")
+        self._jira_tree.configure(yscrollcommand=sb.set)
+
+        # 행 선택 시 우측 상세 갱신
+        self._jira_tree.bind("<<TreeviewSelect>>", self._on_jira_ticket_select)
+
+        # ─── 우측: 상세 ───
+        right = tk.Frame(body, bg="white", relief="solid", bd=1, width=420)
+        right.pack(side="left", fill="both", padx=(0, 0))
+        right.pack_propagate(False)
+
+        tk.Label(right, text="📋 티켓 상세",
+                 font=("맑은 고딕", 11, "bold"), bg="white", fg="#1F2937",
+                 anchor="w").pack(fill="x", padx=10, pady=(10, 6))
+
+        # 상세 정보 표시 영역
+        self._jira_detail_frame = tk.Frame(right, bg="white")
+        self._jira_detail_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        self._jira_detail_placeholder = tk.Label(
+            self._jira_detail_frame,
+            text="◀ 왼쪽 목록에서 티켓을 선택하세요",
+            font=("맑은 고딕", 10), bg="white", fg="#9CA3AF"
+        )
+        self._jira_detail_placeholder.pack(pady=40)
+
+        # 로컬 캐시
+        self._jira_tickets_cache = []  # 마지막 검색 결과
+
+    # ─── 담당자 설정 저장/로드/토글 ───
+    def _jira_assignees_config_path(self):
+        """담당자 설정 저장 파일 경로"""
+        try:
+            home = os.path.expanduser("~")
+            cfg_dir = os.path.join(home, ".logipan")
+            os.makedirs(cfg_dir, exist_ok=True)
+            return os.path.join(cfg_dir, "jira_assignees.json")
+        except Exception:
+            return None
+
+    def _load_jira_assignees(self):
+        """담당자 목록 로드 → [{name, account_id}, ...]"""
+        try:
+            path = self._jira_assignees_config_path()
+            if path and os.path.exists(path):
+                import json
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data.get('assignees', [])
+                return []
+        except Exception as e:
+            print(f"담당자 로드 실패: {e}")
+        return []
+
+    def _save_jira_assignees(self, rows=None):
+        """담당자 설정을 파일에 저장.
+        rows가 None이면 filter_enabled만 갱신 (체크박스 토글 시).
+        rows가 있으면 담당자 목록도 함께 저장 (팝업 저장 버튼)."""
+        try:
+            import json
+            path = self._jira_assignees_config_path()
+            if not path:
+                return
+            # 기존 데이터 로드
+            data = {}
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            if not isinstance(data, dict):
+                data = {}
+            # filter_enabled 항상 갱신
+            data['filter_enabled'] = self._jira_assignee_filter_enabled.get()
+            # rows가 주어지면 담당자 목록도 갱신
+            if rows is not None:
+                assignees = []
+                for name_e, id_e in rows:
+                    name = name_e.get().strip()
+                    acc_id = id_e.get().strip()
+                    if name or acc_id:
+                        assignees.append({'name': name, 'account_id': acc_id})
+                data['assignees'] = assignees
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"담당자 저장 실패: {e}")
+            messagebox.showerror("저장 실패", str(e))
+
+    def _open_jira_assignee_settings(self):
+        """담당자 설정 팝업 (입고탭 Jira 설정과 동일한 형태)"""
+        win = tk.Toplevel(self.root)
+        win.title("👥 Jira 담당자 설정")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 520, 420)
+        except Exception:
+            win.geometry("520x420")
+        win.transient(self.root)
+        win.grab_set()
+        self._bind_esc_close(win)
+
+        # 헤더
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        tk.Label(head, text="👥", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="Jira 담당자 설정",
+                 font=("맑은 고딕", 14, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+        tk.Label(win, text="등록된 담당자로 Jira 대기 티켓을 필터링합니다",
+                 bg="#F5F6F8", fg="#666",
+                 font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
+
+        # 카드
+        card = tk.Frame(win, bg="white",
+                        highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=12)
+        tk.Frame(card, bg="#3B82F6", width=4).pack(side="left", fill="y")
+        inner = tk.Frame(card, bg="white", padx=14, pady=12)
+        inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(inner,
+                 text="💡 담당자 이름과 Jira accountId를 등록하세요.\n"
+                      "   (Jira 프로필 → URL의 /people/ 뒤 문자열이 accountId)",
+                 font=("맑은 고딕", 9), bg="white", fg="#6B7280",
+                 anchor="w", justify="left").pack(fill="x", pady=(0, 10))
+
+        # 테이블 헤더
+        hdr = tk.Frame(inner, bg="white")
+        hdr.pack(fill="x", pady=(0, 4))
+        tk.Label(hdr, text="이름", width=15, anchor="w", bg="white",
+                 font=("맑은 고딕", 9, "bold"), fg="#374151").pack(side="left")
+        tk.Label(hdr, text="Jira accountId (또는 username)", anchor="w", bg="white",
+                 font=("맑은 고딕", 9, "bold"), fg="#374151").pack(side="left")
+
+        # 4명 입력 행
+        popup_rows = []
+        assignees = self._load_jira_assignees()
+        for i in range(4):
+            row = tk.Frame(inner, bg="white")
+            row.pack(fill="x", pady=2)
+            name_e = tk.Entry(row, width=15, font=("맑은 고딕", 10),
+                              relief="solid", bd=1)
+            name_e.pack(side="left", padx=(0, 6))
+            id_e = tk.Entry(row, font=("Consolas", 9),
+                            relief="solid", bd=1)
+            id_e.pack(side="left", fill="x", expand=True)
+            # 기존 값 채움
+            if i < len(assignees):
+                name_e.insert(0, assignees[i].get('name', ''))
+                id_e.insert(0, assignees[i].get('account_id', ''))
+            popup_rows.append((name_e, id_e))
+
+        # 버튼 행
+        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame.pack(fill="x", padx=18, pady=(0, 14))
+
+        def _do_save():
+            self._save_jira_assignees(rows=popup_rows)
+            self._render_jira_tickets()
+            messagebox.showinfo("저장 완료", "담당자 설정이 저장되었습니다.", parent=win)
+            win.destroy()
+
+        tk.Button(btn_frame, text="💾 저장",
+                  command=_do_save,
+                  bg="#10B981", fg="white",
+                  activebackground="#059669",
+                  font=("맑은 고딕", 10, "bold"),
+                  bd=0, relief="flat", padx=18, pady=6,
+                  cursor="hand2").pack(side="left")
+        tk.Button(btn_frame, text="취소",
+                  command=win.destroy,
+                  bg="#E5E7EB", fg="#374151",
+                  activebackground="#D1D5DB",
+                  font=("맑은 고딕", 10),
+                  bd=0, relief="flat", padx=18, pady=6,
+                  cursor="hand2").pack(side="left", padx=(8, 0))
+
+    def refresh_jira_tickets(self):
+        """Jira API 호출해서 티켓 새로 가져오기"""
+        prefix = self._jira_prefix_var.get().strip() or "[출고]"
+        self._jira_count_label.config(text="🔄 가져오는 중...", fg="#3B82F6")
+        self._jira_count_label.update()
+
+        try:
+            ok, result = self.search_jira_tickets(prefix=prefix, max_results=100)
+            if not ok:
+                self._jira_count_label.config(text=f"❌ 실패: {result[:50]}", fg="#DC2626")
+                messagebox.showerror("Jira 검색 실패", str(result))
+                return
+            self._jira_tickets_cache = result
+            self._render_jira_tickets()
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            messagebox.showerror("Jira 검색 오류", str(e))
+            self._jira_count_label.config(text=f"❌ 오류", fg="#DC2626")
+
+    def _render_jira_tickets(self):
+        """캐시된 결과를 필터 적용해서 트리에 표시"""
+        # 트리 비우기
+        for iid in self._jira_tree.get_children():
+            self._jira_tree.delete(iid)
+
+        keyword = (self._jira_keyword_var.get() or '').strip().lower()
+        open_only = self._jira_open_only_var.get()
+
+        # 담당자 필터 활성화 시 등록된 사람들의 ID/이름 set
+        assignee_filter_on = self._jira_assignee_filter_enabled.get()
+        allowed_ids = set()
+        allowed_names = set()
+        if assignee_filter_on:
+            for entry in self._load_jira_assignees():
+                if entry.get('account_id'):
+                    allowed_ids.add(entry['account_id'].strip().lower())
+                if entry.get('name'):
+                    allowed_names.add(entry['name'].strip())
+
+        # 미해결로 간주할 상태 키워드
+        DONE_STATUSES = {'완료', '해결됨', 'done', 'closed', 'resolved'}
+
+        shown = 0
+        for t in self._jira_tickets_cache:
+            # 키워드 필터
+            if keyword:
+                hay = (t.get('summary', '') + ' ' + (t.get('reporter') or '') + ' ' +
+                       (t.get('description') or '') + ' ' + (t.get('key') or '')).lower()
+                if keyword not in hay:
+                    continue
+            # 미해결 필터
+            if open_only:
+                if (t.get('status', '') or '').lower() in {s.lower() for s in DONE_STATUSES}:
+                    continue
+            # 담당자 필터 - 등록된 사람들 중 하나여야 함
+            if assignee_filter_on and (allowed_ids or allowed_names):
+                aid = (t.get('assignee_id') or '').strip().lower()
+                aname = (t.get('assignee') or '').strip()
+                if aid not in allowed_ids and aname not in allowed_names:
+                    continue
+
+            created_short = (t.get('created') or '')[:10]
+            self._jira_tree.insert("", "end", iid=t.get('key'),
+                values=(t.get('status', ''), t.get('key', ''),
+                         t.get('summary', '')[:80],
+                         t.get('assignee') or t.get('reporter') or '-',
+                         created_short))
+            shown += 1
+
+        total = len(self._jira_tickets_cache)
+        if shown == total:
+            self._jira_count_label.config(text=f"📊 {shown}건", fg="#10B981")
+        else:
+            self._jira_count_label.config(text=f"📊 {shown} / {total}건", fg="#10B981")
+
+    def _on_jira_ticket_select(self, event=None):
+        """티켓 선택 시 우측 상세 갱신"""
+        sel = self._jira_tree.selection()
+        if not sel:
+            return
+        key = sel[0]
+        ticket = next((t for t in self._jira_tickets_cache if t.get('key') == key), None)
+        if not ticket:
+            return
+
+        # placeholder 제거
+        for w in self._jira_detail_frame.winfo_children():
+            w.destroy()
+
+        # 상세 그리기
+        def add_row(label, value, copy=False):
+            row = tk.Frame(self._jira_detail_frame, bg="white")
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=label, font=("맑은 고딕", 9, "bold"),
+                     bg="white", fg="#6B7280", width=10, anchor="w").pack(side="left")
+            v = tk.Label(row, text=value or '-', font=("맑은 고딕", 10),
+                          bg="white", fg="#1F2937", anchor="w", wraplength=300, justify="left")
+            v.pack(side="left", fill="x", expand=True)
+
+        add_row("티켓", ticket.get('key', ''))
+        add_row("상태", ticket.get('status', ''))
+        add_row("제목", ticket.get('summary', ''))
+        add_row("요청자", ticket.get('reporter') or '-')
+        add_row("담당자", ticket.get('assignee') or '미지정')
+        add_row("생성", (ticket.get('created') or '')[:19].replace('T', ' '))
+        add_row("수정", (ticket.get('updated') or '')[:19].replace('T', ' '))
+
+        # 본문
+        tk.Label(self._jira_detail_frame, text="본문",
+                 font=("맑은 고딕", 9, "bold"),
+                 bg="white", fg="#6B7280", anchor="w").pack(fill="x", pady=(10, 2))
+        desc_text = tk.Text(self._jira_detail_frame, height=10, wrap="word",
+                             font=("맑은 고딕", 9), bg="#F9FAFB", relief="solid", bd=1)
+        desc_text.insert("1.0", ticket.get('description') or '(본문 없음)')
+        desc_text.config(state="disabled")
+        desc_text.pack(fill="both", expand=True, pady=(0, 6))
+
+        # 액션 버튼들
+        btn_row = tk.Frame(self._jira_detail_frame, bg="white")
+        btn_row.pack(fill="x", pady=(8, 0))
+
+        tk.Button(btn_row, text="🌐 Jira에서 열기",
+                  command=lambda: self._open_url(ticket.get('url', '')),
+                  bg="#6366F1", fg="white", font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat", padx=10, pady=5, cursor="hand2",
+                  activebackground="#4F46E5").pack(side="left", padx=(0, 4))
+
+        tk.Button(btn_row, text="📋 키 복사",
+                  command=lambda: self._copy_to_clipboard(ticket.get('key', '')),
+                  bg="#6B7280", fg="white", font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat", padx=10, pady=5, cursor="hand2",
+                  activebackground="#4B5563").pack(side="left")
+
+    def _open_url(self, url):
+        """기본 브라우저에서 URL 열기"""
+        if not url:
+            return
+        try:
+            import webbrowser
+            webbrowser.open(url)
+        except Exception as e:
+            messagebox.showerror("열기 실패", str(e))
+
+    def _copy_to_clipboard(self, text):
+        """클립보드 복사"""
+        if not text:
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+        except Exception as e:
+            print(f"복사 실패: {e}")
+
     # --- [탭 6: 현장소통] ---
     def setup_field_comm(self, container):
         """모던 카드 리스트 스타일 작업보고 화면"""
@@ -6357,21 +6817,26 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     ok_sheet, sheet_msg = self._archive_scan_to_sheet(pending, brand, md_name, jira_key, result)
                     if ok_sheet:
                         scan_archive_msg = f"\n\n📊 스캔 이력 시트 저장 완료\n{sheet_msg}"
-                        # 시트 저장 성공 시 Firestore 정리
-                        try:
-                            self.db.collection('scan_sessions').document(pending['scan_session_id']).delete()
-                        except Exception as e:
-                            print(f"scan_sessions 삭제 실패: {e}")
-                        try:
-                            # field_reports 카드는 완료 상태로 변경 (사라지진 않고, 완료 탭에서 보임)
-                            self.db.collection('field_reports').document(pending['report_doc_id']).update({
-                                'status': '✅ 완료',
-                                'closed_by': getattr(self, 'current_user', '관리자'),
-                                'jira_url': str(result),
-                                'jira_key': jira_key
-                            })
-                        except Exception as e:
-                            print(f"field_reports 완료 처리 실패: {e}")
+                        # 시트 저장 성공 시 Firestore 정리 (병합된 세션 모두 삭제)
+                        session_ids = pending.get('scan_session_ids', [pending.get('scan_session_id', '')])
+                        for sid in session_ids:
+                            if sid:
+                                try:
+                                    self.db.collection('scan_sessions').document(sid).delete()
+                                except Exception as e:
+                                    print(f"scan_sessions 삭제 실패 ({sid}): {e}")
+                        report_ids = pending.get('report_doc_ids', [pending.get('report_doc_id', '')])
+                        for rid in report_ids:
+                            if rid:
+                                try:
+                                    self.db.collection('field_reports').document(rid).update({
+                                        'status': '✅ 완료',
+                                        'closed_by': getattr(self, 'current_user', '관리자'),
+                                        'jira_url': str(result),
+                                        'jira_key': jira_key
+                                    })
+                                except Exception as e:
+                                    print(f"field_reports 완료 처리 실패 ({rid}): {e}")
                     else:
                         scan_archive_msg = f"\n\n⚠️ 스캔 이력 시트 저장 실패\n{sheet_msg}"
                     # 임시 정보 정리 (한 번 사용하면 끝)
@@ -6590,6 +7055,91 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 f"⚠️ CSV는 저장됐지만 Jira 티켓 생성에 실패했습니다.\n\n"
                 f"📄 파일: {fn}\n\n"
                 f"오류: {result}")
+
+    def save_csv_return(self):
+        """📦 반품 저장 - CSV + 시트만 저장 (Jira/Slack 없음)"""
+        if not self.is_matched:
+            messagebox.showwarning("주의", "결과 불일치로 저장 불가")
+            return
+        brand = self.ent_brand_in.get().strip()
+        if not brand:
+            messagebox.showwarning("주의", "브랜드명을 입력해주세요.")
+            return
+
+        md_name = self.ent_md_in.get().strip() if hasattr(self, 'ent_md_in') else ''
+
+        if not messagebox.askyesno("📦 반품 저장",
+                f"Jira/Slack 없이 CSV + 시트만 저장합니다.\n\n"
+                f"브랜드: {brand}\n"
+                f"담당MD: {md_name or '(미입력)'}\n\n"
+                f"진행할까요?"):
+            return
+
+        # CSV 저장
+        today = datetime.now().strftime('%y%m%d')
+        df = self.last_merged_df[self.last_merged_df['수량_스캔'] > 0][['바코드', '수량_스캔']].copy()
+        df.columns = ['바코드', '수량']
+        df['바코드'] = df['바코드'].apply(self._normalize_barcode_for_output)
+        df['메모'] = brand
+        fn = self.get_unique_filename(f"{today} {brand} 반품", "csv")
+        full_path = os.path.join(self.save_dir, fn)
+        df.to_csv(full_path, index=False, encoding="utf-8-sig")
+
+        # 스캔 이력 시트 저장 (pending이 있으면)
+        scan_archive_msg = ""
+        try:
+            pending = getattr(self, '_pending_scan_session', None)
+            if pending:
+                ok_sheet, sheet_msg = self._archive_scan_to_sheet(
+                    pending, brand, md_name, jira_key='', jira_url='')
+                if ok_sheet:
+                    scan_archive_msg = f"\n\n📊 스캔 이력 시트 저장 완료\n{sheet_msg}"
+                    # Firestore 정리 (병합 세션 모두)
+                    session_ids = pending.get('scan_session_ids',
+                                              [pending.get('scan_session_id', '')])
+                    for sid in session_ids:
+                        if sid:
+                            try:
+                                self.db.collection('scan_sessions').document(sid).delete()
+                            except Exception as e:
+                                print(f"scan_sessions 삭제 실패 ({sid}): {e}")
+                    report_ids = pending.get('report_doc_ids',
+                                             [pending.get('report_doc_id', '')])
+                    for rid in report_ids:
+                        if rid:
+                            try:
+                                self.db.collection('field_reports').document(rid).update({
+                                    'status': '✅ 완료',
+                                    'closed_by': getattr(self, 'current_user', '관리자'),
+                                })
+                            except Exception as e:
+                                print(f"field_reports 완료 처리 실패 ({rid}): {e}")
+                else:
+                    scan_archive_msg = f"\n\n⚠️ 스캔 이력 시트 저장 실패\n{sheet_msg}"
+                self._pending_scan_session = None
+                try:
+                    self._hide_pwa_scan_badge()
+                except Exception:
+                    pass
+        except Exception as e:
+            scan_archive_msg = f"\n\n⚠️ 스캔 이력 처리 오류: {e}"
+            print(f"❌ 반품 스캔 이력 처리 오류: {e}")
+
+        # 실측시트 자동 기입
+        silch_msg = ""
+        try:
+            silch_ok, silch_result = self._archive_silch_to_sheet(brand)
+            if silch_ok is True:
+                silch_msg = f"\n\n📐 실측시트 기입 완료\n{silch_result}"
+            elif silch_ok is False:
+                silch_msg = f"\n\n⚠️ 실측시트 기입 실패\n{silch_result}"
+        except Exception as e:
+            silch_msg = f"\n\n⚠️ 실측시트 처리 오류: {e}"
+
+        messagebox.showinfo("✅ 반품 저장 완료",
+            f"📦 CSV 저장 완료 (Jira/Slack 없음)\n\n"
+            f"📄 파일: {fn}{scan_archive_msg}{silch_msg}\n\n"
+            f"💡 작업 종료 시 우측 상단의 🔄 리셋 버튼을 눌러주세요.")
 
     def copy_inbound_to_clipboard(self):
         """[추가] 마지막에 생성한 입고파일 데이터를 클립보드에 복사 (헤더 제외, TSV)."""
@@ -9253,52 +9803,96 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 if not barcode:
                     continue
                 if is_defect:
-                    # 불량 세션: 정상수=0, 불량수=qty, 정상로케=빈, 불량로케=location
                     lines.append(f"{barcode}\t0\t{qty}\t{EMPTY_LOC}\t{location}")
                 else:
-                    # 정상 세션: 정상수=qty, 불량수=0, 정상로케=location, 불량로케=빈
                     lines.append(f"{barcode}\t{qty}\t0\t{location}\t{EMPTY_LOC}")
 
             scan_text = "\n".join(lines)
 
-            # ─── 3) 스캔 칸에 박기 (기존 내용 덮어쓰기) ─────────────────────────
+            # ─── 3) 스캔 칸에 박기 (병합 지원) ─────────────────────────
+            merge_mode = False
             try:
-                self.txt_in_scan.delete("1.0", tk.END)
-                self.txt_in_scan.insert("1.0", scan_text)
-                # count_total_qty 강제 호출 (수량 라벨 갱신)
+                existing = self.txt_in_scan.get("1.0", tk.END).strip()
+                if existing:
+                    # 기존 데이터가 있으면 합칠지 물어봄
+                    choice = messagebox.askyesnocancel(
+                        "📥 기존 데이터 있음",
+                        f"스캔 칸에 기존 데이터가 있습니다.\n\n"
+                        f"[예] = 기존 데이터에 합치기\n"
+                        f"[아니오] = 덮어쓰기\n"
+                        f"[취소] = 중단")
+                    if choice is None:  # 취소
+                        return
+                    merge_mode = (choice is True)  # 예 = 합치기
+
+                if merge_mode:
+                    self.txt_in_scan.insert(tk.END, "\n" + scan_text)
+                else:
+                    self.txt_in_scan.delete("1.0", tk.END)
+                    self.txt_in_scan.insert("1.0", scan_text)
                 self.count_total_qty(self.txt_in_scan, self.lbl_in_s, "스캔 수량")
             except Exception as e:
                 print(f"스캔 칸 입력 실패: {e}")
 
             # [추가] 시트 저장 + Firestore 정리를 위한 임시 정보 저장
-            # Jira 상신 성공 시 이 정보를 사용해서 시트에 저장 + scan_sessions 삭제
-            self._pending_scan_session = {
-                'scan_session_id': scan_session_id,
-                'report_doc_id': report_doc_id,
-                'items': items,
-                'work_type': work_type,
-                'quality': quality,
-                'label': label,
-                'worker': worker,
-                'item_count': item_count
-            }
+            # 병합 모드면 기존 _pending에 누적
+            prev = getattr(self, '_pending_scan_session', None)
+            if merge_mode and prev:
+                # 기존 세션에 병합
+                if 'scan_session_ids' not in prev:
+                    prev['scan_session_ids'] = [prev.get('scan_session_id', '')]
+                    prev['report_doc_ids'] = [prev.get('report_doc_id', '')]
+                    prev['workers'] = [prev.get('worker', '')]
+                    prev['labels'] = [prev.get('label', '')]
+                prev['scan_session_ids'].append(scan_session_id)
+                prev['report_doc_ids'].append(report_doc_id)
+                prev['workers'].append(worker)
+                prev['labels'].append(label)
+                prev['items'] = prev.get('items', []) + items
+                prev['item_count'] = len(prev['items'])
+                # 대표값 갱신
+                prev['scan_session_id'] = prev['scan_session_ids'][0]
+                prev['report_doc_id'] = prev['report_doc_ids'][0]
+                prev['worker'] = ', '.join(dict.fromkeys(prev['workers']))
+                prev['label'] = prev['labels'][0]
+                self._pending_scan_session = prev
+            else:
+                self._pending_scan_session = {
+                    'scan_session_id': scan_session_id,
+                    'scan_session_ids': [scan_session_id],
+                    'report_doc_id': report_doc_id,
+                    'report_doc_ids': [report_doc_id],
+                    'items': items,
+                    'work_type': work_type,
+                    'quality': quality,
+                    'label': label,
+                    'labels': [label],
+                    'worker': worker,
+                    'workers': [worker],
+                    'item_count': item_count
+                }
 
-            # [추가] 입고 탭 스캔 칸 위에 배지 표시 (시각적 구별)
+            # [추가] 입고 탭 스캔 칸 위에 배지 표시 (병합 시 누적 정보)
+            pending = self._pending_scan_session
+            total_count = pending.get('item_count', item_count)
+            badge_worker = pending.get('worker', worker)
+            badge_label = pending.get('label', label)
             try:
-                self._show_pwa_scan_badge(worker, label, quality, item_count)
+                self._show_pwa_scan_badge(badge_worker, badge_label, quality, total_count)
             except Exception as e:
                 print(f"배지 표시 실패: {e}")
 
-            # [참고] 브랜드명/불량모드/특이사항 자동 채움은 빼버림
-            # → 사용자가 직접 입력하는 게 더 정확함 (스캔 데이터만 옮기는 게 의도)
-            # [참고] 작업보고 카드 상태 변경 안 함
-            # → 너가 디테일 팝업에서 수동 "완료" 처리할 때만 사라지게
-
             # 완료 알림
-            messagebox.showinfo("✅ 가져오기 완료",
-                f"📦 {item_count}개 박스 가져옴.\n\n"
-                f"브랜드명, 담당MD, 특이사항 입력 후\n"
-                f"대조 분석 → CSV 저장 → Jira 상신 진행하세요.")
+            if merge_mode:
+                n_sessions = len(pending.get('scan_session_ids', []))
+                messagebox.showinfo("✅ 병합 완료",
+                    f"📦 {item_count}개 추가 → 총 {total_count}개 ({n_sessions}건 병합)\n\n"
+                    f"대조 분석 → Jira 상신 또는 반품 저장 진행하세요.")
+            else:
+                messagebox.showinfo("✅ 가져오기 완료",
+                    f"📦 {item_count}개 가져옴.\n\n"
+                    f"브랜드명, 담당MD, 특이사항 입력 후\n"
+                    f"대조 분석 → Jira 상신 또는 반품 저장 진행하세요.")
 
         except Exception as e:
             messagebox.showerror("오류", f"스캔 데이터 로드 실패:\n{e}")
