@@ -2935,6 +2935,20 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         return rows if rows else None
 
+    def _is_valid_product_barcode(self, bc):
+        """입고/마스터에서 사용하는 바코드 형식 검증.
+        - 패턴 A: 영문 대문자 + 숫자 정확히 19자
+        - 패턴 B: 1자리 + 하이픈 + 10자리 숫자 (예: 1-1567920001), 총 12자
+        """
+        if not bc:
+            return False
+        import re
+        if re.match(r'^[A-Z0-9]{19}$', bc):
+            return True
+        if re.match(r'^[0-9]-[0-9]{10}$', bc):
+            return True
+        return False
+
     def run_master_conversion(self):
         """입력 바코드표 → 마스터 등록용 + 옵션 등록용 두 양식으로 변환"""
         rows = self._parse_master_input()
@@ -2942,6 +2956,31 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             messagebox.showwarning("주의",
                 "바코드표를 인식하지 못했습니다.\n"
                 "엑셀에서 [상품명/바코드번호/상품메모1/상품메모2/대표판매가/옵션내용/수량] 컬럼이 있는 행을 복사해주세요.")
+            return
+
+        # [추가] 바코드 형식 검증 (영문/숫자 19자 또는 1-XXXXXXXXXX)
+        invalid_rows = []
+        for idx, r in enumerate(rows, start=1):
+            품번 = (r.get('품번') or '').strip().upper()
+            if not 품번:
+                continue
+            if not self._is_valid_product_barcode(품번):
+                invalid_rows.append((idx, 품번, r.get('상품명') or r.get('상품명_상세') or '-'))
+
+        if invalid_rows:
+            preview = "\n".join([
+                f"  {idx}행) {bc}  ({name[:20]})"
+                for idx, bc, name in invalid_rows[:10]
+            ])
+            if len(invalid_rows) > 10:
+                preview += f"\n  ... 외 {len(invalid_rows)-10}건"
+            messagebox.showerror("⛔ 바코드 형식 오류",
+                f"마스터 등록 가능한 바코드 형식이 아닙니다.\n"
+                f"수정 후 다시 시도해주세요.\n\n"
+                f"허용 형식:\n"
+                f"  · 영문(대문자)+숫자 19자  (예: SOMW261NRTS005BK000)\n"
+                f"  · 1자리+하이픈+10자리 숫자  (예: 1-1567920001)\n\n"
+                f"⚠️ 형식 오류 {len(invalid_rows)}건:\n{preview}")
             return
 
         # 리포트 비우기
