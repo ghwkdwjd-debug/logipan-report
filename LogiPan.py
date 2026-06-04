@@ -4088,18 +4088,38 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tk.Label(inner, text="매장/엠프티에서 올린 [출고] 등 티켓을 여기서 확인하세요",
                  font=("맑은 고딕", 9), bg="white", fg="#6B7280").pack(side="left", padx=(10, 0))
 
-        # ========== 컨트롤 행 (필터 + 새로고침) ==========
+        # ========== 서브탭 (출고/입고/전체) ==========
+        tab_row = tk.Frame(container, bg="#F5F6F8")
+        tab_row.pack(fill="x", padx=18, pady=(0, 6))
+
+        self._jira_prefix_var = tk.StringVar(value="[출고]")
+        self._jira_sub_tabs = {}
+
+        def _select_sub_tab(prefix):
+            self._jira_prefix_var.set(prefix)
+            for p, btn in self._jira_sub_tabs.items():
+                if p == prefix:
+                    btn.config(bg="#1877F2", fg="white")
+                else:
+                    btn.config(bg="#E5E7EB", fg="#374151")
+            self.refresh_jira_tickets()
+
+        for label, prefix in [("📤 출고", "[출고]"), ("📥 입고", "[입고]"), ("전체", "")]:
+            btn = tk.Button(tab_row, text=label,
+                            command=lambda p=prefix: _select_sub_tab(p),
+                            font=("맑은 고딕", 10, "bold"),
+                            bd=0, relief="flat", padx=16, pady=6, cursor="hand2")
+            btn.pack(side="left", padx=(0, 4))
+            self._jira_sub_tabs[prefix] = btn
+        # 초기 선택
+        self._jira_sub_tabs["[출고]"].config(bg="#1877F2", fg="white")
+        for p, b in self._jira_sub_tabs.items():
+            if p != "[출고]":
+                b.config(bg="#E5E7EB", fg="#374151")
+
+        # ========== 컨트롤 행 (검색 + 새로고침) ==========
         ctrl = tk.Frame(container, bg="#F5F6F8")
         ctrl.pack(fill="x", padx=18, pady=(0, 8))
-
-        # prefix 필터
-        tk.Label(ctrl, text="🔖 Prefix:", font=("맑은 고딕", 9, "bold"),
-                 bg="#F5F6F8", fg="#374151").pack(side="left")
-        self._jira_prefix_var = tk.StringVar(value="[출고]")
-        prefix_entry = tk.Entry(ctrl, textvariable=self._jira_prefix_var,
-                                 font=("맑은 고딕", 10), width=12,
-                                 relief="solid", bd=1)
-        prefix_entry.pack(side="left", padx=(4, 12))
 
         # 키워드 검색
         tk.Label(ctrl, text="🔍 검색:", font=("맑은 고딕", 9, "bold"),
@@ -4109,7 +4129,6 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                              font=("맑은 고딕", 10), width=20,
                              relief="solid", bd=1)
         kw_entry.pack(side="left", padx=(4, 12))
-        # 키워드 변경 시 즉시 필터
         self._jira_keyword_var.trace_add("write", lambda *_: self._render_jira_tickets())
 
         # 미해결만 토글
@@ -4129,6 +4148,15 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                                   bd=0, relief="flat",
                                   padx=12, pady=4, cursor="hand2")
         refresh_btn.pack(side="left")
+
+        tk.Button(ctrl, text="📊 선택 티켓 파일 합치기",
+                  command=self._merge_selected_tickets_files,
+                  bg="#F59E0B", fg="white",
+                  activebackground="#D97706",
+                  font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat",
+                  padx=12, pady=4, cursor="hand2"
+                  ).pack(side="left", padx=(6, 0))
 
         # 카운트 표시
         self._jira_count_label = tk.Label(ctrl, text="", font=("맑은 고딕", 9),
@@ -4153,7 +4181,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         ctrl2 = tk.Frame(container, bg="#F5F6F8")
         ctrl2.pack(fill="x", padx=18, pady=(0, 6))
 
-        tk.Button(ctrl2, text="👥 담당자 설정",
+        tk.Button(ctrl2, text="🏢 로지스 설정",
                   command=self._open_jira_assignee_settings,
                   bg="#E5E7EB", fg="#1F2937",
                   activebackground="#D1D5DB",
@@ -4161,8 +4189,16 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                   bd=0, relief="flat", padx=10, pady=4, cursor="hand2"
                   ).pack(side="left")
 
+        tk.Button(ctrl2, text="👤 담당자 설정",
+                  command=self._open_jira_md_settings,
+                  bg="#E5E7EB", fg="#1F2937",
+                  activebackground="#D1D5DB",
+                  font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat", padx=10, pady=4, cursor="hand2"
+                  ).pack(side="left", padx=(6, 0))
+
         tk.Checkbutton(ctrl2,
-                       text="☑ 담당자 필터 활성화 (체크 시 등록된 사람 티켓만 표시)",
+                       text="☑ 로지스 필터 (체크 시 우리팀 티켓만 표시)",
                        variable=self._jira_assignee_filter_enabled,
                        bg="#F5F6F8", font=("맑은 고딕", 9),
                        command=lambda: (self._save_jira_assignees(), self._render_jira_tickets())
@@ -4177,7 +4213,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         left.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
         cols = ("status", "key", "summary", "reporter", "created")
-        self._jira_tree = ttk.Treeview(left, columns=cols, show="headings", height=20)
+        self._jira_tree = ttk.Treeview(left, columns=cols, show="headings", height=20,
+                                        selectmode="extended")
         self._jira_tree.heading("status", text="상태")
         self._jira_tree.heading("key", text="티켓")
         self._jira_tree.heading("summary", text="제목")
@@ -4198,7 +4235,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         # 행 선택 시 우측 상세 갱신
         self._jira_tree.bind("<<TreeviewSelect>>", self._on_jira_ticket_select)
 
-        # ─── 우측: 상세 ───
+        # ─── 우측: 상세 (스크롤 지원) ───
         right = tk.Frame(body, bg="white", relief="solid", bd=1, width=420)
         right.pack(side="left", fill="both", padx=(0, 0))
         right.pack_propagate(False)
@@ -4207,9 +4244,20 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                  font=("맑은 고딕", 11, "bold"), bg="white", fg="#1F2937",
                  anchor="w").pack(fill="x", padx=10, pady=(10, 6))
 
-        # 상세 정보 표시 영역
-        self._jira_detail_frame = tk.Frame(right, bg="white")
-        self._jira_detail_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # 스크롤 가능한 상세 영역
+        _detail_canvas = tk.Canvas(right, bg="white", highlightthickness=0)
+        _detail_sb = ttk.Scrollbar(right, orient="vertical", command=_detail_canvas.yview)
+        self._jira_detail_frame = tk.Frame(_detail_canvas, bg="white")
+
+        self._jira_detail_frame.bind("<Configure>",
+            lambda e: _detail_canvas.configure(scrollregion=_detail_canvas.bbox("all")))
+        _dw = _detail_canvas.create_window((0, 0), window=self._jira_detail_frame, anchor="nw")
+        _detail_canvas.bind("<Configure>",
+            lambda e: _detail_canvas.itemconfig(_dw, width=e.width))
+        _detail_canvas.configure(yscrollcommand=_detail_sb.set)
+        _detail_sb.pack(side="right", fill="y")
+        _detail_canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+        self._bind_mousewheel(_detail_canvas, self._jira_detail_frame)
 
         self._jira_detail_placeholder = tk.Label(
             self._jira_detail_frame,
@@ -4286,7 +4334,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
     def _open_jira_assignee_settings(self):
         """담당자 설정 팝업 (입고탭 Jira 설정과 동일한 형태)"""
         win = tk.Toplevel(self.root)
-        win.title("👥 Jira 담당자 설정")
+        win.title("🏢 로지스 설정 (우리팀)")
         win.configure(bg="#F5F6F8")
         try:
             self.position_popup(win, 520, 420)
@@ -4299,11 +4347,11 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         # 헤더
         head = tk.Frame(win, bg="#F5F6F8")
         head.pack(fill="x", padx=18, pady=(14, 4))
-        tk.Label(head, text="👥", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
-        tk.Label(head, text="Jira 담당자 설정",
+        tk.Label(head, text="🏢", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="로지스 설정",
                  font=("맑은 고딕", 14, "bold"),
                  bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
-        tk.Label(win, text="등록된 담당자로 Jira 대기 티켓을 필터링합니다",
+        tk.Label(win, text="우리팀 이름으로 된 티켓만 필터링합니다",
                  bg="#F5F6F8", fg="#666",
                  font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
 
@@ -4371,6 +4419,324 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                   font=("맑은 고딕", 10),
                   bd=0, relief="flat", padx=18, pady=6,
                   cursor="hand2").pack(side="left", padx=(8, 0))
+
+    # ─── 담당자(MD 등) 설정 - 티켓 담당자 지정용 ───
+    def _jira_md_config_path(self):
+        """MD 담당자 설정 파일 경로"""
+        try:
+            home = os.path.expanduser("~")
+            cfg_dir = os.path.join(home, ".logipan")
+            os.makedirs(cfg_dir, exist_ok=True)
+            return os.path.join(cfg_dir, "jira_md_assignees.json")
+        except Exception:
+            return None
+
+    def _load_jira_md_list(self):
+        """MD 담당자 목록 로드 → [{name, account_id}, ...]"""
+        try:
+            path = self._jira_md_config_path()
+            if path and os.path.exists(path):
+                import json
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data.get('assignees', [])
+        except Exception as e:
+            print(f"MD 목록 로드 실패: {e}")
+        return []
+
+    def _save_jira_md_list(self, rows):
+        """MD 담당자 목록 저장"""
+        try:
+            import json
+            assignees = []
+            for name_e, id_e in rows:
+                name = name_e.get().strip()
+                acc_id = id_e.get().strip()
+                if name or acc_id:
+                    assignees.append({'name': name, 'account_id': acc_id})
+            path = self._jira_md_config_path()
+            if path:
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump({'assignees': assignees}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"MD 목록 저장 실패: {e}")
+            messagebox.showerror("저장 실패", str(e))
+
+    def _open_jira_md_settings(self):
+        """담당자(MD) 설정 팝업 - 티켓 담당자 지정용"""
+        win = tk.Toplevel(self.root)
+        win.title("👤 담당자 설정 (MD·외부)")
+        win.configure(bg="#F5F6F8")
+        try:
+            self.position_popup(win, 520, 480)
+        except Exception:
+            win.geometry("520x480")
+        win.transient(self.root)
+        win.grab_set()
+        self._bind_esc_close(win)
+
+        head = tk.Frame(win, bg="#F5F6F8")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        tk.Label(head, text="👤", font=("맑은 고딕", 18), bg="#F5F6F8").pack(side="left", padx=(0, 6))
+        tk.Label(head, text="담당자 설정",
+                 font=("맑은 고딕", 14, "bold"),
+                 bg="#F5F6F8", fg="#1A1A1A").pack(side="left")
+        tk.Label(win, text="티켓 담당자 지정 시 빠르게 선택할 수 있는 목록입니다",
+                 bg="#F5F6F8", fg="#666",
+                 font=("맑은 고딕", 8)).pack(padx=18, anchor="w")
+
+        card = tk.Frame(win, bg="white",
+                        highlightthickness=1, highlightbackground="#E5E7EB")
+        card.pack(fill="both", expand=True, padx=18, pady=12)
+        tk.Frame(card, bg="#8B5CF6", width=4).pack(side="left", fill="y")
+        inner = tk.Frame(card, bg="white", padx=14, pady=12)
+        inner.pack(side="left", fill="both", expand=True)
+
+        tk.Label(inner,
+                 text="💡 MD·담당자 이름과 Jira accountId를 등록하세요.\n"
+                      "   (Jira 프로필 → URL의 /people/ 뒤 문자열이 accountId)",
+                 font=("맑은 고딕", 9), bg="white", fg="#6B7280",
+                 anchor="w", justify="left").pack(fill="x", pady=(0, 10))
+
+        hdr = tk.Frame(inner, bg="white")
+        hdr.pack(fill="x", pady=(0, 4))
+        tk.Label(hdr, text="이름", width=15, anchor="w", bg="white",
+                 font=("맑은 고딕", 9, "bold"), fg="#374151").pack(side="left")
+        tk.Label(hdr, text="Jira accountId", anchor="w", bg="white",
+                 font=("맑은 고딕", 9, "bold"), fg="#374151").pack(side="left")
+
+        popup_rows = []
+        md_list = self._load_jira_md_list()
+        for i in range(8):  # 8명까지
+            row = tk.Frame(inner, bg="white")
+            row.pack(fill="x", pady=2)
+            name_e = tk.Entry(row, width=15, font=("맑은 고딕", 10),
+                              relief="solid", bd=1)
+            name_e.pack(side="left", padx=(0, 6))
+            id_e = tk.Entry(row, font=("Consolas", 9), relief="solid", bd=1)
+            id_e.pack(side="left", fill="x", expand=True)
+            if i < len(md_list):
+                name_e.insert(0, md_list[i].get('name', ''))
+                id_e.insert(0, md_list[i].get('account_id', ''))
+            popup_rows.append((name_e, id_e))
+
+        btn_frame = tk.Frame(win, bg="#F5F6F8")
+        btn_frame.pack(fill="x", padx=18, pady=(0, 14))
+
+        def _do_save():
+            self._save_jira_md_list(popup_rows)
+            messagebox.showinfo("저장 완료", "담당자 설정이 저장되었습니다.", parent=win)
+            win.destroy()
+
+        tk.Button(btn_frame, text="💾 저장",
+                  command=_do_save,
+                  bg="#10B981", fg="white",
+                  activebackground="#059669",
+                  font=("맑은 고딕", 10, "bold"),
+                  bd=0, relief="flat", padx=18, pady=6,
+                  cursor="hand2").pack(side="left")
+        tk.Button(btn_frame, text="취소",
+                  command=win.destroy,
+                  bg="#E5E7EB", fg="#374151",
+                  activebackground="#D1D5DB",
+                  font=("맑은 고딕", 10),
+                  bd=0, relief="flat", padx=18, pady=6,
+                  cursor="hand2").pack(side="left", padx=(8, 0))
+
+    def _merge_selected_tickets_files(self):
+        """선택된 여러 티켓의 첨부파일을 합쳐서 통합 엑셀 생성"""
+        sel = self._jira_tree.selection()
+        if len(sel) < 2:
+            messagebox.showwarning("안내", "Ctrl+클릭으로 티켓 2개 이상 선택해주세요.")
+            return
+
+        all_atts = []
+        for key in sel:
+            ticket = next((t for t in self._jira_tickets_cache if t.get('key') == key), None)
+            if not ticket:
+                continue
+            for att in (ticket.get('attachments') or []):
+                if att.get('filename', '').lower().endswith(('.xlsx', '.xls', '.csv')):
+                    all_atts.append((key, att))
+
+        if not all_atts:
+            messagebox.showwarning("안내", "선택한 티켓에 엑셀/CSV 파일이 없습니다.")
+            return
+
+        if not messagebox.askyesno("📊 파일 합치기",
+                f"티켓 {len(sel)}건 / 파일 {len(all_atts)}개를 합칩니다.\n진행할까요?"):
+            return
+
+        import tempfile
+        tmp_dir = tempfile.mkdtemp()
+        all_dfs = []
+        errors = []
+
+        for tkey, att in all_atts:
+            fname = att.get('filename', '?')
+            tmp_path = os.path.join(tmp_dir, f"{tkey}_{fname}")
+            try:
+                ok, msg = self.download_jira_attachment(att['content'], tmp_path)
+                if not ok:
+                    errors.append(f"{tkey}/{fname}: 다운로드 실패"); continue
+                if fname.lower().endswith('.csv'):
+                    df = pd.read_csv(tmp_path, dtype=str)
+                else:
+                    df = pd.read_excel(tmp_path, dtype=str)
+                df = self._clean_outbound_df(df)
+                all_dfs.append(df)
+            except Exception as e:
+                errors.append(f"{tkey}/{fname}: {e}")
+            finally:
+                try: os.remove(tmp_path)
+                except: pass
+        try: os.rmdir(tmp_dir)
+        except: pass
+
+        if not all_dfs:
+            messagebox.showerror("실패", "파싱 가능한 파일이 없습니다.\n" + "\n".join(errors))
+            return
+
+        merged = pd.concat(all_dfs, ignore_index=True)
+
+        from datetime import datetime
+        today = datetime.now().strftime('%y%m%d')
+        save_path = filedialog.asksaveasfilename(
+            title="통합 파일 저장",
+            defaultextension=".xls",
+            filetypes=[("Excel 97-2003", "*.xls")],
+            initialfile=f"{today} 출고 통합 ({len(sel)}티켓 {len(all_dfs)}파일).xls",
+            initialdir=getattr(self, 'save_dir', None))
+        if not save_path:
+            return
+
+        try:
+            actual_path = self._save_df_as_xls(merged, save_path)
+            result_msg = f"✅ {len(sel)}티켓 / {len(all_dfs)}파일 합침 → {len(merged)}행"
+            result_msg += f"\n📄 {os.path.basename(actual_path)}"
+            if errors:
+                result_msg += f"\n\n⚠️ 실패:\n" + "\n".join(errors[:5])
+            messagebox.showinfo("합치기 완료", result_msg)
+        except Exception as e:
+            messagebox.showerror("저장 실패", str(e))
+
+    def _save_df_as_xls(self, df, save_path):
+        """DataFrame을 .xls(97-03)로 저장.
+        openpyxl로 xlsx 임시 저장 → Excel COM으로 xls 변환.
+        xlwt 있으면 직접 저장."""
+        # 1) xlwt 있으면 바로
+        try:
+            df.to_excel(save_path, index=False, engine='xlwt')
+            return save_path
+        except Exception:
+            pass
+
+        # 2) xlsx 임시 저장 → Excel COM으로 xls 변환
+        import tempfile
+        tmp_xlsx = os.path.join(tempfile.gettempdir(), '_logipan_tmp.xlsx')
+        df.to_excel(tmp_xlsx, index=False, engine='openpyxl')
+
+        # .xls 경로 확보
+        if not save_path.lower().endswith('.xls'):
+            save_path = save_path.rsplit('.', 1)[0] + '.xls'
+
+        try:
+            import win32com.client
+            excel = win32com.client.Dispatch("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            wb = excel.Workbooks.Open(os.path.abspath(tmp_xlsx))
+            # 56 = xlExcel8 = .xls (97-2003)
+            wb.SaveAs(os.path.abspath(save_path), FileFormat=56)
+            wb.Close(False)
+            excel.Quit()
+            return save_path
+        except ImportError:
+            messagebox.showerror("변환 실패",
+                "xls 변환에 pywin32가 필요합니다.\nCMD에서 실행: pip install pywin32")
+            raise
+        except Exception as e:
+            messagebox.showerror("변환 실패", f"Excel COM 변환 오류:\n{e}")
+            raise
+        finally:
+            try: os.remove(tmp_xlsx)
+            except: pass
+
+    def _clean_outbound_df(self, df):
+        """출고 파일 정리: 빈 행 제거 + 주소 컬럼 통일"""
+        # 1) 빈 행 제거 - 첫 번째 컬럼(보통 바코드) 기준으로 데이터 있는 행만
+        first_col = df.columns[0]
+        df = df[df[first_col].notna() & (df[first_col].astype(str).str.strip() != '')]
+        df = df.dropna(how='all')
+
+        # 2) 주소 컬럼 통일 - '주소' 포함된 컬럼은 가장 많이 나오는 값으로 채움
+        for col in df.columns:
+            col_lower = str(col).strip().lower()
+            if '주소' in col_lower or 'address' in col_lower:
+                vals = df[col].dropna()
+                vals = vals[vals.astype(str).str.strip() != '']
+                if len(vals) > 0:
+                    most_common = vals.value_counts().index[0]
+                    df[col] = most_common
+
+        return df.reset_index(drop=True)
+
+    def _merge_jira_ticket_files(self, data_files, issue_key):
+        """선택한 티켓의 첨부파일들을 합쳐서 통합 엑셀 생성"""
+        import tempfile
+        tmp_dir = tempfile.mkdtemp()
+        all_dfs = []
+        errors = []
+
+        for att in data_files:
+            fname = att.get('filename', '?')
+            tmp_path = os.path.join(tmp_dir, fname)
+            try:
+                ok, msg = self.download_jira_attachment(att['content'], tmp_path)
+                if not ok:
+                    errors.append(f"{fname}: 다운로드 실패"); continue
+                if fname.lower().endswith('.csv'):
+                    df = pd.read_csv(tmp_path, dtype=str)
+                else:
+                    df = pd.read_excel(tmp_path, dtype=str)
+                df = self._clean_outbound_df(df)
+                all_dfs.append(df)
+            except Exception as e:
+                errors.append(f"{fname}: {e}")
+            finally:
+                try: os.remove(tmp_path)
+                except: pass
+
+        try: os.rmdir(tmp_dir)
+        except: pass
+
+        if not all_dfs:
+            messagebox.showerror("실패", "파싱 가능한 파일이 없습니다.\n" + "\n".join(errors))
+            return
+
+        merged = pd.concat(all_dfs, ignore_index=True)
+
+        from datetime import datetime
+        today = datetime.now().strftime('%y%m%d')
+        save_path = filedialog.asksaveasfilename(
+            title="통합 파일 저장",
+            defaultextension=".xls",
+            filetypes=[("Excel 97-2003", "*.xls")],
+            initialfile=f"{today} {issue_key} 통합 ({len(all_dfs)}파일).xls",
+            initialdir=getattr(self, 'save_dir', None))
+        if not save_path:
+            return
+
+        try:
+            actual_path = self._save_df_as_xls(merged, save_path)
+            result_msg = f"✅ {len(all_dfs)}개 파일 합침 → {len(merged)}행"
+            result_msg += f"\n📄 {os.path.basename(actual_path)}"
+            if errors:
+                result_msg += f"\n\n⚠️ 실패:\n" + "\n".join(errors[:5])
+            messagebox.showinfo("합치기 완료", result_msg)
+        except Exception as e:
+            messagebox.showerror("저장 실패", str(e))
 
     def refresh_jira_tickets(self):
         """Jira API 호출해서 티켓 새로 가져오기"""
@@ -4453,58 +4819,461 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         sel = self._jira_tree.selection()
         if not sel:
             return
-        key = sel[0]
+        key = sel[-1]  # 마지막 선택된 티켓
         ticket = next((t for t in self._jira_tickets_cache if t.get('key') == key), None)
         if not ticket:
             return
 
-        # placeholder 제거
-        for w in self._jira_detail_frame.winfo_children():
+        fr = self._jira_detail_frame
+        for w in fr.winfo_children():
             w.destroy()
 
-        # 상세 그리기
-        def add_row(label, value, copy=False):
-            row = tk.Frame(self._jira_detail_frame, bg="white")
-            row.pack(fill="x", pady=2)
-            tk.Label(row, text=label, font=("맑은 고딕", 9, "bold"),
-                     bg="white", fg="#6B7280", width=10, anchor="w").pack(side="left")
-            v = tk.Label(row, text=value or '-', font=("맑은 고딕", 10),
-                          bg="white", fg="#1F2937", anchor="w", wraplength=300, justify="left")
-            v.pack(side="left", fill="x", expand=True)
+        issue_key = ticket.get('key', '')
+        reporter_name = ticket.get('reporter') or '?'
+        reporter_id = ticket.get('reporter_id', '')
 
-        add_row("티켓", ticket.get('key', ''))
-        add_row("상태", ticket.get('status', ''))
-        add_row("제목", ticket.get('summary', ''))
-        add_row("요청자", ticket.get('reporter') or '-')
-        add_row("담당자", ticket.get('assignee') or '미지정')
-        add_row("생성", (ticket.get('created') or '')[:19].replace('T', ' '))
-        add_row("수정", (ticket.get('updated') or '')[:19].replace('T', ' '))
+        # ─── 헤더: 티켓키 + 상태 + Jira 링크 ───
+        hdr = tk.Frame(fr, bg="white")
+        hdr.pack(fill="x", pady=(0, 6))
+        tk.Label(hdr, text=issue_key, font=("맑은 고딕", 13, "bold"),
+                 bg="white", fg="#1F2937").pack(side="left")
+        tk.Label(hdr, text=f"  {ticket.get('status', '')}",
+                 font=("맑은 고딕", 10), bg="white", fg="#6B7280").pack(side="left")
+        # 우측 링크
+        link = tk.Label(hdr, text="Jira에서 열기 ↗", font=("맑은 고딕", 9, "underline"),
+                         bg="white", fg="#3B82F6", cursor="hand2")
+        link.pack(side="right")
+        link.bind("<Button-1>", lambda e: self._open_url(ticket.get('url', '')))
 
-        # 본문
-        tk.Label(self._jira_detail_frame, text="본문",
-                 font=("맑은 고딕", 9, "bold"),
-                 bg="white", fg="#6B7280", anchor="w").pack(fill="x", pady=(10, 2))
-        desc_text = tk.Text(self._jira_detail_frame, height=10, wrap="word",
-                             font=("맑은 고딕", 9), bg="#F9FAFB", relief="solid", bd=1)
-        desc_text.insert("1.0", ticket.get('description') or '(본문 없음)')
+        # ─── 정보 (라벨 행) ───
+        def _info_row(label, value):
+            r = tk.Frame(fr, bg="white")
+            r.pack(fill="x", pady=1)
+            tk.Label(r, text=label, font=("맑은 고딕", 9, "bold"),
+                     bg="white", fg="#6B7280", width=7, anchor="w").pack(side="left")
+            tk.Label(r, text=value or '-', font=("맑은 고딕", 9),
+                     bg="white", fg="#1F2937", anchor="w", wraplength=300, justify="left"
+                     ).pack(side="left", fill="x", expand=True)
+
+        _info_row("제목", ticket.get('summary', ''))
+        _info_row("요청자", reporter_name)
+        _info_row("담당자", ticket.get('assignee') or '미지정')
+
+        # ─── 본문 (편집 가능) ───
+        desc = ticket.get('description') or ''
+        desc_hdr = tk.Frame(fr, bg="white")
+        desc_hdr.pack(fill="x", pady=(6, 2))
+        tk.Label(desc_hdr, text="본문", font=("맑은 고딕", 9, "bold"),
+                 bg="white", fg="#6B7280").pack(side="left")
+
+        desc_text = tk.Text(fr, height=4, wrap="word",
+                             font=("맑은 고딕", 9), bg="#F9FAFB",
+                             relief="solid", bd=1, highlightthickness=0)
+        desc_text.insert("1.0", desc)
         desc_text.config(state="disabled")
-        desc_text.pack(fill="both", expand=True, pady=(0, 6))
+        desc_text.pack(fill="x", pady=(0, 2))
 
-        # 액션 버튼들
-        btn_row = tk.Frame(self._jira_detail_frame, bg="white")
-        btn_row.pack(fill="x", pady=(8, 0))
+        desc_save_btn = tk.Button(desc_hdr, text="", bg="white", bd=0)  # placeholder
 
-        tk.Button(btn_row, text="🌐 Jira에서 열기",
-                  command=lambda: self._open_url(ticket.get('url', '')),
-                  bg="#6366F1", fg="white", font=("맑은 고딕", 9, "bold"),
-                  bd=0, relief="flat", padx=10, pady=5, cursor="hand2",
-                  activebackground="#4F46E5").pack(side="left", padx=(0, 4))
+        def _toggle_edit():
+            if desc_text.cget("state") == "disabled":
+                desc_text.config(state="normal", bg="white")
+                desc_save_btn.config(text="💾 저장", bg="#10B981", fg="white",
+                                      font=("맑은 고딕", 8, "bold"),
+                                      relief="flat", padx=6, pady=1, cursor="hand2",
+                                      command=_save_desc)
+                desc_save_btn.pack(side="right")
+                edit_btn.config(text="취소")
+            else:
+                desc_text.delete("1.0", tk.END)
+                desc_text.insert("1.0", desc)
+                desc_text.config(state="disabled", bg="#F9FAFB")
+                desc_save_btn.pack_forget()
+                edit_btn.config(text="✏️")
 
-        tk.Button(btn_row, text="📋 키 복사",
-                  command=lambda: self._copy_to_clipboard(ticket.get('key', '')),
-                  bg="#6B7280", fg="white", font=("맑은 고딕", 9, "bold"),
-                  bd=0, relief="flat", padx=10, pady=5, cursor="hand2",
-                  activebackground="#4B5563").pack(side="left")
+        def _save_desc():
+            new_text = desc_text.get("1.0", tk.END).strip()
+            ok, msg = self.update_jira_description(issue_key, new_text)
+            if ok:
+                messagebox.showinfo("✅", "본문 수정 완료")
+                self.refresh_jira_tickets()
+            else:
+                messagebox.showerror("실패", msg)
+
+        edit_btn = tk.Button(desc_hdr, text="✏️", command=_toggle_edit,
+                              bg="white", fg="#6B7280", font=("맑은 고딕", 9),
+                              bd=0, relief="flat", cursor="hand2")
+        edit_btn.pack(side="right")
+
+        # ─── 첨부파일 ───
+        attachments = ticket.get('attachments', [])
+        if attachments:
+            att_frame = tk.Frame(fr, bg="white")
+            att_frame.pack(fill="x", pady=(0, 6))
+            for att in attachments:
+                fname = att.get('filename', '?')
+                size_kb = att.get('size', 0) // 1024
+                content_url = att.get('content', '')
+                arow = tk.Frame(att_frame, bg="white")
+                arow.pack(fill="x")
+                def _dl(url=content_url, fn=fname):
+                    sp = filedialog.asksaveasfilename(title="저장", initialfile=fn,
+                                                      initialdir=getattr(self, 'save_dir', None))
+                    if sp:
+                        ok, msg = self.download_jira_attachment(url, sp)
+                        if ok: messagebox.showinfo("✅", f"저장 완료: {os.path.basename(sp)}")
+                        else: messagebox.showerror("실패", msg)
+                dl_btn = tk.Label(arow, text=f"📄 {fname} ({size_kb}KB)",
+                                   font=("맑은 고딕", 9, "underline"),
+                                   bg="white", fg="#3B82F6", cursor="hand2")
+                dl_btn.pack(side="left")
+                dl_btn.bind("<Button-1>", lambda e, f=_dl: f())
+
+            # 엑셀/CSV 첨부파일이 있으면 입고탭으로 보내기 버튼
+            data_files = [a for a in attachments
+                          if a.get('filename', '').lower().endswith(('.xlsx', '.xls', '.csv'))]
+            if data_files:
+                def _send_to_brand_qty():
+                    # 여러 개면 선택, 하나면 바로
+                    att_to_use = data_files[0]
+                    if len(data_files) > 1:
+                        pick = tk.Toplevel(self.root)
+                        pick.title("파일 선택")
+                        pick.configure(bg="#F5F6F8")
+                        try: self.position_popup(pick, 350, 40 + len(data_files) * 40)
+                        except: pick.geometry(f"350x{40 + len(data_files) * 40}")
+                        pick.transient(self.root); pick.grab_set()
+                        self._bind_esc_close(pick)
+                        chosen = {'v': None}
+                        for df in data_files:
+                            fn = df.get('filename', '?')
+                            def _pick(a=df):
+                                chosen['v'] = a; pick.destroy()
+                            tk.Button(pick, text=f"📄 {fn}", command=_pick,
+                                      bg="white", fg="#1F2937", font=("맑은 고딕", 10),
+                                      bd=1, relief="solid", padx=10, pady=6,
+                                      cursor="hand2").pack(fill="x", padx=12, pady=(6, 0))
+                        pick.wait_window()
+                        if not chosen['v']:
+                            return
+                        att_to_use = chosen['v']
+
+                    # 다운로드
+                    import tempfile
+                    tmp_dir = tempfile.mkdtemp()
+                    tmp_path = os.path.join(tmp_dir, att_to_use['filename'])
+                    ok, msg = self.download_jira_attachment(att_to_use['content'], tmp_path)
+                    if not ok:
+                        messagebox.showerror("다운로드 실패", msg); return
+
+                    # 파싱
+                    try:
+                        fname_lower = att_to_use['filename'].lower()
+                        if fname_lower.endswith('.csv'):
+                            df = pd.read_csv(tmp_path, dtype=str)
+                        else:
+                            df = pd.read_excel(tmp_path, dtype=str)
+
+                        # 바코드 컬럼 + 수량 컬럼 자동 탐지
+                        import re
+                        bc_pat = re.compile(r'^[A-Z0-9]{19}$|^1-\d{10}$')
+                        qty_names = ['수량', '출고수량', '입고수량', 'qty', 'quantity', '주문수량', 'count', '발주수량']
+
+                        # 바코드 컬럼 찾기: 각 컬럼의 값이 바코드 패턴에 얼마나 매칭되는지
+                        bc_col = None
+                        best_match = 0
+                        for col in df.columns:
+                            matches = df[col].dropna().apply(lambda v: bool(bc_pat.match(str(v).strip()))).sum()
+                            if matches > best_match:
+                                best_match = matches
+                                bc_col = col
+                        # 컬럼명에 '바코드' 포함되면 우선
+                        for col in df.columns:
+                            if '바코드' in str(col).lower() or 'barcode' in str(col).lower():
+                                bc_col = col; break
+
+                        # 수량 컬럼 찾기
+                        qty_col = None
+                        for col in df.columns:
+                            col_lower = str(col).strip().lower()
+                            if col_lower in qty_names or any(q in col_lower for q in qty_names):
+                                qty_col = col; break
+                        # 못 찾으면 마지막 숫자 컬럼
+                        if not qty_col:
+                            for col in reversed(list(df.columns)):
+                                try:
+                                    if pd.to_numeric(df[col].dropna().head(5), errors='coerce').notna().sum() >= 3:
+                                        if col != bc_col:
+                                            qty_col = col; break
+                                except: pass
+
+                        if not bc_col:
+                            messagebox.showwarning("안내", "바코드 컬럼을 찾을 수 없습니다."); return
+
+                        # 바코드 + 수량만 추출
+                        lines = []
+                        count = 0
+                        for _, row in df.iterrows():
+                            bc = str(row.get(bc_col, '')).strip()
+                            if not bc or bc == 'nan':
+                                continue
+                            qty = '1'
+                            if qty_col:
+                                raw_qty = str(row.get(qty_col, '1')).strip()
+                                try: qty = str(int(float(raw_qty)))
+                                except: qty = '1'
+                            lines.append(f"{bc}\t{qty}")
+                            count += 1
+                        paste_text = "\n".join(lines)
+
+                        if not paste_text.strip():
+                            messagebox.showwarning("안내", "파일에 데이터가 없습니다."); return
+
+                        found_info = f"바코드: {bc_col}"
+                        if qty_col:
+                            found_info += f" / 수량: {qty_col}"
+
+                        # 입고탭 전환 + 브랜드수량 칸에 넣기
+                        try:
+                            self.nb.select(self.t_in)
+                        except Exception:
+                            pass
+
+                        existing = self.txt_in_master.get("1.0", tk.END).strip()
+                        if existing:
+                            choice = messagebox.askyesnocancel("기존 데이터",
+                                "[예] 합치기  [아니오] 덮어쓰기  [취소] 중단")
+                            if choice is None: return
+                            if choice:
+                                self.txt_in_master.insert(tk.END, "\n" + paste_text)
+                            else:
+                                self.txt_in_master.delete("1.0", tk.END)
+                                self.txt_in_master.insert("1.0", paste_text)
+                        else:
+                            self.txt_in_master.delete("1.0", tk.END)
+                            self.txt_in_master.insert("1.0", paste_text)
+
+                        self.count_total_qty(self.txt_in_master, self.lbl_in_m, "브랜드 수량")
+                        messagebox.showinfo("✅",
+                            f"📦 {count}건 브랜드수량에 넣음\n{found_info}\n파일: {att_to_use['filename']}")
+                    except Exception as e:
+                        messagebox.showerror("파싱 실패", str(e))
+                    finally:
+                        try: os.remove(tmp_path); os.rmdir(tmp_dir)
+                        except: pass
+
+                tk.Button(att_frame, text="📥 입고탭 브랜드수량에 넣기",
+                          command=_send_to_brand_qty,
+                          bg="#0EA5E9", fg="white", font=("맑은 고딕", 9, "bold"),
+                          bd=0, relief="flat", padx=10, pady=5,
+                          cursor="hand2").pack(fill="x", pady=(6, 0))
+
+                # 출고파일 합치기 (첨부파일 2개 이상일 때)
+                if len(data_files) >= 2:
+                    def _merge_ticket_files():
+                        self._merge_jira_ticket_files(data_files, issue_key)
+                    tk.Button(att_frame, text=f"📊 첨부파일 합치기 ({len(data_files)}개)",
+                              command=_merge_ticket_files,
+                              bg="#F59E0B", fg="white", font=("맑은 고딕", 9, "bold"),
+                              bd=0, relief="flat", padx=10, pady=5,
+                              cursor="hand2").pack(fill="x", pady=(4, 0))
+
+        # ─── 구분선 ───
+        tk.Frame(fr, bg="#E5E7EB", height=1).pack(fill="x", pady=6)
+
+        # ─── 액션: 상태 변경 ───
+        def _complete():
+            ok, transitions = self.get_jira_transitions(issue_key)
+            if not ok:
+                messagebox.showerror("실패", str(transitions)); return
+            if not transitions:
+                messagebox.showinfo("안내", "가능한 상태 전환이 없습니다."); return
+            pick_win = tk.Toplevel(self.root)
+            pick_win.title("🔄 상태 변경")
+            pick_win.configure(bg="#F5F6F8")
+            try: self.position_popup(pick_win, 280, 40 + len(transitions) * 44)
+            except: pick_win.geometry(f"280x{40 + len(transitions) * 44}")
+            pick_win.transient(self.root); pick_win.grab_set()
+            self._bind_esc_close(pick_win)
+            for t in transitions:
+                def _do(tid=t['id'], tn=t['name']):
+                    ok2, msg = self.transition_jira_ticket(issue_key, tid)
+                    pick_win.destroy()
+                    if ok2: messagebox.showinfo("✅", f"{issue_key} → {tn}"); self.refresh_jira_tickets()
+                    else: messagebox.showerror("실패", msg)
+                tk.Button(pick_win, text=f"➡ {t['name']}", command=_do,
+                          bg="white", fg="#1F2937", font=("맑은 고딕", 10, "bold"),
+                          bd=1, relief="solid", padx=12, pady=8,
+                          cursor="hand2").pack(fill="x", padx=12, pady=(6, 0))
+
+        status_btn = tk.Button(fr, text=f"🔄 상태 변경 (현재: {ticket.get('status', '')})",
+                  command=_complete,
+                  bg="#10B981", fg="white", font=("맑은 고딕", 10, "bold"),
+                  bd=0, relief="flat", padx=10, pady=6, cursor="hand2")
+        status_btn.pack(fill="x", pady=(0, 4))
+
+        # ─── 액션: 할당 (같은 줄) ───
+        def _assign_to_reporter():
+            if not reporter_id:
+                messagebox.showwarning("안내", "요청자 정보가 없습니다."); return
+            ok, msg = self.assign_jira_ticket(issue_key, reporter_id)
+            if ok: messagebox.showinfo("✅", f"→ {reporter_name} 할당 완료"); self.refresh_jira_tickets()
+            else: messagebox.showerror("실패", msg)
+
+        def _assign_other():
+            pick_win = tk.Toplevel(self.root)
+            pick_win.title("🔀 담당자 변경")
+            pick_win.configure(bg="#F5F6F8")
+            try: self.position_popup(pick_win, 380, 460)
+            except: pick_win.geometry("380x460")
+            pick_win.transient(self.root); pick_win.grab_set()
+            self._bind_esc_close(pick_win)
+
+            def _do_assign_action(account_id, display_name):
+                ok2, msg = self.assign_jira_ticket(issue_key, account_id)
+                pick_win.destroy()
+                if ok2: messagebox.showinfo("✅", f"→ {display_name} 할당 완료"); self.refresh_jira_tickets()
+                else: messagebox.showerror("실패", msg)
+
+            # 저장된 MD
+            md_list = self._load_jira_md_list()
+            if md_list:
+                tk.Label(pick_win, text="빠른 선택", font=("맑은 고딕", 10, "bold"),
+                         bg="#F5F6F8", fg="#374151").pack(padx=14, pady=(12, 4), anchor="w")
+                mf = tk.Frame(pick_win, bg="#F5F6F8")
+                mf.pack(fill="x", padx=14, pady=(0, 6))
+                for md in md_list:
+                    nm, aid = md.get('name', '?'), md.get('account_id', '')
+                    if aid:
+                        tk.Button(mf, text=nm, command=lambda a=aid, n=nm: _do_assign_action(a, n),
+                                  bg="white", fg="#1F2937", font=("맑은 고딕", 9, "bold"),
+                                  bd=1, relief="solid", padx=8, pady=4,
+                                  cursor="hand2").pack(side="left", padx=(0, 4))
+                tk.Frame(pick_win, bg="#E5E7EB", height=1).pack(fill="x", padx=14, pady=4)
+
+            # 검색
+            tk.Label(pick_win, text="🔍 검색", font=("맑은 고딕", 10, "bold"),
+                     bg="#F5F6F8", fg="#374151").pack(padx=14, pady=(4, 4), anchor="w")
+            sf = tk.Frame(pick_win, bg="#F5F6F8")
+            sf.pack(fill="x", padx=14, pady=(0, 6))
+            sv = tk.StringVar()
+            se = tk.Entry(sf, textvariable=sv, font=("맑은 고딕", 10), relief="solid", bd=1)
+            se.pack(side="left", fill="x", expand=True, ipady=4)
+            rf = tk.Frame(pick_win, bg="white", relief="solid", bd=1)
+            rf.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+            def _search(*_):
+                q = sv.get().strip()
+                if len(q) < 2: return
+                for w in rf.winfo_children(): w.destroy()
+                tk.Label(rf, text="검색 중...", bg="white", fg="#999", font=("맑은 고딕", 9)).pack(pady=8)
+                rf.update()
+                ok, users = self.search_jira_users(q)
+                for w in rf.winfo_children(): w.destroy()
+                if not ok:
+                    tk.Label(rf, text=f"❌ {users}", bg="white", fg="#DC2626", font=("맑은 고딕", 9)).pack(pady=8); return
+                if not users:
+                    tk.Label(rf, text="결과 없음", bg="white", fg="#999", font=("맑은 고딕", 9)).pack(pady=8); return
+                for u in users:
+                    dn, aid = u.get('displayName', '?'), u.get('accountId', '')
+                    em = u.get('email', '')
+                    txt = f"{dn}  ({em})" if em else dn
+                    tk.Button(rf, text=txt, command=lambda a=aid, n=dn: _do_assign_action(a, n),
+                              bg="white", fg="#1F2937", font=("맑은 고딕", 10),
+                              bd=0, relief="flat", padx=10, pady=5,
+                              cursor="hand2", anchor="w").pack(fill="x", padx=4, pady=1)
+            tk.Button(sf, text="검색", command=_search, bg="#3B82F6", fg="white",
+                      font=("맑은 고딕", 9, "bold"), bd=0, relief="flat", padx=12, pady=4,
+                      cursor="hand2").pack(side="left", padx=(6, 0))
+            se.bind("<Return>", _search)
+
+        assign_row = tk.Frame(fr, bg="white")
+        assign_row.pack(fill="x", pady=(0, 6))
+        tk.Button(assign_row, text=f"👤 요청자 할당 ({reporter_name.split('/')[0]})",
+                  command=_assign_to_reporter,
+                  bg="#1877F2", fg="white", font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat", padx=8, pady=5, cursor="hand2"
+                  ).pack(side="left", fill="x", expand=True, padx=(0, 3))
+        tk.Button(assign_row, text="🔀 변경",
+                  command=_assign_other,
+                  bg="#E5E7EB", fg="#374151", font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat", padx=8, pady=5, cursor="hand2"
+                  ).pack(side="left")
+
+        # ─── 구분선 ───
+        tk.Frame(fr, bg="#E5E7EB", height=1).pack(fill="x", pady=6)
+
+        # ─── 댓글 + 파일 첨부 (통합) ───
+        tk.Label(fr, text="💬 댓글", font=("맑은 고딕", 9, "bold"),
+                 bg="white", fg="#374151").pack(anchor="w")
+        comment_entry = tk.Text(fr, height=3, wrap="word",
+                                 font=("맑은 고딕", 9), relief="solid", bd=1,
+                                 highlightthickness=0)
+        comment_entry.pack(fill="x", pady=(2, 4))
+
+        # 파일 선택 상태
+        _attached = {'path': None}
+        file_label = tk.Label(fr, text="", font=("맑은 고딕", 8),
+                               bg="white", fg="#6B7280", anchor="w")
+        file_label.pack(fill="x")
+
+        comment_btn_row = tk.Frame(fr, bg="white")
+        comment_btn_row.pack(fill="x", pady=(2, 0))
+
+        def _pick_file():
+            fp = filedialog.askopenfilename(title="첨부할 파일 선택")
+            if fp:
+                _attached['path'] = fp
+                file_label.config(text=f"📎 {os.path.basename(fp)}", fg="#1877F2")
+
+        def _send_comment():
+            text = comment_entry.get("1.0", tk.END).strip()
+            fp = _attached['path']
+            if not text and not fp:
+                return
+            # 파일 업로드
+            if fp:
+                try:
+                    cfg = self.load_jira_settings()
+                    import base64
+                    domain = cfg["domain"]
+                    email = cfg.get("email", "")
+                    token = cfg["api_token"]
+                    auth_val = f'Basic {base64.b64encode(f"{email}:{token}".encode()).decode()}' if email else f'Bearer {token}'
+                    self._upload_jira_attachment(domain, auth_val, issue_key, fp, '3')
+                except Exception as e:
+                    messagebox.showerror("첨부 실패", str(e)); return
+                fname = os.path.basename(fp)
+                if text:
+                    text += f"\n\n📎 첨부: {fname}"
+                else:
+                    text = f"📎 첨부: {fname}"
+            # 댓글
+            if text:
+                ok, msg = self.add_jira_comment(issue_key, text)
+                if not ok:
+                    messagebox.showerror("댓글 실패", msg); return
+            # 초기화
+            comment_entry.delete("1.0", tk.END)
+            _attached['path'] = None
+            file_label.config(text="")
+            messagebox.showinfo("✅", f"{issue_key} 등록 완료")
+            self.refresh_jira_tickets()
+
+        tk.Button(comment_btn_row, text="등록",
+                  command=_send_comment,
+                  bg="#3B82F6", fg="white", font=("맑은 고딕", 9, "bold"),
+                  bd=0, relief="flat", padx=14, pady=4, cursor="hand2"
+                  ).pack(side="left")
+        tk.Button(comment_btn_row, text="📎 파일",
+                  command=_pick_file,
+                  bg="#E5E7EB", fg="#374151", font=("맑은 고딕", 9),
+                  bd=0, relief="flat", padx=10, pady=4, cursor="hand2"
+                  ).pack(side="left", padx=(4, 0))
+        tk.Button(comment_btn_row, text="📋 키 복사",
+                  command=lambda: self._copy_to_clipboard(issue_key),
+                  bg="#E5E7EB", fg="#374151", font=("맑은 고딕", 9),
+                  bd=0, relief="flat", padx=10, pady=4, cursor="hand2"
+                  ).pack(side="right")
 
     def _open_url(self, url):
         """기본 브라우저에서 URL 열기"""
@@ -4649,6 +5418,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                   font=("맑은 고딕", 10, "bold"),
                   relief="flat", padx=14, pady=5,
                   cursor="hand2").pack(side="left", padx=(12, 0))
+        tk.Button(merge_inner, text="📊 스캔내역 추출",
+                  command=self._export_selected_scans_to_excel,
+                  bg="#10B981", fg="white",
+                  font=("맑은 고딕", 10, "bold"),
+                  relief="flat", padx=14, pady=5,
+                  cursor="hand2").pack(side="left", padx=(6, 0))
         tk.Button(merge_inner, text="전체 해제",
                   command=self._clear_scan_checks,
                   bg="#E5E7EB", fg="#374151",
@@ -9974,6 +10749,91 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self._scan_card_checks.clear()
         self._scan_merge_bar.pack_forget()
 
+    def _fetch_scan_sessions(self, session_ids):
+        """Firestore에서 여러 스캔 세션 가져와서 합쳐 반환.
+        Returns: (all_items, workers, labels, quality, work_type) 또는 None
+        """
+        all_items = []
+        workers = []
+        labels = []
+        quality = 'normal'
+        work_type = '매입'
+        for sid in session_ids:
+            try:
+                doc = self.db.collection('scan_sessions').document(sid).get()
+                if not doc.exists:
+                    continue
+                sdata = doc.to_dict()
+                all_items.extend(sdata.get('items', []))
+                w = sdata.get('user', '')
+                if w and w not in workers:
+                    workers.append(w)
+                lbl = sdata.get('label', '')
+                if lbl and lbl not in labels:
+                    labels.append(lbl)
+                if sdata.get('quality') == 'defect':
+                    quality = 'defect'
+                work_type = sdata.get('work_type', work_type)
+            except Exception as e:
+                print(f"세션 {sid} 로드 실패: {e}")
+        if not all_items:
+            return None
+        return all_items, workers, labels, quality, work_type
+
+    def _export_scan_items_to_excel(self, items, workers=None, labels=None, title_hint=''):
+        """스캔 아이템 리스트를 엑셀로 저장. 저장 경로를 사용자가 선택."""
+        from datetime import datetime
+        today = datetime.now().strftime('%y%m%d')
+        default_name = f"{today} 스캔내역"
+        if title_hint:
+            default_name = f"{today} {title_hint} 스캔내역"
+
+        save_path = filedialog.asksaveasfilename(
+            title="스캔내역 엑셀 저장",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialfile=f"{default_name}.xlsx",
+            initialdir=getattr(self, 'save_dir', None))
+        if not save_path:
+            return
+
+        try:
+            rows = []
+            for it in sorted(items, key=lambda x: (x.get('location', ''), x.get('barcode', ''))):
+                rows.append({
+                    '바코드': it.get('barcode', ''),
+                    '로케이션': it.get('location', ''),
+                    '수량': it.get('qty', 1),
+                })
+            df = pd.DataFrame(rows)
+
+            with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='스캔내역')
+                ws = writer.sheets['스캔내역']
+                ws.column_dimensions['A'].width = 25
+                ws.column_dimensions['B'].width = 18
+                ws.column_dimensions['C'].width = 10
+
+            messagebox.showinfo("✅ 추출 완료",
+                f"📊 {len(rows)}건 저장 완료\n{os.path.basename(save_path)}")
+        except Exception as e:
+            messagebox.showerror("추출 실패", str(e))
+
+    def _export_selected_scans_to_excel(self):
+        """체크된 스캔 세션들을 엑셀로 추출"""
+        checked = {k: v for k, v in self._scan_card_checks.items() if v['var'].get()}
+        if not checked:
+            messagebox.showwarning("선택 없음", "스캔 카드를 선택해주세요.")
+            return
+        session_ids = list(checked.keys())
+        result = self._fetch_scan_sessions(session_ids)
+        if not result:
+            messagebox.showwarning("오류", "선택한 세션에 데이터가 없습니다.")
+            return
+        all_items, workers, labels, quality, work_type = result
+        hint = labels[0] if labels else ''
+        self._export_scan_items_to_excel(all_items, workers, labels, title_hint=hint)
+
     def _on_send_merged_scans_to_inbound(self):
         """체크된 스캔 세션들을 합쳐서 입고탭으로 보내기"""
         checked = {k: v for k, v in self._scan_card_checks.items() if v['var'].get()}
@@ -10195,6 +11055,13 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                   font=("맑은 고딕", 10),
                   bd=0, relief="flat", padx=16, pady=5,
                   cursor="hand2").pack(side="right")
+
+        tk.Button(bottom, text="📊 엑셀 추출",
+                  command=lambda: self._export_scan_items_to_excel(items, title_hint=label),
+                  bg="#10B981", fg="white",
+                  font=("맑은 고딕", 10, "bold"),
+                  bd=0, relief="flat", padx=14, pady=5,
+                  cursor="hand2").pack(side="right", padx=(0, 6))
 
     def _open_report_detail(self, doc_id):
         """카드 더블클릭 시 상세 팝업 열기 - 기존 on_message_double_click 호환"""
