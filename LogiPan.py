@@ -239,6 +239,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥 입고")
         self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤 출고")
+        self.t_jira = tk.Frame(self.nb, bg="#F5F6F8"); self.nb.add(self.t_jira, text="🎫 Jira 대기")
         self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦 맘스")
         self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🆕 마스터")
         self.t_rt = ttk.Frame(self.nb); self.nb.add(self.t_rt, text="🔄 RT입고")
@@ -247,7 +248,6 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
         self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
         self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊 마감재고")
-        self.t_jira = tk.Frame(self.nb, bg="#F5F6F8"); self.nb.add(self.t_jira, text="🎫 Jira 대기")
 
         self.setup_inbound()
         self.setup_outbound()
@@ -4204,13 +4204,13 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                        command=lambda: (self._save_jira_assignees(), self._render_jira_tickets())
                        ).pack(side="left", padx=(10, 0))
 
-        # ========== 본문: 좌측 티켓 목록 + 우측 상세 ==========
-        body = tk.Frame(container, bg="#F5F6F8")
+        # ========== 본문: 좌측 티켓 목록 + 우측 상세 (PanedWindow) ==========
+        body = tk.PanedWindow(container, orient="horizontal", bg="#E5E7EB",
+                               sashwidth=6, sashrelief="raised")
         body.pack(fill="both", expand=True, padx=18, pady=(0, 12))
 
         # ─── 좌측: 티켓 목록 (Treeview) ───
         left = tk.Frame(body, bg="white", relief="solid", bd=1)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
         cols = ("status", "key", "summary", "reporter", "created")
         self._jira_tree = ttk.Treeview(left, columns=cols, show="headings", height=20,
@@ -4222,23 +4222,20 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self._jira_tree.heading("created", text="생성일")
         self._jira_tree.column("status", width=80, anchor="center")
         self._jira_tree.column("key", width=100, anchor="center")
-        self._jira_tree.column("summary", width=350, anchor="w")
+        self._jira_tree.column("summary", width=300, anchor="w")
         self._jira_tree.column("reporter", width=100, anchor="center")
-        self._jira_tree.column("created", width=130, anchor="center")
+        self._jira_tree.column("created", width=100, anchor="center")
         self._jira_tree.pack(side="left", fill="both", expand=True, padx=4, pady=4)
 
-        # 스크롤
         sb = ttk.Scrollbar(left, orient="vertical", command=self._jira_tree.yview)
         sb.pack(side="right", fill="y")
         self._jira_tree.configure(yscrollcommand=sb.set)
-
-        # 행 선택 시 우측 상세 갱신
         self._jira_tree.bind("<<TreeviewSelect>>", self._on_jira_ticket_select)
 
+        body.add(left, minsize=400, stretch="always")
+
         # ─── 우측: 상세 (스크롤 지원) ───
-        right = tk.Frame(body, bg="white", relief="solid", bd=1, width=420)
-        right.pack(side="left", fill="both", padx=(0, 0))
-        right.pack_propagate(False)
+        right = tk.Frame(body, bg="white", relief="solid", bd=1)
 
         tk.Label(right, text="📋 티켓 상세",
                  font=("맑은 고딕", 11, "bold"), bg="white", fg="#1F2937",
@@ -4265,6 +4262,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             font=("맑은 고딕", 10), bg="white", fg="#9CA3AF"
         )
         self._jira_detail_placeholder.pack(pady=40)
+
+        body.add(right, minsize=380, stretch="always")
 
         # 로컬 캐시
         self._jira_tickets_cache = []  # 마지막 검색 결과
