@@ -920,7 +920,7 @@
             <div class="sub"></div>
         </div>
 
-        <!-- 스캐너 대기 상태 (불필요하여 숨김) -->
+        <!-- 스캐너 대기 상태 (숨김) -->
         <div class="pda-status" id="pda-status" style="display:none;">
             <div class="dot"></div>
             <span id="pda-status-text">스캐너 대기 중 · 바코드를 쏘세요</span>
@@ -933,7 +933,7 @@
             <span class="scan-toggle on" id="toggle-reverse" onclick="togglePdaReverse()" title="PDA가 거꾸로 출력하는 바코드 자동 보정">↔️ 역순보정</span>
         </div>
 
-        <!-- 수동 입력 (스캐너 안 될 때 백업) -->
+        <!-- 수동 입력 (PDA 안 될 때 백업) - 평소엔 접혀있음 -->
         <div style="margin-top:10px; text-align:right;">
             <button class="pda-manual-toggle" onclick="togglePdaManual()" id="pda-manual-toggle-btn">⌨️ 수동입력</button>
         </div>
@@ -3440,12 +3440,13 @@
         if (!scanSection || scanSection.style.display === 'none') return;
 
         // 사용자가 input/textarea에 포커스 두고 직접 타이핑 중이면 무시
+        // (그 input의 자체 keydown 핸들러가 처리)
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
             return;
         }
 
-        // Ctrl/Meta 조합은 무시 (Ctrl+V 붙여넣기 등 통과)
+        // Ctrl/Meta 조합 무시 (PDA의 Ctrl+V 붙여넣기가 "V"로 잡히는 것 방지)
         if (e.ctrlKey || e.metaKey) return;
 
         if (e.defaultPrevented) return;
@@ -3475,18 +3476,16 @@
     // 페이지 전역에 keydown 리스너 1개만 부착
     document.addEventListener('keydown', handlePdaKeydown);
 
-    // ─── PDA Ctrl+V 붙여넣기 처리 ─────────────────────────
+    // PDA Ctrl+V 붙여넣기 처리
     document.addEventListener('paste', (e) => {
         const scanSection = document.getElementById('section-scan');
         if (!scanSection || scanSection.style.display === 'none') return;
-        // input에 포커스 있으면 해당 input이 알아서 처리 (PDA 모드 등)
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
-        // 클립보드에서 텍스트 가져오기
         const text = (e.clipboardData || window.clipboardData).getData('text').trim();
         if (text) {
             e.preventDefault();
-            pdaBuffer = '';  // 버퍼 리셋
+            pdaBuffer = '';
             processPdaScan(text, true);
         }
     });
@@ -3756,7 +3755,6 @@
     }
 
     // ─── 수동 입력 패널 토글 ─────────────────────────
-
     function togglePdaManual() {
         const panel = document.getElementById('pda-manual-panel');
         const btn = document.getElementById('pda-manual-toggle-btn');
@@ -3843,7 +3841,6 @@
 
             const isZZ = (scanState.currentLoc || '').toUpperCase().startsWith('ZZ');
             if (isZZ) {
-                // 실측 로케 중복
                 showPdaRecent('duplicate', barcode, `${scanState.currentLoc} · 수량 ${existing.qty}개 (실측 중복)`);
                 showAuditBigAlert('error', '실측 로케이션 중복 상품입니다', `${barcode} · 수량: ${existing.qty}개`);
                 beep(600, 60);
@@ -3878,7 +3875,6 @@
                 feedbackScanSuccess(barcode);
             }
         }
-        // 스캔 처리 후 포커스 복원 (씹힘 방지)
         setTimeout(keepPdaFocus, 50);
     }
 
@@ -3971,6 +3967,7 @@
 
     function clearAllScans() {
         if (scanState.items.length === 0) {
+            // 그냥 작업명/로케만 초기화
             if (!confirm("작업명과 로케를 초기화할까요?")) {
                 keepPdaFocus();
                 return;
@@ -3993,9 +3990,7 @@
         };
         document.getElementById('scan-label').value = '';
         document.getElementById('scan-trade-type').value = '';
-        // 거래유형 버튼 비활성화
         document.querySelectorAll('.trade-type-btn').forEach(btn => btn.classList.remove('active'));
-        // 작업명 박스 placeholder로
         const labelBox = document.getElementById('scan-label-box');
         if (labelBox) {
             labelBox.textContent = '(탭해서 작업명 입력)';
