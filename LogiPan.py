@@ -4725,12 +4725,13 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
     def refresh_jira_tickets(self):
         """Jira API 호출해서 티켓 새로 가져오기"""
-        prefix = self._jira_prefix_var.get().strip() or "[출고]"
+        prefix = self._jira_prefix_var.get().strip()
+        # 전체 탭이면 prefix 없이 검색 (입고+출고 모두)
         self._jira_count_label.config(text="🔄 가져오는 중...", fg="#3B82F6")
         self._jira_count_label.update()
 
         try:
-            ok, result = self.search_jira_tickets(prefix=prefix, max_results=100)
+            ok, result = self.search_jira_tickets(prefix=prefix if prefix else '', max_results=100)
             if not ok:
                 self._jira_count_label.config(text=f"❌ 실패: {result[:50]}", fg="#DC2626")
                 messagebox.showerror("Jira 검색 실패", str(result))
@@ -5176,7 +5177,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         assign_row = tk.Frame(fr, bg="white")
         assign_row.pack(fill="x", pady=(0, 6))
-        tk.Button(assign_row, text=f"👤 요청자 할당 ({reporter_name.split('/')[0]})",
+        tk.Button(assign_row, text=f"👤 담당자 할당 ({reporter_name.split('/')[0]})",
                   command=_assign_to_reporter,
                   bg="#1877F2", fg="white", font=("맑은 고딕", 9, "bold"),
                   bd=0, relief="flat", padx=8, pady=5, cursor="hand2"
