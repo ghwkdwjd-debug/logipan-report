@@ -920,8 +920,8 @@
             <div class="sub"></div>
         </div>
 
-        <!-- 스캐너 대기 상태 -->
-        <div class="pda-status" id="pda-status">
+        <!-- 스캐너 대기 상태 (불필요하여 숨김) -->
+        <div class="pda-status" id="pda-status" style="display:none;">
             <div class="dot"></div>
             <span id="pda-status-text">스캐너 대기 중 · 바코드를 쏘세요</span>
         </div>
@@ -958,7 +958,7 @@
 
         <!-- 전송 / 초기화 -->
         <button class="send-btn" id="scan-send-btn" onclick="sendScanSession()" disabled>
-            📤 관리자에게 전송 (0건)
+            📤 입고 스캔내역 전송 (0건)
         </button>
         <button class="clear-btn" onclick="clearAllScans()">
             🗑️ 전체 초기화
@@ -3492,7 +3492,11 @@
     // 더 이상 hidden input이 없으므로 포커스 잡을 게 없음.
     // 하지만 기존 코드 여기저기서 호출하니 빈 함수로 남겨둠.
     function keepPdaFocus() {
-        // no-op: document-level 리스너 방식이라 포커스 관리 불필요
+        // input/textarea에 포커스 있으면 blur → PDA 스캔 받을 수 있게
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
+            active.blur();
+        }
     }
 
     // ─── 페이지 가시성 변경 시 버퍼 리셋 ─────────────────────────
@@ -3650,7 +3654,7 @@
         // [디바운스] PDA가 같은 바코드를 너무 빠르게 두 번 보내는 경우 (트리거 꾹 누름)
         // 200ms 안에 동일 값 들어오면 무시. 의도적 중복(같은 박스 두 번 찍기)은 200ms 넘게 걸림.
         const now = Date.now();
-        if (value === lastScanText && (now - lastScanAt) < 200) {
+        if (value === lastScanText && (now - lastScanAt) < 120) {
             console.log('[PDA] 디바운스로 무시:', value);
             return;
         }
@@ -3818,11 +3822,21 @@
             renderScanList();
             saveScanDraft();
             updatePdaCounters();
-            showPdaRecent('duplicate', barcode, `${scanState.currentLoc} · 수량 ${existing.qty}개 (중복 스캔)`);
-            // 중복 알림 - 큰 박스+음성+진동
-            beep(600, 60);
-            vibrate([30, 30, 30]);
-            speak('중복 스캔');
+
+            const isZZ = (scanState.currentLoc || '').toUpperCase().startsWith('ZZ');
+            if (isZZ) {
+                // 실측 로케 중복
+                showPdaRecent('duplicate', barcode, `${scanState.currentLoc} · 수량 ${existing.qty}개 (실측 중복)`);
+                showAuditBigAlert('error', '실측 로케이션 중복 상품입니다', `${barcode} · 수량: ${existing.qty}개`);
+                beep(600, 60);
+                vibrate([30, 30, 30]);
+                speak('실측 중복');
+            } else {
+                showPdaRecent('duplicate', barcode, `${scanState.currentLoc} · 수량 ${existing.qty}개 (중복 스캔)`);
+                beep(600, 60);
+                vibrate([30, 30, 30]);
+                speak('중복 스캔');
+            }
         } else {
             const item = {
                 barcode: barcode,
@@ -3834,9 +3848,20 @@
             renderScanList();
             saveScanDraft();
             updatePdaCounters();
-            showPdaRecent('success', barcode, `${scanState.currentLoc} · 등록`);
-            feedbackScanSuccess(barcode);
+
+            const isZZ = (scanState.currentLoc || '').toUpperCase().startsWith('ZZ');
+            if (isZZ) {
+                showPdaRecent('success', barcode, `${scanState.currentLoc} · 실측 등록`);
+                beep(880, 40);
+                vibrate([20]);
+                speak('실측');
+            } else {
+                showPdaRecent('success', barcode, `${scanState.currentLoc} · 등록`);
+                feedbackScanSuccess(barcode);
+            }
         }
+        // 스캔 처리 후 포커스 복원 (씹힘 방지)
+        setTimeout(keepPdaFocus, 50);
     }
 
     // ─── 스캔 목록 렌더링 ─────────────────────────
@@ -3848,7 +3873,7 @@
         const items = scanState.items || [];
         countEl.innerText = items.length;
         sendBtn.disabled = items.length === 0;
-        sendBtn.innerText = `📤 관리자에게 전송 (${items.length}건)`;
+        sendBtn.innerText = `📤 입고 스캔내역 전송 (${items.length}건)`;
 
         if (items.length === 0) {
             box.innerHTML = '<div class="scan-empty">아직 스캔한 게 없어요</div>';
@@ -3866,7 +3891,7 @@
                     <div class="barcode">${escapeHtml(it.barcode)}</div>
                     <div class="loc">📍 ${escapeHtml(it.location || '?')}</div>
                 </div>
-                <div class="qty">x${it.qty}</div>
+                <div class="qty" onclick="editScanQty(${realIdx})" style="cursor:pointer; user-select:none;">x${it.qty}</div>
                 <button class="del-btn" onclick="deleteScanItem(${realIdx})" title="이 행 삭제">✕</button>
             </div>`;
         });
@@ -3879,6 +3904,24 @@
     function deleteScanItem(idx) {
         if (idx < 0 || idx >= scanState.items.length) return;
         scanState.items.splice(idx, 1);
+        renderScanList();
+        saveScanDraft();
+        updatePdaCounters();
+        keepPdaFocus();
+    }
+
+    function editScanQty(idx) {
+        if (idx < 0 || idx >= scanState.items.length) return;
+        const item = scanState.items[idx];
+        const newQty = prompt(`${item.barcode}\n수량 변경 (현재: ${item.qty})`, item.qty);
+        if (newQty === null) { keepPdaFocus(); return; }
+        const parsed = parseInt(newQty, 10);
+        if (isNaN(parsed) || parsed < 0) { keepPdaFocus(); return; }
+        if (parsed === 0) {
+            scanState.items.splice(idx, 1);
+        } else {
+            item.qty = parsed;
+        }
         renderScanList();
         saveScanDraft();
         updatePdaCounters();
@@ -3910,7 +3953,6 @@
 
     function clearAllScans() {
         if (scanState.items.length === 0) {
-            // 그냥 작업명/로케만 초기화
             if (!confirm("작업명과 로케를 초기화할까요?")) {
                 keepPdaFocus();
                 return;
@@ -3924,6 +3966,7 @@
         scanState = {
             mode: scanState.mode,
             label: '',
+            tradeType: '',
             currentLoc: '',
             fromLoc: '',
             toLoc: '',
@@ -3931,6 +3974,17 @@
             items: []
         };
         document.getElementById('scan-label').value = '';
+        document.getElementById('scan-trade-type').value = '';
+        // 거래유형 버튼 비활성화
+        document.querySelectorAll('.trade-type-btn').forEach(btn => btn.classList.remove('active'));
+        // 작업명 박스 placeholder로
+        const labelBox = document.getElementById('scan-label-box');
+        if (labelBox) {
+            labelBox.textContent = '(탭해서 작업명 입력)';
+            labelBox.style.color = '#64748b';
+            labelBox.style.fontWeight = 'normal';
+            labelBox.style.borderStyle = 'dashed';
+        }
         updateLocUI('');
         updatePdaLocDisplay('');
         updatePdaCounters();
