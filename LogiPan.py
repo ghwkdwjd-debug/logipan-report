@@ -2025,8 +2025,18 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         # 브랜드 캐시 (Firestore에서 받아옴) - 실시간 리스너로 자동 동기화
         self._brand_cache = {}
-        self.refresh_brand_cache()
-        self.start_brand_listener()  # [추가] 다른 PC에서 변경 시 즉시 반영
+        # 로컬 캐시 먼저 로드 (빠름), Firestore 동기화는 백그라운드
+        try:
+            import json
+            if os.path.exists(self._brand_cache_path):
+                with open(self._brand_cache_path, "r", encoding="utf-8") as f:
+                    local = json.load(f)
+                self._brand_cache = local.get("brands", {})
+                print(f"⚡ 브랜드 로컬 캐시 즉시 로드: {len(self._brand_cache)}건")
+        except Exception:
+            pass
+        threading.Thread(target=self.refresh_brand_cache, daemon=True).start()
+        self.start_brand_listener()
 
     # ========== [마스터 수정 키트] ==========
     def _setup_master_kit_tab(self, container):
