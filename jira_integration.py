@@ -793,6 +793,61 @@ class JiraIntegrationMixin:
         except Exception as e:
             return False, str(e)
 
+    def get_jira_comments(self, issue_key, max_results=20):
+        """Jira 티켓 댓글 목록 조회.
+        Returns: (성공여부, [{'author', 'body', 'created'}, ...] 또는 에러)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            last_error = ""
+            for api_v in ['3', '2']:
+                try:
+                    url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}/comment?maxResults={max_results}&orderBy=-created"
+                    req = urllib.request.Request(url, headers={
+                        'Authorization': auth_header,
+                        'Accept': 'application/json',
+                    }, method='GET')
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = json.loads(resp.read().decode())
+                    comments = []
+                    for c in data.get('comments', []):
+                        author = c.get('author', {})
+                        body_raw = c.get('body', '')
+                        if isinstance(body_raw, dict):
+                            body_text = self._extract_description_text(body_raw)
+                        else:
+                            body_text = str(body_raw)
+                        comments.append({
+                            'author': author.get('displayName', '?'),
+                            'body': body_text,
+                            'created': c.get('created', '')[:16].replace('T', ' '),
+                        })
+                    return True, comments
+                except urllib.error.HTTPError as e:
+                    last_error = f"HTTP {e.code}"
+                    try: last_error += f": {e.read().decode()[:200]}"
+                    except: pass
+                    continue
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
+
     def add_jira_comment(self, issue_key, comment_text):
         """Jira 티켓에 댓글 추가.
         Returns: (성공여부, 메시지)
