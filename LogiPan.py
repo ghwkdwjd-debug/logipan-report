@@ -4280,55 +4280,47 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             return None
 
     def _load_jira_assignees(self):
-        """담당자 목록 로드 → [{name, account_id}, ...]"""
+        """로지스 팀원 목록 로드 (Firestore 공유)"""
         try:
-            path = self._jira_assignees_config_path()
-            if path and os.path.exists(path):
-                import json
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return data.get('assignees', [])
-                return []
+            doc = self.db.collection('config').document('jira_assignees').get()
+            if doc.exists:
+                return doc.to_dict().get('assignees', [])
         except Exception as e:
-            print(f"담당자 로드 실패: {e}")
+            print(f"로지스 설정 로드 실패: {e}")
         return []
 
     def _save_jira_assignees(self, rows=None):
-        """담당자 설정을 파일에 저장.
-        rows가 None이면 filter_enabled만 갱신 (체크박스 토글 시).
-        rows가 있으면 담당자 목록도 함께 저장 (팝업 저장 버튼)."""
+        """로지스 설정 저장. filter_enabled는 로컬, 팀원 목록은 Firestore."""
+        # filter_enabled 로컬 저장 (개인 설정)
         try:
             import json
             path = self._jira_assignees_config_path()
-            if not path:
-                return
-            # 기존 데이터 로드
-            data = {}
-            if os.path.exists(path):
-                try:
-                    with open(path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                except Exception:
-                    data = {}
-            if not isinstance(data, dict):
-                data = {}
-            # filter_enabled 항상 갱신
-            data['filter_enabled'] = self._jira_assignee_filter_enabled.get()
-            # rows가 주어지면 담당자 목록도 갱신
-            if rows is not None:
+            if path:
+                local = {}
+                if os.path.exists(path):
+                    try:
+                        with open(path, 'r', encoding='utf-8') as f:
+                            local = json.load(f)
+                    except: local = {}
+                local['filter_enabled'] = self._jira_assignee_filter_enabled.get()
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(local, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"필터 로컬 저장 실패: {e}")
+        # 팀원 목록 Firestore 저장 (전체 공유)
+        if rows is not None:
+            try:
                 assignees = []
                 for name_e, id_e in rows:
                     name = name_e.get().strip()
                     acc_id = id_e.get().strip()
                     if name or acc_id:
                         assignees.append({'name': name, 'account_id': acc_id})
-                data['assignees'] = assignees
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"담당자 저장 실패: {e}")
-            messagebox.showerror("저장 실패", str(e))
+                self.db.collection('config').document('jira_assignees').set(
+                    {'assignees': assignees})
+            except Exception as e:
+                print(f"로지스 Firestore 저장 실패: {e}")
+                messagebox.showerror("저장 실패", str(e))
 
     def _open_jira_assignee_settings(self):
         """담당자 설정 팝업 (입고탭 Jira 설정과 동일한 형태)"""
@@ -4431,33 +4423,26 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             return None
 
     def _load_jira_md_list(self):
-        """MD 담당자 목록 로드 → [{name, account_id}, ...]"""
+        """MD 담당자 목록 로드 (Firestore 공유)"""
         try:
-            path = self._jira_md_config_path()
-            if path and os.path.exists(path):
-                import json
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    return data.get('assignees', [])
+            doc = self.db.collection('config').document('jira_md_assignees').get()
+            if doc.exists:
+                return doc.to_dict().get('assignees', [])
         except Exception as e:
             print(f"MD 목록 로드 실패: {e}")
         return []
 
     def _save_jira_md_list(self, rows):
-        """MD 담당자 목록 저장"""
+        """MD 담당자 목록 Firestore 저장 (전체 공유)"""
         try:
-            import json
             assignees = []
             for name_e, id_e in rows:
                 name = name_e.get().strip()
                 acc_id = id_e.get().strip()
                 if name or acc_id:
                     assignees.append({'name': name, 'account_id': acc_id})
-            path = self._jira_md_config_path()
-            if path:
-                with open(path, 'w', encoding='utf-8') as f:
-                    json.dump({'assignees': assignees}, f, ensure_ascii=False, indent=2)
+            self.db.collection('config').document('jira_md_assignees').set(
+                {'assignees': assignees})
         except Exception as e:
             print(f"MD 목록 저장 실패: {e}")
             messagebox.showerror("저장 실패", str(e))
@@ -4664,10 +4649,11 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
     def _clean_outbound_df(self, df):
         """출고 파일 정리: 빈 행 제거 + 주소 컬럼 통일"""
+        df = df.fillna('').astype(str)
+
         # 1) 빈 행 제거 - 첫 번째 컬럼(보통 바코드) 기준으로 데이터 있는 행만
         first_col = df.columns[0]
-        df = df[df[first_col].notna() & (df[first_col].astype(str).str.strip() != '')]
-        df = df.dropna(how='all')
+        df = df[df[first_col].str.strip() != '']
 
         # 2) 주소 컬럼 통일 - '주소' 포함된 컬럼은 가장 많이 나오는 값으로 채움
         for col in df.columns:
@@ -4972,6 +4958,9 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                             df = pd.read_csv(tmp_path, dtype=str)
                         else:
                             df = pd.read_excel(tmp_path, dtype=str)
+
+                        # 모든 값을 문자열로 강제 변환 (타입 충돌 방지)
+                        df = df.fillna('').astype(str)
 
                         # 바코드 컬럼 + 수량 컬럼 자동 탐지
                         import re
