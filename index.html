@@ -933,12 +933,12 @@
             <span class="scan-toggle on" id="toggle-reverse" onclick="togglePdaReverse()" title="PDA가 거꾸로 출력하는 바코드 자동 보정">↔️ 역순보정</span>
         </div>
 
-        <!-- 수동 입력 (PDA 안 될 때 백업) - 평소엔 접혀있음 -->
+        <!-- 입력칸 (PDA 스캔 / 수동입력 겸용) - 평소엔 접혀있음 -->
         <div style="margin-top:10px; text-align:right;">
-            <button class="pda-manual-toggle" onclick="togglePdaManual()" id="pda-manual-toggle-btn">⌨️ 수동입력</button>
+            <button class="pda-manual-toggle" onclick="togglePdaManual()" id="pda-manual-toggle-btn">📱 입력칸 (PDA/수동)</button>
         </div>
         <div class="pda-manual-row" id="pda-manual-panel" style="display:none;">
-            <input type="text" id="manual-barcode-input" placeholder="바코드/로케 직접 입력 후 Enter" autocomplete="off">
+            <input type="text" id="manual-barcode-input" placeholder="PDA 스캔 또는 직접 입력" autocomplete="off" autocapitalize="off">
             <button class="pda-manual-btn" onclick="submitManualBarcode()">입력</button>
         </div>
 
@@ -3561,6 +3561,19 @@
                     e.preventDefault();
                     submitManualBarcode();
                 }
+            });
+            // PDA 자동처리: 붙여넣기/입력 후 200ms 내 추가 입력 없으면 자동 처리
+            let _pdaAutoTimer = null;
+            manualInput.addEventListener('input', () => {
+                clearTimeout(_pdaAutoTimer);
+                _pdaAutoTimer = setTimeout(() => {
+                    const val = manualInput.value.trim();
+                    if (val.length >= 10) {  // 바코드 최소 길이
+                        manualInput.value = '';
+                        processPdaScan(val, true);
+                        manualInput.focus();
+                    }
+                }, 200);
             });
         }
 
