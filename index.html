@@ -933,7 +933,7 @@
             <span class="scan-toggle on" id="toggle-reverse" onclick="togglePdaReverse()" title="PDA가 거꾸로 출력하는 바코드 자동 보정">↔️ 역순보정</span>
         </div>
 
-        <!-- 수동 입력 (PDA 안 될 때 백업) - 평소엔 접혀있음 -->
+        <!-- 수동 입력 (스캐너 안 될 때 백업) -->
         <div style="margin-top:10px; text-align:right;">
             <button class="pda-manual-toggle" onclick="togglePdaManual()" id="pda-manual-toggle-btn">⌨️ 수동입력</button>
         </div>
@@ -3440,11 +3440,13 @@
         if (!scanSection || scanSection.style.display === 'none') return;
 
         // 사용자가 input/textarea에 포커스 두고 직접 타이핑 중이면 무시
-        // (그 input의 자체 keydown 핸들러가 처리)
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
             return;
         }
+
+        // Ctrl/Meta 조합은 무시 (Ctrl+V 붙여넣기 등 통과)
+        if (e.ctrlKey || e.metaKey) return;
 
         if (e.defaultPrevented) return;
 
@@ -3473,6 +3475,22 @@
     // 페이지 전역에 keydown 리스너 1개만 부착
     document.addEventListener('keydown', handlePdaKeydown);
 
+    // ─── PDA Ctrl+V 붙여넣기 처리 ─────────────────────────
+    document.addEventListener('paste', (e) => {
+        const scanSection = document.getElementById('section-scan');
+        if (!scanSection || scanSection.style.display === 'none') return;
+        // input에 포커스 있으면 해당 input이 알아서 처리 (PDA 모드 등)
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
+        // 클립보드에서 텍스트 가져오기
+        const text = (e.clipboardData || window.clipboardData).getData('text').trim();
+        if (text) {
+            e.preventDefault();
+            pdaBuffer = '';  // 버퍼 리셋
+            processPdaScan(text, true);
+        }
+    });
+
     // [추가] 화면 빈 공간 터치 시 자동 blur - PDA 스캔 받을 수 있게.
     // input/button/링크 등 인터랙티브 요소 클릭 시는 그대로 둠 (자연스러운 입력 흐름 유지).
     document.addEventListener('touchend', (e) => {
@@ -3492,7 +3510,6 @@
     // 더 이상 hidden input이 없으므로 포커스 잡을 게 없음.
     // 하지만 기존 코드 여기저기서 호출하니 빈 함수로 남겨둠.
     function keepPdaFocus() {
-        // input/textarea에 포커스 있으면 blur → PDA 스캔 받을 수 있게
         const active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) {
             active.blur();
@@ -3739,6 +3756,7 @@
     }
 
     // ─── 수동 입력 패널 토글 ─────────────────────────
+
     function togglePdaManual() {
         const panel = document.getElementById('pda-manual-panel');
         const btn = document.getElementById('pda-manual-toggle-btn');
