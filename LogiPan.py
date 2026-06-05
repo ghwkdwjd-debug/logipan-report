@@ -6,6 +6,7 @@ import json
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, simpledialog
 import re
+import threading
 import urllib.request
 import urllib.error
 import firebase_admin
@@ -237,17 +238,17 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.nb = ttk.Notebook(self.root)
         self.nb.pack(expand=True, fill="both", padx=5, pady=5)
 
+        self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
+        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
         self.t_in = ttk.Frame(self.nb); self.nb.add(self.t_in, text="📥 입고")
         self.t_out = ttk.Frame(self.nb); self.nb.add(self.t_out, text="📤 출고")
         self.t_jira = tk.Frame(self.nb, bg="#F5F6F8"); self.nb.add(self.t_jira, text="🎫 Jira 대기")
-        self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦 맘스")
         self.t_master = ttk.Frame(self.nb); self.nb.add(self.t_master, text="🆕 마스터")
         self.t_rt = ttk.Frame(self.nb); self.nb.add(self.t_rt, text="🔄 RT입고")
+        self.t_mom = ttk.Frame(self.nb); self.nb.add(self.t_mom, text="📦 맘스")
         self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍 재고파악")
-        self.t_stock = ttk.Frame(self.nb); self.nb.add(self.t_stock, text="📋 재고조사")
-        self.t_board = tk.Frame(self.nb); self.nb.add(self.t_board, text="📢 공지/소통")
-        self.t_field = tk.Frame(self.nb); self.nb.add(self.t_field, text="📋 작업보고")
         self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊 마감재고")
+        self.t_stock = ttk.Frame(self.nb); self.nb.add(self.t_stock, text="📋 재고조사")
 
         self.setup_inbound()
         self.setup_outbound()
@@ -5076,6 +5077,32 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                               bg="#F59E0B", fg="white", font=("맑은 고딕", 9, "bold"),
                               bd=0, relief="flat", padx=10, pady=5,
                               cursor="hand2").pack(fill="x", pady=(4, 0))
+
+        # ─── 댓글 목록 ───
+        try:
+            ok_cmt, comments = self.get_jira_comments(issue_key, max_results=10)
+            if ok_cmt and comments:
+                tk.Frame(fr, bg="#E5E7EB", height=1).pack(fill="x", pady=6)
+                tk.Label(fr, text=f"💬 댓글 ({len(comments)})",
+                         font=("맑은 고딕", 9, "bold"),
+                         bg="white", fg="#374151").pack(anchor="w")
+                for cmt in comments:
+                    cmt_frame = tk.Frame(fr, bg="#F9FAFB", highlightthickness=1,
+                                          highlightbackground="#E5E7EB")
+                    cmt_frame.pack(fill="x", pady=2)
+                    cmt_inner = tk.Frame(cmt_frame, bg="#F9FAFB", padx=8, pady=6)
+                    cmt_inner.pack(fill="x")
+                    tk.Label(cmt_inner,
+                             text=f"{cmt['author']}  ·  {cmt['created']}",
+                             font=("맑은 고딕", 8), bg="#F9FAFB", fg="#6B7280",
+                             anchor="w").pack(fill="x")
+                    body_preview = cmt['body'][:200] + ("..." if len(cmt['body']) > 200 else "")
+                    tk.Label(cmt_inner, text=body_preview,
+                             font=("맑은 고딕", 9), bg="#F9FAFB", fg="#1F2937",
+                             anchor="w", justify="left", wraplength=340
+                             ).pack(fill="x", pady=(2, 0))
+        except Exception as e:
+            print(f"댓글 로드 실패: {e}")
 
         # ─── 구분선 ───
         tk.Frame(fr, bg="#E5E7EB", height=1).pack(fill="x", pady=6)
@@ -9999,130 +10026,119 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             badge_fg = "#92400E"
             card_bg = "white"
 
-        # 카드 컨테이너 (그림자 효과 흉내)
+        # 카드 컨테이너
         card_outer = tk.Frame(self.cards_frame, bg="#F5F6F8")
-        card_outer.pack(fill="x", padx=2, pady=4)
+        card_outer.pack(fill="x", padx=4, pady=3)
 
         card = tk.Frame(card_outer, bg=card_bg,
-                         highlightthickness=1, highlightbackground="#E5E7EB")
+                         highlightthickness=1, highlightbackground="#E0E0E0")
         card.pack(fill="x")
 
-        # 좌측 컬러 액센트 바
-        accent_bar = tk.Frame(card, bg=accent_color, width=4)
-        accent_bar.pack(side="left", fill="y")
+        # 좌측 컬러 액센트 바 (스캔은 두껍게)
+        bar_width = 5 if is_scan else 3
+        tk.Frame(card, bg=accent_color, width=bar_width).pack(side="left", fill="y")
 
         # 본 컨텐츠
-        content = tk.Frame(card, bg=card_bg, padx=14, pady=12)
+        content = tk.Frame(card, bg=card_bg, padx=16, pady=10)
         content.pack(side="left", fill="both", expand=True)
 
-        # 1행: 뱃지 + 시간 + (NEW 표시) + 우측 작업자
+        # 1행: 뱃지 + 작업자 + 시간
         row1 = tk.Frame(content, bg=card_bg)
         row1.pack(fill="x")
 
-        # 뱃지 (상태)
-        badge = tk.Label(row1, text=step_text,
-                          bg=badge_bg, fg=badge_fg,
-                          font=("맑은 고딕", 8, "bold"),
-                          padx=8, pady=2)
-        badge.pack(side="left")
+        tk.Label(row1, text=step_text,
+                 bg=badge_bg, fg=badge_fg,
+                 font=("맑은 고딕", 8, "bold"),
+                 padx=8, pady=1).pack(side="left")
 
-        # NEW 점멸 (새 댓글 있을 때)
+        # 스캔 카드: 수량 뱃지 추가
+        if is_scan and status != "✅ 완료":
+            scan_count = data.get('scan_item_count', 0)
+            tk.Label(row1, text=f" {scan_count}건",
+                     bg=accent_color, fg="white",
+                     font=("맑은 고딕", 8, "bold"),
+                     padx=6, pady=1).pack(side="left", padx=(4, 0))
+
+        # NEW 점멸
         if is_worker_reply and status != "✅ 완료":
             new_dot = tk.Label(row1, text="●",
                                 bg=card_bg, fg="#FF4757",
-                                font=("맑은 고딕", 12, "bold"))
-            new_dot.pack(side="left", padx=(6, 0))
-            # 깜빡임 애니메이션 (간단 버전)
+                                font=("맑은 고딕", 10, "bold"))
+            new_dot.pack(side="left", padx=(4, 0))
             self._blink_dot(new_dot, card_bg)
 
-        # 시간
-        tk.Label(row1, text=f"📅 {time_str}",
-                 bg=card_bg, fg="#9CA3AF",
-                 font=("맑은 고딕", 9)).pack(side="left", padx=(8, 0))
+        tk.Label(row1, text=time_str,
+                 bg=card_bg, fg="#ACACAC",
+                 font=("맑은 고딕", 8)).pack(side="left", padx=(8, 0))
 
-        # 우측: 작업자 + 첨부 표시
-        right_row1 = tk.Frame(row1, bg=card_bg)
-        right_row1.pack(side="right")
-
-        if has_image:
-            tk.Label(right_row1, text="📷",
-                     bg=card_bg, fg="#666",
-                     font=("맑은 고딕", 10)).pack(side="right", padx=(4, 0))
+        # 우측: 작업자 + 아이콘
+        info_parts = []
         if comment_total > 0:
-            tk.Label(right_row1, text=f"💬 {comment_total}",
-                     bg=card_bg, fg="#666",
-                     font=("맑은 고딕", 9)).pack(side="right", padx=(4, 0))
+            info_parts.append(f"💬{comment_total}")
+        if has_image:
+            info_parts.append("📷")
+        info_parts.append(user)
+        tk.Label(row1, text="  ".join(info_parts),
+                 bg=card_bg, fg="#666",
+                 font=("맑은 고딕", 9)).pack(side="right")
 
-        tk.Label(right_row1, text=f"👤 {user}",
-                 bg=card_bg, fg="#374151",
-                 font=("맑은 고딕", 9, "bold")).pack(side="right", padx=(0, 6))
+        # 2행: 제목
+        tk.Label(content, text=title,
+                 bg=card_bg, fg="#1A1A1A",
+                 font=("맑은 고딕", 11, "bold"),
+                 anchor="w", justify="left",
+                 wraplength=600).pack(fill="x", anchor="w", pady=(4, 0))
 
-        # 2행: 제목 (크게)
-        title_label = tk.Label(content, text=title,
-                                bg=card_bg, fg="#111827",
-                                font=("맑은 고딕", 12, "bold"),
-                                anchor="w", justify="left",
-                                wraplength=600)
-        title_label.pack(fill="x", anchor="w", pady=(6, 2))
-
-        # 3행: 마지막 댓글 미리보기 (있으면)
+        # 3행: 마지막 댓글 미리보기
         if last_comment_text and is_worker_reply:
             preview = last_comment_text[:60] + ("..." if len(last_comment_text) > 60 else "")
             tk.Label(content,
                      text=f"💬 {last_comment_user}: {preview}",
-                     bg=card_bg, fg="#FF4757" if is_worker_reply else "#6B7280",
+                     bg=card_bg, fg="#FF4757" if is_worker_reply else "#999",
                      font=("맑은 고딕", 9),
-                     anchor="w", justify="left").pack(fill="x", anchor="w")
+                     anchor="w").pack(fill="x", anchor="w", pady=(2, 0))
 
-        # [추가] 대응자 표시 (완료 카드는 표시 X)
+        # 대응자 표시
         if status != "✅ 완료":
             responder_main = data.get('responder_main', '') or ''
             responders_extra = data.get('responders_extra', []) or []
             if responder_main:
                 resp_label = self._format_responder_label(responder_main, responders_extra)
-                tk.Label(content,
-                         text=resp_label,
-                         bg=card_bg, fg="#7C3AED",  # 보라
-                         font=("맑은 고딕", 9, "bold"),
-                         anchor="w", justify="left").pack(fill="x", anchor="w", pady=(2, 0))
+                tk.Label(content, text=resp_label,
+                         bg=card_bg, fg="#7C3AED",
+                         font=("맑은 고딕", 9),
+                         anchor="w").pack(fill="x", anchor="w", pady=(2, 0))
 
-        # [추가] 스캔 카드 - 체크박스 + 버튼 (처리 안 한 거만)
+        # [추가] 스캔 카드 액션 (처리 안 한 거만)
         if is_scan and status != "✅ 완료":
             scan_btn_frame = tk.Frame(content, bg=card_bg)
-            scan_btn_frame.pack(fill="x", anchor="w", pady=(8, 0))
+            scan_btn_frame.pack(fill="x", anchor="w", pady=(6, 0))
 
             scan_session_id = data.get('scan_session_id', '')
             scan_item_count = data.get('scan_item_count', 0)
 
-            # 병합용 체크박스
             chk_var = tk.BooleanVar(value=False)
-            chk = tk.Checkbutton(scan_btn_frame, text="선택",
-                                  variable=chk_var,
-                                  bg=card_bg, font=("맑은 고딕", 9),
-                                  command=lambda sid=scan_session_id, did=doc_id, v=chk_var:
-                                      self._on_scan_check_toggle(sid, did, v))
-            chk.pack(side="left", padx=(0, 6))
+            tk.Checkbutton(scan_btn_frame, text="",
+                           variable=chk_var, bg=card_bg,
+                           command=lambda sid=scan_session_id, did=doc_id, v=chk_var:
+                               self._on_scan_check_toggle(sid, did, v)
+                           ).pack(side="left")
 
-            send_btn = tk.Button(scan_btn_frame,
-                                  text=f"📥 입고탭으로 ({scan_item_count}개)",
-                                  bg="#1877F2" if scan_quality == 'normal' else "#DC2626",
-                                  fg="white",
-                                  font=("맑은 고딕", 9, "bold"),
-                                  relief="flat",
-                                  padx=12, pady=6,
-                                  cursor="hand2",
-                                  command=lambda sid=scan_session_id, did=doc_id: self._on_send_scan_to_inbound(sid, did))
-            send_btn.pack(side="left")
-
-            # 스캔 내역 미리보기 버튼
             tk.Button(scan_btn_frame,
-                      text="📋 스캔 내역",
-                      bg="#6B7280", fg="white",
-                      font=("맑은 고딕", 9, "bold"),
-                      relief="flat", padx=10, pady=6,
-                      cursor="hand2",
+                      text=f"입고탭으로 ({scan_item_count}개)",
+                      bg="#1877F2" if scan_quality == 'normal' else "#DC2626",
+                      fg="white", font=("맑은 고딕", 9, "bold"),
+                      relief="flat", padx=10, pady=4, cursor="hand2",
+                      command=lambda sid=scan_session_id, did=doc_id: self._on_send_scan_to_inbound(sid, did)
+                      ).pack(side="left", padx=(2, 4))
+
+            tk.Button(scan_btn_frame,
+                      text="스캔 내역",
+                      bg="#E5E7EB", fg="#374151",
+                      font=("맑은 고딕", 9), relief="flat",
+                      padx=10, pady=4, cursor="hand2",
                       command=lambda sid=scan_session_id: self._preview_scan_session(sid)
-                      ).pack(side="left", padx=(6, 0))
+                      ).pack(side="left")
 
         # 클릭/우클릭 이벤트 (카드 + 모든 자식 위젯에 바인딩)
         def on_click(e):
@@ -10135,7 +10151,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         def on_leave(e):
             card.config(highlightbackground="#E5E7EB", highlightthickness=1)
 
-        for widget in [card, content, accent_bar, row1, right_row1, title_label] + list(row1.winfo_children()) + list(content.winfo_children()) + list(right_row1.winfo_children()):
+        for widget in [card, content, row1] + list(row1.winfo_children()) + list(content.winfo_children()):
             try:
                 widget.bind("<Double-Button-1>", on_click)
                 widget.bind("<Button-3>", on_right_click)
