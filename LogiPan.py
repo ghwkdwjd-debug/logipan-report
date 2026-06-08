@@ -4659,15 +4659,80 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             try: os.remove(tmp_xlsx)
             except: pass
 
+    def _check_qty_warning(self, file_path, confirm_mode=False):
+        """파일의 수량 컬럼에 0/빈값이 있으면 경고.
+        confirm_mode=True면 '저장할까요?' 물어보고 'cancel' 또는 'ok' 반환."""
+        try:
+            if file_path.lower().endswith('.csv'):
+                df = pd.read_csv(file_path, dtype=str)
+            else:
+                df = pd.read_excel(file_path, dtype=str)
+            df = df.fillna('').astype(str)
+
+            qty_names = ['수량', '출고수량', '입고수량', 'qty', 'quantity', '주문수량', '발주수량', 'count']
+            for col in df.columns:
+                col_lower = str(col).strip().lower()
+                if col_lower in qty_names or any(q in col_lower for q in qty_names):
+                    def _is_zero_or_empty(v):
+                        v = v.strip()
+                        if v == '': return True
+                        try: return float(v) == 0
+                        except: return False
+                    empty_qty = df[df[col].apply(_is_zero_or_empty)]
+                    if len(empty_qty) > 0:
+                        first_col = df.columns[0]
+                        samples = empty_qty[first_col].head(5).tolist()
+                        sample_text = "\n".join(f"  · {s}" for s in samples)
+                        if len(empty_qty) > 5:
+                            sample_text += f"\n  ... 외 {len(empty_qty) - 5}건"
+                        if confirm_mode:
+                            result = messagebox.askyesno("⚠️ 수량 확인 필요",
+                                f"수량이 0 또는 빈칸인 행이 {len(empty_qty)}건 있습니다.\n"
+                                f"컬럼: {col}\n\n{sample_text}\n\n그래도 저장할까요?")
+                            return 'ok' if result else 'cancel'
+                        else:
+                            messagebox.showwarning("⚠️ 수량 확인 필요",
+                                f"수량이 0 또는 빈칸인 행이 {len(empty_qty)}건 있습니다.\n"
+                                f"컬럼: {col}\n\n{sample_text}")
+                    break
+        except Exception as e:
+            print(f"수량 체크 실패: {e}")
+        return 'ok'
+
     def _clean_outbound_df(self, df):
-        """출고 파일 정리: 빈 행 제거 + 주소 컬럼 통일"""
+        """출고 파일 정리: 빈 행 제거 + 수량 0 제거 + 주소 컬럼 통일"""
         df = df.fillna('').astype(str)
 
-        # 1) 빈 행 제거 - 첫 번째 컬럼(보통 바코드) 기준으로 데이터 있는 행만
+        # 1) 빈 행 제거 - 첫 번째 컬럼(보통 바코드) 기준
         first_col = df.columns[0]
         df = df[df[first_col].str.strip() != '']
 
-        # 2) 주소 컬럼 통일 - '주소' 포함된 컬럼은 가장 많이 나오는 값으로 채움
+        # 2) 수량 0 또는 빈값 경고 - 수량 컬럼 자동 탐지
+        qty_names = ['수량', '출고수량', '입고수량', 'qty', 'quantity', '주문수량', '발주수량', 'count']
+        for col in df.columns:
+            col_lower = str(col).strip().lower()
+            if col_lower in qty_names or any(q in col_lower for q in qty_names):
+                def _is_zero_or_empty(v):
+                    v = v.strip()
+                    if v == '': return True
+                    try:
+                        return float(v) == 0
+                    except: return False
+                empty_qty = df[df[col].apply(_is_zero_or_empty)]
+                if len(empty_qty) > 0:
+                    first_col_name = df.columns[0]
+                    samples = empty_qty[first_col_name].head(5).tolist()
+                    sample_text = "\n".join(f"  · {s}" for s in samples)
+                    if len(empty_qty) > 5:
+                        sample_text += f"\n  ... 외 {len(empty_qty) - 5}건"
+                    try:
+                        messagebox.showwarning("⚠️ 수량 확인 필요",
+                            f"수량이 0 또는 빈칸인 행이 {len(empty_qty)}건 있습니다.\n"
+                            f"컬럼: {col}\n\n{sample_text}")
+                    except: pass
+                break
+
+        # 3) 주소 컬럼 통일 - '주소' 포함된 컬럼은 가장 많이 나오는 값으로 채움
         for col in df.columns:
             col_lower = str(col).strip().lower()
             if '주소' in col_lower or 'address' in col_lower:
@@ -4915,11 +4980,36 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 arow = tk.Frame(att_frame, bg="white")
                 arow.pack(fill="x")
                 def _dl(url=content_url, fn=fname):
-                    sp = filedialog.asksaveasfilename(title="저장", initialfile=fn,
-                                                      initialdir=getattr(self, 'save_dir', None))
-                    if sp:
-                        ok, msg = self.download_jira_attachment(url, sp)
-                        if ok: messagebox.showinfo("✅", f"저장 완료: {os.path.basename(sp)}")
+                    import tempfile, shutil
+                    # 엑셀/CSV면 먼저 임시 다운 → 수량 체크 → 저장 여부 결정
+                    is_data_file = fn.lower().endswith(('.xlsx', '.xls', '.csv'))
+                    if is_data_file:
+                        tmp_path = os.path.join(tempfile.gettempdir(), f'_logipan_chk_{fn}')
+                        ok, msg = self.download_jira_attachment(url, tmp_path)
+                        if not ok:
+                            messagebox.showerror("실패", msg); return
+                        # 수량 체크
+                        qty_issue = self._check_qty_warning(tmp_path, confirm_mode=True)
+                        if qty_issue == 'cancel':
+                            try: os.remove(tmp_path)
+                            except: pass
+                            return
+                        # 저장 위치 선택
+                        sp = filedialog.asksaveasfilename(title="저장", initialfile=fn,
+                                                          initialdir=getattr(self, 'save_dir', None))
+                        if sp:
+                            shutil.move(tmp_path, sp)
+                            messagebox.showinfo("✅", f"저장 완료: {os.path.basename(sp)}")
+                        else:
+                            try: os.remove(tmp_path)
+                            except: pass
+                    else:
+                        sp = filedialog.asksaveasfilename(title="저장", initialfile=fn,
+                                                          initialdir=getattr(self, 'save_dir', None))
+                        if sp:
+                            ok, msg = self.download_jira_attachment(url, sp)
+                            if ok: messagebox.showinfo("✅", f"저장 완료: {os.path.basename(sp)}")
+                            else: messagebox.showerror("실패", msg)
                         else: messagebox.showerror("실패", msg)
                 dl_btn = tk.Label(arow, text=f"📄 {fname} ({size_kb}KB)",
                                    font=("맑은 고딕", 9, "underline"),
