@@ -656,6 +656,7 @@ class JiraIntegrationMixin:
                             'created': fields.get('created', ''),
                             'updated': fields.get('updated', ''),
                             'description': desc_text,
+                            'desc_links': getattr(self, '_last_desc_links', []),
                             'attachments': attachments,
                             'url': f"https://{domain}/browse/{issue.get('key')}",
                         })
@@ -714,24 +715,48 @@ class JiraIntegrationMixin:
             return False, str(e)
 
     def _extract_description_text(self, desc):
-        """Jira description을 plain text로 변환 (API v3 ADF 또는 v2 string 둘 다 지원)"""
+        """Jira description을 plain text + 링크 목록으로 변환"""
         if not desc:
             return ''
         if isinstance(desc, str):
             return desc
         if isinstance(desc, dict):
-            # ADF (Atlassian Document Format) - 재귀로 text 추출
             texts = []
+            self._last_desc_links = []  # 링크 별도 저장
             def _walk(node):
                 if isinstance(node, dict):
-                    if node.get('type') == 'text':
-                        texts.append(node.get('text', ''))
-                    elif node.get('type') == 'hardBreak':
+                    ntype = node.get('type', '')
+                    if ntype == 'text':
+                        text = node.get('text', '')
+                        texts.append(text)
+                        for mark in (node.get('marks') or []):
+                            if mark.get('type') == 'link':
+                                href = mark.get('attrs', {}).get('href', '')
+                                if href:
+                                    self._last_desc_links.append({'title': text, 'url': href})
+                    elif ntype == 'hardBreak':
                         texts.append('\n')
+                    elif ntype == 'inlineCard':
+                        url = node.get('attrs', {}).get('url', '')
+                        if url:
+                            self._last_desc_links.append({'title': '', 'url': url})
+                    elif ntype in ('blockCard', 'embedCard'):
+                        url = node.get('attrs', {}).get('url', '')
+                        if url:
+                            self._last_desc_links.append({'title': '', 'url': url})
+                    elif ntype == 'mediaInline' or ntype == 'mediaSingle':
+                        for child in node.get('content', []) or []:
+                            if isinstance(child, dict) and child.get('type') == 'media':
+                                pass
+                    elif ntype == 'mention':
+                        texts.append(f'@{node.get("attrs", {}).get("text", "?")}')
+                    else:
+                        url = node.get('attrs', {}).get('url', '')
+                        if url and url.startswith('http'):
+                            self._last_desc_links.append({'title': '', 'url': url})
                     for child in node.get('content', []) or []:
                         _walk(child)
-                    # paragraph 끝나면 줄바꿈
-                    if node.get('type') == 'paragraph':
+                    if ntype == 'paragraph':
                         texts.append('\n')
                 elif isinstance(node, list):
                     for c in node:
@@ -790,6 +815,48 @@ class JiraIntegrationMixin:
                     last_error = str(e)
                     continue
             return False, f"실패: {last_error}"
+        except Exception as e:
+            return False, str(e)
+
+    def get_jira_remote_links(self, issue_key):
+        """Jira 티켓의 원격 링크(Remote Link) 목록 조회.
+        Returns: (성공여부, [{'title', 'url'}, ...] 또는 에러)
+        """
+        cfg = self.load_jira_settings()
+        if not cfg.get("enabled"):
+            return False, "Jira 비활성화됨"
+        try:
+            import base64, json
+            import urllib.request, urllib.error
+            domain = cfg["domain"]
+            email = cfg.get("email", "")
+            token = cfg["api_token"]
+            if email:
+                auth_b64 = base64.b64encode(f"{email}:{token}".encode()).decode()
+                auth_header = f'Basic {auth_b64}'
+            else:
+                auth_header = f'Bearer {token}'
+
+            for api_v in ['3', '2']:
+                try:
+                    url = f"https://{domain}/rest/api/{api_v}/issue/{issue_key}/remotelink"
+                    req = urllib.request.Request(url, headers={
+                        'Authorization': auth_header,
+                        'Accept': 'application/json',
+                    }, method='GET')
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = json.loads(resp.read().decode())
+                    links = []
+                    for rl in data:
+                        obj = rl.get('object', {})
+                        links.append({
+                            'title': obj.get('title', ''),
+                            'url': obj.get('url', ''),
+                        })
+                    return True, links
+                except Exception:
+                    continue
+            return True, []
         except Exception as e:
             return False, str(e)
 
