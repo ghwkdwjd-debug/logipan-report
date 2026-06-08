@@ -4669,6 +4669,10 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 df = pd.read_excel(file_path, dtype=str)
             df = df.fillna('').astype(str)
 
+            # 첫 번째 컬럼(바코드)이 비어있는 행 제외
+            first_col = df.columns[0]
+            df = df[df[first_col].str.strip() != '']
+
             qty_names = ['수량', '출고수량', '입고수량', 'qty', 'quantity', '주문수량', '발주수량', 'count']
             for col in df.columns:
                 col_lower = str(col).strip().lower()
@@ -4680,19 +4684,18 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                         except: return False
                     empty_qty = df[df[col].apply(_is_zero_or_empty)]
                     if len(empty_qty) > 0:
-                        first_col = df.columns[0]
                         samples = empty_qty[first_col].head(5).tolist()
                         sample_text = "\n".join(f"  · {s}" for s in samples)
                         if len(empty_qty) > 5:
                             sample_text += f"\n  ... 외 {len(empty_qty) - 5}건"
                         if confirm_mode:
                             result = messagebox.askyesno("⚠️ 수량 확인 필요",
-                                f"수량이 0 또는 빈칸인 행이 {len(empty_qty)}건 있습니다.\n"
+                                f"바코드는 있지만 수량이 0인 행이 {len(empty_qty)}건 있습니다.\n"
                                 f"컬럼: {col}\n\n{sample_text}\n\n그래도 저장할까요?")
                             return 'ok' if result else 'cancel'
                         else:
                             messagebox.showwarning("⚠️ 수량 확인 필요",
-                                f"수량이 0 또는 빈칸인 행이 {len(empty_qty)}건 있습니다.\n"
+                                f"바코드는 있지만 수량이 0인 행이 {len(empty_qty)}건 있습니다.\n"
                                 f"컬럼: {col}\n\n{sample_text}")
                     break
         except Exception as e:
@@ -4929,10 +4932,36 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tk.Label(desc_hdr, text="본문", font=("맑은 고딕", 9, "bold"),
                  bg="white", fg="#6B7280").pack(side="left")
 
-        desc_text = tk.Text(fr, height=4, wrap="word",
+        # 본문에서 링크 별도 표시 (ADF에서 추출된 링크)
+        import re as _re
+        desc_links = ticket.get('desc_links', [])
+        if desc_links:
+            for dl in desc_links:
+                url = dl.get('url', '')
+                title = dl.get('title', '').strip()
+                if not url:
+                    continue
+                if not title:
+                    # Google Sheets URL이면 탭 이름 가져오기
+                    title = self._resolve_gsheet_tab_name(url)
+                if not title:
+                    if 'docs.google.com/spreadsheets' in url or 'sheets.google.com' in url:
+                        title = '📊 첨부 구글시트 보기'
+                    elif 'drive.google.com' in url:
+                        title = '📁 첨부 Drive 파일 보기'
+                    else:
+                        title = '🔗 첨부 링크 열기'
+                link_lbl = tk.Label(fr, text=f"🔗 {title}",
+                                     font=("맑은 고딕", 9, "underline"),
+                                     bg="white", fg="#1877F2", cursor="hand2", anchor="w")
+                link_lbl.pack(fill="x", pady=1)
+                link_lbl.bind("<Button-1>", lambda e, u=url: self._open_url(u))
+
+        desc_text = tk.Text(fr, height=6, wrap="word",
                              font=("맑은 고딕", 9), bg="#F9FAFB",
                              relief="solid", bd=1, highlightthickness=0)
         desc_text.insert("1.0", desc)
+
         desc_text.config(state="disabled")
         desc_text.pack(fill="x", pady=(0, 2))
 
@@ -4967,6 +4996,23 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                               bg="white", fg="#6B7280", font=("맑은 고딕", 9),
                               bd=0, relief="flat", cursor="hand2")
         edit_btn.pack(side="right")
+
+        # ─── 원격 링크 (Google Drive 등) ───
+        try:
+            ok_rl, remote_links = self.get_jira_remote_links(issue_key)
+            if ok_rl and remote_links:
+                for rl in remote_links:
+                    rl_title = rl.get('title', '링크')
+                    rl_url = rl.get('url', '')
+                    if rl_url:
+                        rl_label = tk.Label(fr, text=f"🔗 {rl_title}",
+                                             font=("맑은 고딕", 9, "underline"),
+                                             bg="white", fg="#1877F2", cursor="hand2",
+                                             anchor="w")
+                        rl_label.pack(fill="x", pady=1)
+                        rl_label.bind("<Button-1>", lambda e, u=rl_url: self._open_url(u))
+        except Exception as e:
+            print(f"원격 링크 로드 실패: {e}")
 
         # ─── 첨부파일 ───
         attachments = ticket.get('attachments', [])
@@ -10231,6 +10277,27 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                       command=lambda sid=scan_session_id: self._preview_scan_session(sid)
                       ).pack(side="left")
 
+        # 완료된 스캔 카드도 스캔 내역은 볼 수 있게
+        elif is_scan and status == "✅ 완료":
+            scan_session_id = data.get('scan_session_id', '')
+            if scan_session_id:
+                scan_btn_frame = tk.Frame(content, bg=card_bg)
+                scan_btn_frame.pack(fill="x", anchor="w", pady=(6, 0))
+                tk.Button(scan_btn_frame,
+                          text="스캔 내역 보기",
+                          bg="#E5E7EB", fg="#374151",
+                          font=("맑은 고딕", 9), relief="flat",
+                          padx=10, pady=4, cursor="hand2",
+                          command=lambda sid=scan_session_id: self._preview_scan_session(sid)
+                          ).pack(side="left")
+                tk.Button(scan_btn_frame,
+                          text="📊 엑셀 추출",
+                          bg="#10B981", fg="white",
+                          font=("맑은 고딕", 9, "bold"), relief="flat",
+                          padx=10, pady=4, cursor="hand2",
+                          command=lambda sid=scan_session_id: self._export_scan_session_to_excel(sid)
+                          ).pack(side="left", padx=(4, 0))
+
         # 클릭/우클릭 이벤트 (카드 + 모든 자식 위젯에 바인딩)
         def on_click(e):
             self._open_report_detail(doc_id)
@@ -10332,6 +10399,53 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 messagebox.showinfo("저장됨", f"경로가 저장되었습니다.\n다음부터 자동으로 사용됩니다.\n\n{path}")
             return path
         return None
+
+    _gsheet_tab_cache = {}  # URL → 탭이름 캐시
+
+    def _resolve_gsheet_tab_name(self, url):
+        """Google Sheets URL에서 스프레드시트명 + 탭 이름 추출.
+        예: https://docs.google.com/spreadsheets/d/ID/edit?gid=123 → '시트명 > 탭명'
+        """
+        if url in self._gsheet_tab_cache:
+            return self._gsheet_tab_cache[url]
+        try:
+            import re
+            # spreadsheet ID 추출
+            m = re.search(r'/spreadsheets/d/([a-zA-Z0-9_-]+)', url)
+            if not m:
+                return ''
+            sheet_id = m.group(1)
+            # gid 추출
+            gid_match = re.search(r'[?&#]gid=(\d+)', url)
+            target_gid = int(gid_match.group(1)) if gid_match else None
+
+            service, err = self._get_service_account_sheets_service()
+            if not service:
+                return ''
+            result = service.spreadsheets().get(
+                spreadsheetId=sheet_id,
+                fields='properties.title,sheets.properties'
+            ).execute()
+
+            spreadsheet_title = result.get('properties', {}).get('title', '')
+            sheets = result.get('sheets', [])
+
+            if target_gid is not None:
+                for s in sheets:
+                    props = s.get('properties', {})
+                    if props.get('sheetId') == target_gid:
+                        tab_name = props.get('title', '')
+                        title = f"📊 {spreadsheet_title} > {tab_name}" if spreadsheet_title else f"📊 {tab_name}"
+                        self._gsheet_tab_cache[url] = title
+                        return title
+            # gid 없으면 스프레드시트 이름만
+            if spreadsheet_title:
+                title = f"📊 {spreadsheet_title}"
+                self._gsheet_tab_cache[url] = title
+                return title
+        except Exception as e:
+            print(f"시트 탭 이름 조회 실패: {e}")
+        return ''
 
     def _get_service_account_sheets_service(self):
         """[추가] 서비스 계정으로 Google Sheets API 서비스 객체 생성.
@@ -11067,6 +11181,23 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             f"브랜드명, 담당MD 입력 후\n"
             f"대조 분석 → Jira 상신 또는 반품 저장 진행하세요.")
 
+    def _export_scan_session_to_excel(self, scan_session_id):
+        """스캔 세션 ID로 Firestore에서 데이터 가져와서 엑셀 추출"""
+        try:
+            doc = self.db.collection('scan_sessions').document(scan_session_id).get()
+            if not doc.exists:
+                messagebox.showwarning("없음", "스캔 세션이 삭제되었거나 없습니다.")
+                return
+            sdata = doc.to_dict()
+            items = sdata.get('items', [])
+            label = sdata.get('label', '')
+            if not items:
+                messagebox.showwarning("없음", "스캔 데이터가 없습니다.")
+                return
+            self._export_scan_items_to_excel(items, title_hint=label)
+        except Exception as e:
+            messagebox.showerror("오류", f"데이터 로드 실패: {e}")
+
     def _preview_scan_session(self, scan_session_id):
         """스캔 세션 미리보기 팝업 - 바코드/로케/수량 표시"""
         if not scan_session_id:
@@ -11115,15 +11246,17 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         info = tk.Frame(win, bg="#F5F6F8")
         info.pack(fill="x", padx=18, pady=(0, 8))
-        tk.Label(info, text=f"👤 {worker}  ·  {quality_text}  ·  총 {len(items)}건  ·  로케 {len(loc_counts)}곳",
-                 font=("맑은 고딕", 10), bg="#F5F6F8", fg="#374151").pack(side="left")
+        info_label = tk.Label(info, text=f"👤 {worker}  ·  {quality_text}  ·  총 {len(items)}건  ·  로케 {len(loc_counts)}곳",
+                 font=("맑은 고딕", 10), bg="#F5F6F8", fg="#374151")
+        info_label.pack(side="left")
 
-        # Treeview (바코드 / 로케이션 / 수량)
+        # Treeview (바코드 / 로케이션 / 수량) - 다중 선택 가능
         tree_frame = tk.Frame(win, bg="white", relief="solid", bd=1)
         tree_frame.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
         cols = ("barcode", "location", "qty")
-        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=18)
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=18,
+                              selectmode="extended")
         tree.heading("barcode", text="바코드")
         tree.heading("location", text="로케이션")
         tree.heading("qty", text="수량")
@@ -11136,15 +11269,76 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tree.configure(yscrollcommand=sb.set)
         tree.pack(side="left", fill="both", expand=True, padx=2, pady=2)
 
-        # 데이터 삽입 (로케이션별 정렬)
-        sorted_items = sorted(items, key=lambda x: (x.get('location', ''), x.get('barcode', '')))
-        for it in sorted_items:
+        # 데이터 삽입 (로케이션별 정렬) - 원본 인덱스 보존
+        sorted_items = sorted(enumerate(items), key=lambda x: (x[1].get('location', ''), x[1].get('barcode', '')))
+        for orig_idx, it in sorted_items:
             bc = it.get('barcode', '')
             loc = it.get('location', '')
             qty = it.get('qty', 1)
-            tree.insert("", tk.END, values=(bc, loc, qty))
+            tree.insert("", tk.END, iid=str(orig_idx), values=(bc, loc, qty))
 
-        # 하단: 로케별 집계 + 닫기
+        # Firestore 업데이트 후 트리 갱신
+        def _refresh_tree():
+            for item in tree.get_children():
+                tree.delete(item)
+            new_sorted = sorted(enumerate(items), key=lambda x: (x[1].get('location', ''), x[1].get('barcode', '')))
+            for oi, it in new_sorted:
+                tree.insert("", tk.END, iid=str(oi),
+                            values=(it.get('barcode', ''), it.get('location', ''), it.get('qty', 1)))
+            info_label.config(text=f"👤 {worker}  ·  {quality_text}  ·  총 {len(items)}건  ·  로케 {len(set(i.get('location','') for i in items))}곳")
+
+        def _update_firestore():
+            try:
+                self.db.collection('scan_sessions').document(scan_session_id).update({
+                    'items': items, 'item_count': len(items)
+                })
+                reports = self.db.collection('field_reports').where(
+                    'scan_session_id', '==', scan_session_id).limit(1).get()
+                for r in reports:
+                    r.reference.update({'scan_item_count': len(items)})
+            except Exception as e:
+                print(f"Firestore 업데이트 실패: {e}")
+
+        # 우클릭 메뉴
+        ctx_menu = tk.Menu(win, tearoff=0)
+
+        def _on_right_click(event):
+            row = tree.identify_row(event.y)
+            if not row:
+                return
+            tree.selection_set(row)
+            idx = int(row)
+            it = items[idx]
+
+            ctx_menu.delete(0, tk.END)
+            ctx_menu.add_command(label=f"🔢 수량 변경 (현재: {it.get('qty', 1)})",
+                                command=lambda: _change_qty(idx))
+            ctx_menu.add_separator()
+            ctx_menu.add_command(label=f"🗑 삭제: {it.get('barcode', '')}", 
+                                command=lambda: _delete_item(idx))
+            ctx_menu.post(event.x_root, event.y_root)
+
+        def _change_qty(idx):
+            it = items[idx]
+            new_qty = simpledialog.askinteger("수량 변경",
+                f"{it['barcode']}\n현재 수량: {it.get('qty', 1)}",
+                initialvalue=it.get('qty', 1), minvalue=1, parent=win)
+            if new_qty and new_qty != it.get('qty', 1):
+                items[idx]['qty'] = new_qty
+                _update_firestore()
+                _refresh_tree()
+
+        def _delete_item(idx):
+            it = items[idx]
+            if messagebox.askyesno("삭제 확인",
+                    f"{it.get('barcode', '')} 삭제할까요?", parent=win):
+                items.pop(idx)
+                _update_firestore()
+                _refresh_tree()
+
+        tree.bind("<Button-3>", _on_right_click)
+
+        # 하단: 엑셀 + 닫기
         bottom = tk.Frame(win, bg="#F5F6F8")
         bottom.pack(fill="x", padx=18, pady=(0, 14))
 
