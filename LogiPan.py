@@ -2270,8 +2270,9 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         for line in raw.split('\n'):
             code = line.strip()
             if not code: continue
-            # 탭이나 공백 있으면 첫 토큰만
-            code = re.split(r'[\t ]+', code)[0]
+            # 탭 있으면 첫 토큰만 (엑셀 복붙 대응), 공백은 브랜드명 일부일 수 있으므로 유지
+            if '\t' in code:
+                code = code.split('\t')[0].strip()
             rows.append({
                 '브랜드코드': code,
                 '색상코드': '999',
