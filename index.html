@@ -938,7 +938,7 @@
             <button class="pda-manual-toggle" onclick="togglePdaManual()" id="pda-manual-toggle-btn">📱 입력칸 (PDA/수동)</button>
         </div>
         <div class="pda-manual-row" id="pda-manual-panel" style="display:none;">
-            <input type="text" id="manual-barcode-input" placeholder="PDA 스캔 또는 직접 입력" autocomplete="off" autocapitalize="off">
+            <input type="text" id="manual-barcode-input" placeholder="바코드 입력 후 [입력] 버튼 클릭" autocomplete="off" autocapitalize="off">
             <button class="pda-manual-btn" onclick="submitManualBarcode()">입력</button>
         </div>
 
@@ -3556,24 +3556,14 @@
         // 수동 입력칸 Enter → 등록
         const manualInput = document.getElementById('manual-barcode-input');
         if (manualInput) {
+            // Enter 키는 무시 (PDA가 자동 Enter 보내는 문제 방지)
+            // 입력 버튼 클릭으로만 처리
             manualInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    submitManualBarcode();
+                    e.stopPropagation();
+                    // Enter 무시 - 버튼으로 입력하세요
                 }
-            });
-            // PDA 자동처리: 붙여넣기/입력 후 200ms 내 추가 입력 없으면 자동 처리
-            let _pdaAutoTimer = null;
-            manualInput.addEventListener('input', () => {
-                clearTimeout(_pdaAutoTimer);
-                _pdaAutoTimer = setTimeout(() => {
-                    const val = manualInput.value.trim();
-                    if (val.length >= 10) {  // 바코드 최소 길이
-                        manualInput.value = '';
-                        processPdaScan(val, true);
-                        manualInput.focus();
-                    }
-                }, 200);
             });
         }
 
