@@ -249,21 +249,36 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         self.t_chk = ttk.Frame(self.nb); self.nb.add(self.t_chk, text="🔍 재고파악")
         self.t_end = ttk.Frame(self.nb); self.nb.add(self.t_end, text="📊 마감재고")
         self.t_stock = ttk.Frame(self.nb); self.nb.add(self.t_stock, text="📋 재고조사")
+        self.t_wms = tk.Frame(self.nb, bg="#F5F6F8"); self.nb.add(self.t_wms, text="📦 재고관리")
 
+        # 전체 탭 빌드
+        self.setup_board_system(self.t_board)
+        self.setup_field_comm(self.t_field)
         self.setup_inbound()
         self.setup_outbound()
-        self.setup_moms_v86()
+        self.setup_jira_waiting()
         self.setup_master_registration()
         self.setup_rt_inbound()
+        self.setup_moms_v86()
         self.setup_closing_stock()
         self.setup_inventory_check_v95()
         self.setup_stocktake()
-        self.setup_field_comm(self.t_field)
-        self.setup_board_system(self.t_board)
-        self.setup_jira_waiting()
+        self.setup_wms_tab()
 
         # [추가] 탭 알림 시스템 초기화 (모든 탭 만든 다음에)
         self.setup_tab_alert_system()
+
+    def _on_tab_changed(self, event=None):
+        """탭 전환 시 지연 로딩 탭이면 빌드"""
+        try:
+            tab_text = self.nb.tab(self.nb.select(), "text")
+            if tab_text in self._lazy_tabs:
+                method_name, loaded = self._lazy_tabs[tab_text]
+                if not loaded:
+                    self._lazy_tabs[tab_text] = (method_name, True)
+                    getattr(self, method_name)()
+        except Exception as e:
+            print(f"탭 로딩 실패: {e}")
 
     # --- [데이터 처리 공통 로직] ---
     def check_double_enter(self, event):
@@ -912,18 +927,9 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         make_modern_btn(action_outer, "🔍  대조 분석",
                          bg="#F59E0B", hover_bg="#D97706",
                          command=self.run_compare_in)
-        make_modern_btn(action_outer, "📋  입고파일 생성",
-                         bg="#1877F2", hover_bg="#1864c8",
-                         command=self.create_inbound_file)
-        make_modern_btn(action_outer, "💾  CSV 저장",
+        make_modern_btn(action_outer, "✅  입고 완료",
                          bg="#10B981", hover_bg="#059669",
-                         command=self.save_csv_in)
-        make_modern_btn(action_outer, "🎫  Jira 상신",
-                         bg="#8B5CF6", hover_bg="#7C3AED",
-                         command=self.save_csv_with_jira)
-        make_modern_btn(action_outer, "📦  반품 저장",
-                         bg="#F97316", hover_bg="#EA580C",
-                         command=self.save_csv_return)
+                         command=self._do_inbound_complete)
 
         # ========== [📝 리포트 카드 - 하단 (버튼 위)] ==========
         report_card_outer = tk.Frame(container, bg="#F5F6F8")
@@ -3086,6 +3092,110 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
 
         self._last_master_table_df = pd.DataFrame(master_rows)
         self._last_option_table_df = pd.DataFrame(option_rows)
+
+        # RTDB 상품관리 + 상품옵션관리 자동 저장 (신규만, 기존 유지, 변경 감지)
+        try:
+            prod_ref = rtdb.reference('products')
+            opt_ref = rtdb.reference('product_options')
+
+            existing_prods = self._wms_cache.get('products', {})
+            existing_opts = self._wms_cache.get('options', {})
+
+            prod_data = {}
+            skip_prod = 0
+            changed_prods = []
+            for r in master_rows:
+                code = r.get('품번', '').strip()
+                if not code:
+                    continue
+                new_entry = {
+                    'product_code': code,
+                    'name': r.get('상품명', ''),
+                    'brand': r.get('브랜드코드', ''),
+                    'season': r.get('시즌코드', ''),
+                    'gender': r.get('성별코드', ''),
+                    'item': r.get('아이템코드', ''),
+                    'tag_price': str(r.get('택가', 0)),
+                    'sell_price': str(r.get('정상가', 0)),
+                    'cost': str(r.get('원가', 0)),
+                }
+                if code in existing_prods:
+                    skip_prod += 1
+                    # 변경 감지
+                    old = existing_prods[code]
+                    diffs = []
+                    for k, v in new_entry.items():
+                        old_v = str(old.get(k, '')).strip()
+                        new_v = str(v).strip()
+                        if old_v and new_v and old_v != new_v and new_v not in ('0', '999', ''):
+                            diffs.append(f"  {k}: {old_v} → {new_v}")
+                    if diffs:
+                        changed_prods.append((code, diffs))
+                    continue
+                prod_data[code] = new_entry
+
+            opt_data = {}
+            skip_opt = 0
+            changed_opts = []
+            for r in option_rows:
+                bc = r.get('바코드', '').strip()
+                if not bc:
+                    continue
+                new_entry = {
+                    'product_code': r.get('품번', ''),
+                    'color_code': r.get('색상코드', ''),
+                    'size_code': r.get('사이즈코드', ''),
+                    'location': r.get('고정로케이션', ''),
+                }
+                if bc in existing_opts:
+                    skip_opt += 1
+                    old = existing_opts[bc]
+                    diffs = []
+                    for k, v in new_entry.items():
+                        old_v = str(old.get(k, '')).strip()
+                        new_v = str(v).strip()
+                        if old_v and new_v and old_v != new_v and new_v not in ('0', '00-00-00-00', ''):
+                            diffs.append(f"  {k}: {old_v} → {new_v}")
+                    if diffs:
+                        changed_opts.append((bc, diffs))
+                    continue
+                # 상품명/브랜드 매핑
+                new_entry['brand'] = ''
+                new_entry['name'] = ''
+                prod = prod_data.get(r.get('품번', '')) or existing_prods.get(r.get('품번', ''), {})
+                if prod:
+                    new_entry['brand'] = prod.get('brand', '')
+                    new_entry['name'] = prod.get('name', '')
+                opt_data[bc] = new_entry
+
+            if prod_data:
+                prod_ref.update(prod_data)
+            if opt_data:
+                opt_ref.update(opt_data)
+            self._wms_cache.setdefault('products', {}).update(prod_data)
+            self._wms_cache.setdefault('options', {}).update(opt_data)
+
+            # 변경 감지 알림
+            if changed_prods or changed_opts:
+                msg = "⚠️ 기존 등록 데이터와 다른 정보가 감지되었습니다.\n(기존 데이터 유지, 수정은 재고관리 탭에서)\n\n"
+                if changed_prods:
+                    msg += f"📦 상품 {len(changed_prods)}건:\n"
+                    for code, diffs in changed_prods[:5]:
+                        msg += f"\n{code}\n" + "\n".join(diffs) + "\n"
+                    if len(changed_prods) > 5:
+                        msg += f"\n... 외 {len(changed_prods) - 5}건\n"
+                if changed_opts:
+                    msg += f"\n📋 옵션 {len(changed_opts)}건:\n"
+                    for bc, diffs in changed_opts[:5]:
+                        msg += f"\n{bc}\n" + "\n".join(diffs) + "\n"
+                    if len(changed_opts) > 5:
+                        msg += f"\n... 외 {len(changed_opts) - 5}건"
+                messagebox.showwarning("📊 변경 감지", msg)
+
+            print(f"✅ RTDB 마스터: 신규 상품 {len(prod_data)}건, 옵션 {len(opt_data)}건 "
+                  f"(기존 스킵: 상품 {skip_prod}, 옵션 {skip_opt})")
+        except Exception as e:
+            print(f"⚠️ RTDB 마스터 저장 실패: {e}")
 
         # ========== [리포트 작성] ==========
         report = self.txt_master_report
@@ -7711,6 +7821,291 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             import traceback
             print(traceback.format_exc())
             messagebox.showerror("❌ 예외 발생", str(e))
+
+    def _do_inbound_complete(self):
+        """입고 완료 통합 버튼 - 신규/반품 선택 후 처리"""
+        # 대조 분석 확인
+        if not self.is_matched:
+            messagebox.showwarning("대조 필요", "대조 분석을 먼저 실행해주세요.\n불일치 시 입고 완료할 수 없습니다.")
+            return
+
+        # 신규/반품 선택 팝업
+        popup = tk.Toplevel(self.root)
+        popup.title("입고 유형 선택")
+        popup.resizable(False, False)
+        popup.grab_set()
+
+        w, h = 360, 170
+        x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+        popup.geometry(f"{w}x{h}+{x}+{y}")
+
+        tk.Label(popup, text="입고 유형을 선택하세요",
+                 font=("맑은 고딕", 12, "bold")).pack(pady=(20, 10))
+
+        btn_frame = tk.Frame(popup)
+        btn_frame.pack(fill="x", padx=20)
+
+        def _select(inbound_type):
+            popup.destroy()
+            self._process_inbound_complete(inbound_type)
+
+        # 신규
+        f1 = tk.Frame(btn_frame)
+        f1.pack(side="left", expand=True, padx=5)
+        tk.Button(f1, text="📥 브랜드 입고",
+                  font=("맑은 고딕", 11, "bold"),
+                  bg="#1877F2", fg="white", bd=0, padx=20, pady=10,
+                  cursor="hand2", command=lambda: _select('신규')
+                  ).pack(fill="x")
+        tk.Label(f1, text="브랜드입고 / 알림 O",
+                 font=("맑은 고딕", 8), fg="#6B7280").pack(pady=(4, 0))
+
+        # 반품
+        f2 = tk.Frame(btn_frame)
+        f2.pack(side="left", expand=True, padx=5)
+        tk.Button(f2, text="📦 반품/기타",
+                  font=("맑은 고딕", 11, "bold"),
+                  bg="#F97316", fg="white", bd=0, padx=20, pady=10,
+                  cursor="hand2", command=lambda: _select('반품')
+                  ).pack(fill="x")
+        tk.Label(f2, text="반품 및 기타 / 알림 X",
+                 font=("맑은 고딕", 8), fg="#6B7280").pack(pady=(4, 0))
+
+    def _process_inbound_complete(self, inbound_type):
+        """입고 완료 실제 처리"""
+        # 반품일 때 창고 선택
+        warehouse = '정상창고'
+        if inbound_type == '반품':
+            wh_popup = tk.Toplevel(self.root)
+            wh_popup.title("창고 선택")
+            wh_popup.resizable(False, False)
+            wh_popup.grab_set()
+            w, h = 280, 140
+            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            wh_popup.geometry(f"{w}x{h}+{x}+{y}")
+
+            tk.Label(wh_popup, text="어느 창고로 입고할까요?",
+                     font=("맑은 고딕", 11, "bold")).pack(pady=(15, 10))
+            wh_frame = tk.Frame(wh_popup)
+            wh_frame.pack()
+            _wh_result = {'value': None}
+
+            def _pick_wh(wh):
+                _wh_result['value'] = wh
+                wh_popup.destroy()
+
+            tk.Button(wh_frame, text="정상창고", bg="#10B981", fg="white",
+                      font=("맑은 고딕", 10, "bold"), bd=0, padx=16, pady=8,
+                      cursor="hand2", command=lambda: _pick_wh('정상창고')).pack(side="left", padx=8)
+            tk.Button(wh_frame, text="불량창고", bg="#DC2626", fg="white",
+                      font=("맑은 고딕", 10, "bold"), bd=0, padx=16, pady=8,
+                      cursor="hand2", command=lambda: _pick_wh('불량창고')).pack(side="left", padx=8)
+
+            wh_popup.wait_window()
+            if not _wh_result['value']:
+                return
+            warehouse = _wh_result['value']
+        else:
+            # 신규: 정상/불량 버튼 상태에 따라
+            quality = getattr(self, '_inbound_quality', 'normal')
+            warehouse = '불량창고' if quality == 'defect' else '정상창고'
+
+        # 1) 입고파일 생성
+        try:
+            self.create_inbound_file()
+        except Exception as e:
+            print(f"입고파일 생성 실패: {e}")
+
+        # 2) 입고파일에서 재고 반영용 아이템 추출
+        items = self._extract_from_inbound_df(warehouse)
+
+        # 3) 기존 저장 로직 실행
+        if inbound_type == '신규':
+            self.save_csv_with_jira()
+        else:
+            self.save_csv_return()
+
+        # 4) 재고 반영
+        try:
+            if items:
+                self._update_inventory(items, f'{inbound_type}입고', warehouse)
+                messagebox.showinfo("📦 재고 반영",
+                    f"✅ {len(items)}건 재고 반영 완료\n"
+                    f"유형: {inbound_type}입고\n창고: {warehouse}\n\n"
+                    f"예시: {items[0]['barcode']} (+{items[0]['qty']})")
+            else:
+                messagebox.showwarning("📦 재고 반영",
+                    "⚠️ 추출된 아이템이 없어서 재고 반영을 건너뛰었습니다.\n\n"
+                    "브랜드수량 또는 스캔수량에 데이터가 있는지 확인해주세요.")
+        except Exception as e:
+            messagebox.showerror("📦 재고 반영 실패", str(e))
+
+    def _extract_from_inbound_df(self, warehouse='정상창고'):
+        """입고파일 DataFrame(_last_inbound_df)에서 바코드+수량 추출"""
+        items = []
+        df = getattr(self, '_last_inbound_df', None)
+        if df is None or len(df) == 0:
+            return items
+        try:
+            is_defect = warehouse == '불량창고'
+            qty_col = '불량수량' if is_defect else '정상수량'
+            bc_col = '바코드'
+
+            if bc_col not in df.columns or qty_col not in df.columns:
+                return items
+
+            for _, row in df.iterrows():
+                bc = str(row[bc_col]).strip()
+                try:
+                    qty = int(float(row[qty_col]))
+                except:
+                    qty = 0
+                if bc and len(bc) >= 5 and qty > 0:
+                    items.append({'barcode': bc, 'qty': qty})
+        except Exception as e:
+            print(f"입고파일 추출 실패: {e}")
+        return items
+
+    def _extract_inbound_items(self, warehouse='정상창고'):
+        """입고탭 브랜드수량/스캔수량에서 바코드+수량 추출.
+        형식: 박스번호 바코드 [상품명] 정상수량 불량수량 [정상로케 불량로케]"""
+        items = []
+        is_defect = warehouse == '불량창고'
+        try:
+            brand_text = self.txt_in_master.get("1.0", tk.END).strip()
+            if brand_text:
+                items = self._parse_inbound_text(brand_text, is_defect)
+            if not items:
+                scan_text = self.txt_in_scan.get("1.0", tk.END).strip()
+                if scan_text:
+                    items = self._parse_inbound_text(scan_text, is_defect)
+        except Exception as e:
+            print(f"아이템 추출 실패: {e}")
+        return items
+
+    def _parse_inbound_text(self, text, is_defect=False):
+        """입고 텍스트 파싱 - 박스번호(0) 바코드(1) 상품명(2) 정상수량 불량수량 ..."""
+        items = []
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('\t')
+            if len(parts) < 2:
+                continue
+
+            # 바코드: 두 번째 컬럼 (index 1)
+            bc = parts[1].strip() if len(parts) > 1 else ''
+            if not bc or len(bc) < 5:
+                # 혹시 첫 번째가 바코드일 수도 (박스번호 없는 경우)
+                bc = parts[0].strip()
+                remaining = parts[1:]
+            else:
+                remaining = parts[2:]
+
+            if not bc or len(bc) < 5:
+                continue
+
+            # 나머지에서 숫자 수집
+            numbers = []
+            for p in remaining:
+                try:
+                    numbers.append(int(float(p.strip())))
+                except:
+                    continue
+
+            qty = 0
+            if len(numbers) >= 2:
+                qty = numbers[1] if is_defect else numbers[0]
+            elif len(numbers) == 1:
+                qty = numbers[0]
+            else:
+                qty = 1
+
+            if qty > 0:
+                items.append({'barcode': bc, 'qty': qty})
+        return items
+
+    def _update_inventory(self, items, inv_type, warehouse, worker='', jira_key=''):
+        """RTDB 재고 업데이트 + 이력 기록"""
+        if not items:
+            return
+        try:
+            inv_ref = rtdb.reference('inventory')
+            log_ref = rtdb.reference('inventory_log')
+            ts = int(datetime.now().timestamp())
+
+            for item in items:
+                bc = item['barcode']
+                qty = item['qty']
+
+                # 기존 재고 읽기
+                existing = inv_ref.child(bc).get()
+                if existing and isinstance(existing, dict):
+                    old_qty = int(float(existing.get('qty', 0)))
+                    old_avail = int(float(existing.get('available', 0)))
+                    old_waiting = int(float(existing.get('waiting', 0)))
+                    if '출고' in inv_type:
+                        new_qty = max(0, old_qty - qty)
+                        new_avail = max(0, old_avail - qty)
+                    else:
+                        new_qty = old_qty + qty
+                        new_avail = old_avail + qty
+                    inv_ref.child(bc).update({
+                        'qty': str(new_qty),
+                        'available': str(new_avail),
+                        'waiting': str(old_waiting),
+                        'warehouse': warehouse,
+                        'updated': ts
+                    })
+                else:
+                    # 새 바코드
+                    inv_ref.child(bc).set({
+                        'qty': str(qty),
+                        'available': str(qty),
+                        'waiting': '0',
+                        'warehouse': warehouse,
+                        'updated': ts
+                    })
+
+                # 이력 기록
+                log_ref.push({
+                    'barcode': bc,
+                    'type': inv_type,
+                    'qty': qty,
+                    'warehouse': warehouse,
+                    'worker': worker or getattr(self, '_current_user', ''),
+                    'jira': jira_key,
+                    'ts': ts
+                })
+
+            # 로컬 캐시 갱신
+            for item in items:
+                bc = item['barcode']
+                if bc in self._wms_cache.get('inventory', {}):
+                    entry = self._wms_cache['inventory'][bc]
+                    old_qty = int(float(entry.get('qty', 0)))
+                    old_avail = int(float(entry.get('available', 0)))
+                    if '출고' in inv_type:
+                        entry['qty'] = str(max(0, old_qty - item['qty']))
+                        entry['available'] = str(max(0, old_avail - item['qty']))
+                    else:
+                        entry['qty'] = str(old_qty + item['qty'])
+                        entry['available'] = str(old_avail + item['qty'])
+                else:
+                    self._wms_cache.setdefault('inventory', {})[bc] = {
+                        'qty': str(item['qty']),
+                        'available': str(item['qty']),
+                        'waiting': '0',
+                        'warehouse': warehouse,
+                        'updated': ts
+                    }
+
+            print(f"✅ 재고 반영: {inv_type} {len(items)}건 → {warehouse}")
+        except Exception as e:
+            print(f"재고 반영 오류: {e}")
 
     def save_csv_with_jira(self):
         """CSV 저장 + Jira 티켓 자동 상신"""
@@ -14123,6 +14518,626 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             messagebox.showinfo("완료", f"이제부터 '{new_name}' 이름으로 댓글이 달립니다.\n(다음 실행에도 유지됩니다)")
 
 # --- 여기서부터는 클래스 밖 ---
+    # ========== [재고관리 WMS] ==========
+    _wms_cache = {'products': {}, 'options': {}, 'inventory': {}, 'loaded': False}
+
+    def setup_wms_tab(self):
+        """재고관리 탭: 상품관리 / 상품옵션관리 / 재고현황"""
+        container = self.t_wms
+
+        # 헤더
+        hdr = tk.Frame(container, bg="#F5F6F8")
+        hdr.pack(fill="x", padx=18, pady=(14, 8))
+        tk.Label(hdr, text="📦 재고관리", font=("맑은 고딕", 16, "bold"),
+                 bg="#F5F6F8", fg="#1F2937").pack(side="left")
+        tk.Label(hdr, text="상품 마스터 + 실시간 재고",
+                 font=("맑은 고딕", 10), bg="#F5F6F8", fg="#9CA3AF").pack(side="left", padx=(12, 0))
+
+        # 서브탭
+        sub_nb = ttk.Notebook(container)
+        sub_nb.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+
+        self._wms_sub_product = tk.Frame(sub_nb, bg="white")
+        self._wms_sub_option = tk.Frame(sub_nb, bg="white")
+        self._wms_sub_inv = tk.Frame(sub_nb, bg="white")
+        sub_nb.add(self._wms_sub_product, text="🏷️ 상품관리")
+        sub_nb.add(self._wms_sub_option, text="📋 상품옵션관리")
+        sub_nb.add(self._wms_sub_inv, text="📊 재고현황")
+
+        # ─── 상품관리 서브탭 ───
+        self._build_wms_subtab(self._wms_sub_product, 'products',
+            columns=('product_code', 'name', 'brand', 'season', 'gender', 'item', 'tag_price', 'sell_price'),
+            headings=('상품코드', '상품명', '브랜드', '시즌', '성별', '아이템', '택가', '판매가'),
+            widths=(120, 200, 80, 60, 50, 80, 70, 70))
+
+        # ─── 상품옵션관리 서브탭 ───
+        self._build_wms_subtab(self._wms_sub_option, 'options',
+            columns=('barcode', 'product_code', 'name', 'brand', 'color_code', 'size_code', 'location'),
+            headings=('바코드', '상품코드', '상품명', '브랜드', '색상코드', '사이즈', '로케이션'),
+            widths=(160, 120, 180, 80, 80, 60, 100))
+
+        # ─── 재고현황 서브탭 ───
+        self._build_wms_subtab(self._wms_sub_inv, 'inventory',
+            columns=('barcode', 'name', 'brand', 'color', 'size', 'warehouse', 'location', 'qty', 'available'),
+            headings=('바코드', '상품명', '브랜드', '색상', '사이즈', '창고', '로케이션', '재고', '가용'),
+            widths=(160, 180, 80, 60, 60, 60, 100, 50, 50))
+
+        # 초기 캐시 로드 (백그라운드)
+        threading.Thread(target=self._wms_load_cache, daemon=True).start()
+
+    def _build_wms_subtab(self, parent, data_key, columns, headings, widths):
+        """WMS 서브탭 공통 UI 빌드"""
+        # 컨트롤 바
+        ctrl = tk.Frame(parent, bg="white")
+        ctrl.pack(fill="x", padx=10, pady=8)
+
+        tk.Label(ctrl, text="🔍 검색:", bg="white", font=("맑은 고딕", 9)).pack(side="left")
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(ctrl, textvariable=search_var, width=30, font=("맑은 고딕", 10))
+        search_entry.pack(side="left", padx=(4, 8))
+
+        tk.Button(ctrl, text="검색", bg="#3B82F6", fg="white",
+                  font=("맑은 고딕", 9, "bold"), bd=0, padx=10, pady=3, cursor="hand2",
+                  command=lambda: self._wms_search(data_key, search_var.get(), tree)
+                  ).pack(side="left")
+
+        # 건수 라벨
+        count_label = tk.Label(ctrl, text="0행", bg="white", fg="#6B7280", font=("맑은 고딕", 9))
+        count_label.pack(side="left", padx=(10, 0))
+
+        # 엑셀 업로드 + 추출 버튼
+        tk.Button(ctrl, text="📥 엑셀 업로드", bg="#F59E0B", fg="white",
+                  font=("맑은 고딕", 9, "bold"), bd=0, padx=10, pady=3, cursor="hand2",
+                  command=lambda: self._wms_import_excel(data_key)
+                  ).pack(side="right")
+
+        tk.Button(ctrl, text="📊 엑셀 추출", bg="#10B981", fg="white",
+                  font=("맑은 고딕", 9, "bold"), bd=0, padx=10, pady=3, cursor="hand2",
+                  command=lambda: self._wms_export_excel(data_key, tree, headings)
+                  ).pack(side="right", padx=(0, 6))
+
+        # Treeview
+        tree_frame = tk.Frame(parent, bg="white")
+        tree_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        tree = ttk.Treeview(tree_frame, columns=columns, show="headings", height=20,
+                              selectmode="browse")
+        _sort_reverse = {}  # 컬럼별 정렬 방향
+        for col, heading, width in zip(columns, headings, widths):
+            def _sort_cmd(c=col, h=heading):
+                reverse = _sort_reverse.get(c, False)
+                items = [(tree.set(k, c), k) for k in tree.get_children()]
+                # 숫자면 숫자 정렬
+                try:
+                    items.sort(key=lambda x: float(x[0]) if x[0].strip() else 0, reverse=reverse)
+                except ValueError:
+                    items.sort(key=lambda x: x[0], reverse=reverse)
+                for idx, (_, k) in enumerate(items):
+                    tree.move(k, '', idx)
+                _sort_reverse[c] = not reverse
+                # 헤더에 화살표 표시
+                arrow = ' ▼' if reverse else ' ▲'
+                for cc, hh in zip(columns, headings):
+                    tree.heading(cc, text=hh + (arrow if cc == c else ''))
+            tree.heading(col, text=heading, command=_sort_cmd)
+            tree.column(col, width=width, anchor="center" if width < 80 else "w")
+        tree.pack(side="left", fill="both", expand=True)
+
+        sb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+
+        # 셀 클릭 → 값 표시 + 복사 준비
+        _selected_cell = {'value': '', 'col': '', 'row': ''}
+
+        def _on_click(event):
+            row_id = tree.identify_row(event.y)
+            col_id = tree.identify_column(event.x)
+            if row_id and col_id:
+                col_idx = int(col_id.replace('#', '')) - 1
+                values = tree.item(row_id, 'values')
+                if 0 <= col_idx < len(values):
+                    _selected_cell['value'] = str(values[col_idx])
+                    _selected_cell['col'] = columns[col_idx] if col_idx < len(columns) else ''
+                    _selected_cell['row'] = row_id
+
+        tree.bind("<Button-1>", _on_click)
+
+        # Ctrl+C → 선택된 셀 복사
+        def _copy_cell(event=None):
+            val = _selected_cell.get('value', '')
+            if val:
+                tree.clipboard_clear()
+                tree.clipboard_append(val)
+
+        tree.bind("<Control-c>", _copy_cell)
+
+        # 우클릭 메뉴
+        ctx = tk.Menu(tree, tearoff=0)
+
+        def _on_right_click(event):
+            row_id = tree.identify_row(event.y)
+            col_id = tree.identify_column(event.x)
+            if not row_id:
+                return
+            tree.selection_set(row_id)
+            col_idx = int(col_id.replace('#', '')) - 1
+            values = tree.item(row_id, 'values')
+            cell_val = str(values[col_idx]) if 0 <= col_idx < len(values) else ''
+            _selected_cell['value'] = cell_val
+
+            ctx.delete(0, tk.END)
+            col_name = headings[col_idx] if col_idx < len(headings) else ''
+            ctx.add_command(label=f"📋 셀 복사: {cell_val[:30]}", command=_copy_cell)
+            ctx.add_command(label="📋 행 전체 복사",
+                            command=lambda: _copy_row(values))
+            ctx.add_separator()
+
+            # 선택된 행 여러 개면 다중 복사
+            sel = tree.selection()
+            if len(sel) > 1:
+                ctx.add_command(label=f"📋 선택 {len(sel)}행 복사",
+                                command=lambda: _copy_multi_rows(sel))
+            ctx.post(event.x_root, event.y_root)
+
+        def _copy_row(values):
+            tree.clipboard_clear()
+            tree.clipboard_append('\t'.join(str(v) for v in values))
+
+        def _copy_multi_rows(sel_ids):
+            lines = []
+            for sid in sel_ids:
+                vals = tree.item(sid, 'values')
+                lines.append('\t'.join(str(v) for v in vals))
+            tree.clipboard_clear()
+            tree.clipboard_append('\n'.join(lines))
+
+        tree.bind("<Button-3>", _on_right_click)
+
+        # Enter로 검색
+        search_entry.bind("<Return>", lambda e: self._wms_search(data_key, search_var.get(), tree))
+
+        # 참조 저장
+        setattr(self, f'_wms_tree_{data_key}', tree)
+        setattr(self, f'_wms_count_{data_key}', count_label)
+
+        # 재고현황: 우클릭에 수정 기능 추가
+        if data_key == 'inventory':
+            orig_right_click = _on_right_click
+            def _on_inv_right_click(event):
+                row_id = tree.identify_row(event.y)
+                col_id = tree.identify_column(event.x)
+                if not row_id:
+                    return
+                tree.selection_set(row_id)
+                col_idx = int(col_id.replace('#', '')) - 1
+                values = tree.item(row_id, 'values')
+                bc = str(values[0]) if values else ''
+                cell_val = str(values[col_idx]) if 0 <= col_idx < len(values) else ''
+
+                inv_ctx = tk.Menu(tree, tearoff=0)
+                inv_ctx.add_command(label=f"📋 셀 복사: {cell_val[:30]}",
+                                    command=lambda: (tree.clipboard_clear(), tree.clipboard_append(cell_val)))
+                inv_ctx.add_command(label="📋 행 전체 복사",
+                                    command=lambda: (tree.clipboard_clear(), tree.clipboard_append('\t'.join(str(v) for v in values))))
+                inv_ctx.add_separator()
+                inv_ctx.add_command(label="🔢 재고수량 수정",
+                                    command=lambda: self._wms_edit_inventory(bc, 'qty', tree, search_var))
+                inv_ctx.add_command(label="🔢 가용재고 수정",
+                                    command=lambda: self._wms_edit_inventory(bc, 'available', tree, search_var))
+                inv_ctx.add_command(label="📍 로케이션 수정",
+                                    command=lambda: self._wms_edit_inventory(bc, 'location', tree, search_var))
+                inv_ctx.add_command(label="🏢 창고 수정",
+                                    command=lambda: self._wms_edit_inventory(bc, 'warehouse', tree, search_var))
+                inv_ctx.post(event.x_root, event.y_root)
+            tree.bind("<Button-3>", _on_inv_right_click)
+
+    def _wms_load_cache(self):
+        """RTDB에서 WMS 데이터 로컬 캐시 로드"""
+        try:
+            # 로컬 파일 캐시 먼저
+            import json
+            cache_dir = os.path.join(os.path.expanduser("~"), ".logipan")
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_path = os.path.join(cache_dir, "wms_cache.json")
+
+            if os.path.exists(cache_path):
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    cached = json.load(f)
+                self._wms_cache.update(cached)
+                self._wms_cache['loaded'] = True
+                print(f"⚡ WMS 로컬 캐시 로드: 상품 {len(self._wms_cache.get('products', {}))}건, "
+                      f"옵션 {len(self._wms_cache.get('options', {}))}건, "
+                      f"재고 {len(self._wms_cache.get('inventory', {}))}건")
+
+            # RTDB 동기화
+            for key in ['products', 'product_options', 'inventory']:
+                ref = rtdb.reference(key)
+                data = ref.get()
+                if data:
+                    cache_key = 'options' if key == 'product_options' else key
+                    self._wms_cache[cache_key] = data
+            self._wms_cache['loaded'] = True
+
+            # 로컬 캐시 저장
+            save_data = {k: v for k, v in self._wms_cache.items() if k != 'loaded'}
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, ensure_ascii=False)
+            print(f"✅ WMS RTDB 동기화 완료")
+        except Exception as e:
+            print(f"WMS 캐시 로드 실패: {e}")
+
+    def _wms_search(self, data_key, keyword, tree):
+        """WMS 데이터 검색"""
+        for item in tree.get_children():
+            tree.delete(item)
+
+        keyword = keyword.strip().upper()
+        data = self._wms_cache.get(data_key, {})
+        count = 0
+        max_rows = 5000 if keyword else 500  # 검색 시 제한 완화
+
+        for key, val in data.items():
+            if not isinstance(val, dict):
+                continue
+            # 키워드 매칭: 키(바코드/상품코드) 또는 값 중 하나라도 포함
+            match = False
+            if not keyword:
+                match = True
+            elif keyword in str(key).upper():
+                match = True
+            else:
+                for v in val.values():
+                    if keyword in str(v).upper():
+                        match = True
+                        break
+
+            if match:
+                cols = tree['columns']
+                row_vals = []
+                for col in cols:
+                    if col in ('barcode', 'product_code') and col == cols[0]:
+                        row_vals.append(key)  # 키 = 바코드 또는 상품코드
+                    else:
+                        row_vals.append(str(val.get(col, '')))
+                tree.insert("", tk.END, values=row_vals)
+                count += 1
+                if count >= max_rows:
+                    break
+
+        # 건수 + 수량 합계 업데이트
+        count_label = getattr(self, f'_wms_count_{data_key}', None)
+        if count_label:
+            total = len(data)
+            total_pcs = 0
+            displayed_pcs = 0
+            for key, val in data.items():
+                if isinstance(val, dict):
+                    try: total_pcs += int(float(val.get('qty', 0) or 0))
+                    except: pass
+            # 표시된 항목 수량 합계
+            for item in tree.get_children():
+                vals = tree.item(item, 'values')
+                # qty 컬럼 위치 찾기 (헤더에 '재고' 포함)
+                cols = tree['columns']
+                for ci, c in enumerate(cols):
+                    if c in ('qty',):
+                        try: displayed_pcs += int(float(vals[ci]))
+                        except: pass
+                        break
+            if keyword:
+                count_label.config(text=f"검색: {count}행 · {displayed_pcs:,}pcs / 전체 {total:,}행 · {total_pcs:,}pcs")
+            else:
+                count_label.config(text=f"{count}행 표시 / 전체 {total:,}행 · {total_pcs:,}pcs")
+
+    def _wms_edit_inventory(self, barcode, field, tree, search_var):
+        """재고 데이터 수정 + 이력 기록"""
+        if not barcode:
+            return
+
+        inv_data = self._wms_cache.get('inventory', {}).get(barcode, {})
+        old_value = inv_data.get(field, '')
+
+        field_names = {'qty': '재고수량', 'available': '가용재고', 'location': '로케이션', 'warehouse': '창고'}
+        field_name = field_names.get(field, field)
+
+        if field in ('qty', 'available'):
+            new_value = simpledialog.askinteger(f"{field_name} 수정",
+                f"바코드: {barcode}\n현재 {field_name}: {old_value}",
+                initialvalue=int(float(old_value or 0)))
+            if new_value is None:
+                return
+            new_value = str(new_value)
+        else:
+            if field == 'warehouse':
+                # 창고 선택
+                popup = tk.Toplevel(self.root)
+                popup.title("창고 선택")
+                popup.grab_set()
+                popup.geometry("250x100+{}+{}".format(
+                    self.root.winfo_x() + 300, self.root.winfo_y() + 300))
+                _result = {'value': None}
+                tk.Button(popup, text="정상창고", bg="#10B981", fg="white",
+                          font=("맑은 고딕", 10, "bold"), padx=12, pady=6,
+                          command=lambda: (_result.update({'value': '정상창고'}), popup.destroy())
+                          ).pack(side="left", expand=True, padx=10, pady=20)
+                tk.Button(popup, text="불량창고", bg="#DC2626", fg="white",
+                          font=("맑은 고딕", 10, "bold"), padx=12, pady=6,
+                          command=lambda: (_result.update({'value': '불량창고'}), popup.destroy())
+                          ).pack(side="left", expand=True, padx=10, pady=20)
+                popup.wait_window()
+                new_value = _result.get('value')
+                if not new_value:
+                    return
+            else:
+                new_value = simpledialog.askstring(f"{field_name} 수정",
+                    f"바코드: {barcode}\n현재 {field_name}: {old_value}",
+                    initialvalue=old_value or '')
+                if new_value is None:
+                    return
+
+        if str(new_value) == str(old_value):
+            return
+
+        try:
+            # RTDB 업데이트
+            ts = int(datetime.now().timestamp())
+            rtdb.reference(f'inventory/{barcode}').update({
+                field: str(new_value),
+                'updated': ts
+            })
+
+            # 이력 기록
+            rtdb.reference('inventory_log').push({
+                'barcode': barcode,
+                'type': '수정',
+                'field': field_name,
+                'old_value': str(old_value),
+                'new_value': str(new_value),
+                'worker': getattr(self, '_current_user', ''),
+                'ts': ts
+            })
+
+            # 로컬 캐시 갱신
+            if barcode in self._wms_cache.get('inventory', {}):
+                self._wms_cache['inventory'][barcode][field] = str(new_value)
+
+            # 트리뷰 갱신
+            keyword = search_var.get() if search_var else ''
+            self._wms_search('inventory', keyword, tree)
+
+            messagebox.showinfo("✅ 수정 완료",
+                f"바코드: {barcode}\n{field_name}: {old_value} → {new_value}")
+
+        except Exception as e:
+            messagebox.showerror("수정 실패", str(e))
+
+    def _wms_export_excel(self, data_key, tree, headings):
+        """엑셀 추출: 검색 중이면 검색 결과만, 아니면 전체 데이터"""
+        # 현재 트리에 표시된 건수 vs 전체
+        displayed = len(tree.get_children())
+        total = len(self._wms_cache.get(data_key, {}))
+
+        if displayed < total:
+            choice = messagebox.askyesnocancel("📊 엑셀 추출",
+                f"현재 {displayed:,}행 표시 중 / 전체 {total:,}행\n\n"
+                f"[예] 전체 {total:,}행 추출\n"
+                f"[아니오] 현재 표시된 {displayed:,}행만 추출")
+            if choice is None:
+                return
+            export_all = choice
+        else:
+            export_all = False
+
+        if export_all:
+            # 전체 캐시에서 추출
+            data = self._wms_cache.get(data_key, {})
+            cols = list(tree['columns'])
+            rows = []
+            for key, val in data.items():
+                if not isinstance(val, dict):
+                    continue
+                row = []
+                for col in cols:
+                    if col == cols[0]:
+                        row.append(key)
+                    else:
+                        row.append(str(val.get(col, '')))
+                rows.append(row)
+        else:
+            # 현재 표시된 것만
+            cols = list(tree['columns'])
+            rows = [tree.item(item, 'values') for item in tree.get_children()]
+
+        if not rows:
+            messagebox.showwarning("없음", "추출할 데이터가 없습니다.")
+            return
+
+        df = pd.DataFrame(rows, columns=list(headings))
+
+        tab_names = {'products': '상품관리', 'options': '상품옵션관리', 'inventory': '재고현황'}
+        tab_name = tab_names.get(data_key, data_key)
+        today = datetime.now().strftime('%y%m%d')
+
+        save_path = filedialog.asksaveasfilename(
+            title="엑셀 추출",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialfile=f"{today}_{tab_name}_{len(rows)}행.xlsx",
+            initialdir=getattr(self, 'save_dir', None))
+        if not save_path:
+            return
+
+        try:
+            df.to_excel(save_path, index=False, engine='openpyxl')
+            messagebox.showinfo("✅", f"{len(rows):,}행 추출 완료")
+        except Exception as e:
+            messagebox.showerror("오류", str(e))
+
+    def _wms_import_excel(self, data_key):
+        """엑셀 파일에서 WMS 데이터 RTDB에 업로드"""
+        file_path = filedialog.askopenfilename(
+            title=f"{'상품관리' if data_key == 'products' else '상품옵션관리' if data_key == 'options' else '재고현황'} 엑셀 선택",
+            filetypes=[("Excel", "*.xlsx *.xls *.csv")])
+        if not file_path:
+            return
+
+        try:
+            if file_path.lower().endswith('.csv'):
+                df = pd.read_csv(file_path, dtype=str)
+            else:
+                df = pd.read_excel(file_path, dtype=str)
+            df = df.fillna('').astype(str)
+
+            # 실제 헤더 찾기 (EMP 엑셀은 첫 행이 카테고리, 둘째 행이 실제 헤더)
+            # 바코드/상품코드 컬럼 찾아서 헤더 행 결정
+            header_row = None
+            for i, row in df.head(5).iterrows():
+                vals = [str(v).strip() for v in row.values]
+                if '바코드' in vals or '상품코드' in vals or '대표코드' in vals:
+                    header_row = i
+                    break
+
+            if header_row is not None and header_row > 0:
+                new_headers = df.iloc[header_row].tolist()
+                df = df.iloc[header_row + 1:].reset_index(drop=True)
+                df.columns = new_headers
+
+            df.columns = [str(c).strip() for c in df.columns]
+
+            # 데이터 변환
+            rtdb_data = {}
+            if data_key == 'products':
+                rtdb_data = self._wms_parse_products(df)
+                rtdb_path = 'products'
+            elif data_key == 'options':
+                rtdb_data = self._wms_parse_options(df)
+                rtdb_path = 'product_options'
+            elif data_key == 'inventory':
+                rtdb_data = self._wms_parse_inventory(df)
+                rtdb_path = 'inventory'
+
+            if not rtdb_data:
+                messagebox.showwarning("없음", "변환된 데이터가 없습니다.")
+                return
+
+            count = len(rtdb_data)
+            if not messagebox.askyesno("📥 업로드 확인",
+                    f"{count}건을 RTDB에 업로드합니다.\n기존 데이터는 덮어씁니다.\n\n진행할까요?"):
+                return
+
+            # RTDB 업로드 (청크 단위)
+            ref = rtdb.reference(rtdb_path)
+            chunk_size = 5000
+            keys = list(rtdb_data.keys())
+            for i in range(0, len(keys), chunk_size):
+                chunk = {k: rtdb_data[k] for k in keys[i:i + chunk_size]}
+                ref.update(chunk)
+
+            # 캐시 업데이트
+            self._wms_cache[data_key] = rtdb_data
+            messagebox.showinfo("✅ 완료", f"{count}건 업로드 완료!")
+
+            # 트리뷰 갱신
+            tree = getattr(self, f'_wms_tree_{data_key}', None)
+            if tree:
+                self._wms_search(data_key, '', tree)
+
+        except Exception as e:
+            messagebox.showerror("오류", f"업로드 실패: {e}")
+
+    def _wms_parse_products(self, df):
+        """상품관리 엑셀 → RTDB 형식"""
+        data = {}
+        code_col = next((c for c in df.columns if '상품코드' in c), None)
+        if not code_col:
+            messagebox.showerror("오류", "'상품코드' 컬럼을 찾을 수 없습니다.")
+            return {}
+        for _, row in df.iterrows():
+            code = str(row.get(code_col, '')).strip()
+            if not code:
+                continue
+            data[code] = {
+                'product_code': code,
+                'name': str(row.get(next((c for c in df.columns if '상품명' in c), ''), '')).strip(),
+                'brand': str(row.get(next((c for c in df.columns if '브랜드' in c), ''), '')).strip(),
+                'season': str(row.get(next((c for c in df.columns if '시즌' in c), ''), '')).strip(),
+                'gender': str(row.get(next((c for c in df.columns if '성별' in c), ''), '')).strip(),
+                'item': str(row.get(next((c for c in df.columns if '아이템' in c), ''), '')).strip(),
+                'tag_price': str(row.get(next((c for c in df.columns if '택가' in c), ''), '')).strip(),
+                'sell_price': str(row.get(next((c for c in df.columns if '현판매가' in c or '판매가' in c), ''), '')).strip(),
+                'cost': str(row.get(next((c for c in df.columns if '원가' in c), ''), '')).strip(),
+            }
+        return data
+
+    def _wms_parse_options(self, df):
+        """상품옵션관리 엑셀 → RTDB 형식"""
+        data = {}
+        bc_col = next((c for c in df.columns if '바코드' in c), None)
+        if not bc_col:
+            messagebox.showerror("오류", "'바코드' 컬럼을 찾을 수 없습니다.")
+            return {}
+        for _, row in df.iterrows():
+            bc = str(row.get(bc_col, '')).strip()
+            if not bc or len(bc) < 5:
+                continue
+            data[bc] = {
+                'product_code': str(row.get(next((c for c in df.columns if '상품코드' in c), ''), '')).strip(),
+                'name': str(row.get(next((c for c in df.columns if '상품명' in c), ''), '')).strip(),
+                'brand': str(row.get(next((c for c in df.columns if '브랜드' in c), ''), '')).strip(),
+                'color_code': str(row.get(next((c for c in df.columns if '색상' in c), ''), '')).strip(),
+                'size_code': str(row.get(next((c for c in df.columns if '사이즈' in c), ''), '')).strip(),
+                'location': str(row.get(next((c for c in df.columns if '로케이션' in c or '단일로케' in c), ''), '')).strip(),
+            }
+        return data
+
+    def _wms_parse_inventory(self, df):
+        """재고현황 엑셀 → RTDB 형식. 키: 바코드_창고 (중복 방지)"""
+        data = {}
+        bc_col = next((c for c in df.columns if '바코드' in c), None)
+        if not bc_col:
+            messagebox.showerror("오류", "'바코드' 컬럼을 찾을 수 없습니다.")
+            return {}
+        wh_col = next((c for c in df.columns if '창고' in c), None)
+        for _, row in df.iterrows():
+            bc = str(row.get(bc_col, '')).strip()
+            if not bc or len(bc) < 5 or bc == 'nan':
+                continue
+            warehouse = str(row.get(wh_col, '') if wh_col else '').strip()
+            # 키: 바코드 (같은 바코드 다른 창고면 수량 합산)
+            if bc in data:
+                # 기존 데이터에 수량 합산
+                try:
+                    old_qty = int(float(data[bc].get('qty', 0)))
+                    new_qty = int(float(row.get(next((c for c in df.columns if '재고수량' in c), ''), '0') or 0))
+                    data[bc]['qty'] = str(old_qty + new_qty)
+                    old_avail = int(float(data[bc].get('available', 0)))
+                    new_avail = int(float(row.get(next((c for c in df.columns if '가용재고' in c or '가용' in c), ''), '0') or 0))
+                    data[bc]['available'] = str(old_avail + new_avail)
+                    # 로케이션 추가
+                    loc = str(row.get(next((c for c in df.columns if '로케이션' in c or '다중로케' in c), ''), '')).strip()
+                    if loc and loc not in data[bc].get('location', ''):
+                        data[bc]['location'] = data[bc].get('location', '') + '/' + loc
+                    # 창고 추가
+                    if warehouse and warehouse not in data[bc].get('warehouse', ''):
+                        data[bc]['warehouse'] = data[bc].get('warehouse', '') + '/' + warehouse
+                except:
+                    pass
+            else:
+                data[bc] = {
+                    'name': str(row.get(next((c for c in df.columns if '상품명' in c), ''), '')).strip(),
+                    'brand': str(row.get(next((c for c in df.columns if '브랜드' in c), ''), '')).strip(),
+                    'color': str(row.get(next((c for c in df.columns if '색상' in c), ''), '')).strip(),
+                    'size': str(row.get(next((c for c in df.columns if '사이즈' in c), ''), '')).strip(),
+                    'warehouse': warehouse,
+                    'location': str(row.get(next((c for c in df.columns if '로케이션' in c or '다중로케' in c), ''), '')).strip(),
+                    'qty': str(int(float(row.get(next((c for c in df.columns if '재고수량' in c), ''), '0') or 0))),
+                    'available': str(int(float(row.get(next((c for c in df.columns if '가용재고' in c or '가용' in c), ''), '0') or 0))),
+                    'waiting': str(int(float(row.get(next((c for c in df.columns if '배송대기' in c or '대기' in c), ''), '0') or 0))),
+                    'updated': int(datetime.now().timestamp()),
+                }
+        return data
+
 if __name__ == "__main__":
     # [추가] 드래그앤드롭 지원 (tkinterdnd2 있으면 우선 사용, 없으면 기본 Tk)
     try:
