@@ -14796,11 +14796,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 cols = tree['columns']
                 row_vals = []
                 for col in cols:
-                    if col in ('barcode', 'product_code') and col == cols[0]:
-                        row_vals.append(key)  # 키 = 바코드 또는 상품코드
+                    if col == cols[0]:
+                        # 첫 컬럼: barcode 필드가 있으면 사용, 없으면 키
+                        row_vals.append(val.get('barcode', val.get(col, key)))
                     else:
                         row_vals.append(str(val.get(col, '')))
-                tree.insert("", tk.END, values=row_vals)
+                tree.insert("", tk.END, iid=str(count), values=row_vals)
                 count += 1
                 if count >= max_rows:
                     break
@@ -15092,50 +15093,40 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         return data
 
     def _wms_parse_inventory(self, df):
-        """재고현황 엑셀 → RTDB 형식. 키: 바코드_창고 (중복 방지)"""
+        """재고현황 엑셀 → RTDB 형식. 키: 바코드__창고__로케 (로케별 별도)"""
         data = {}
         bc_col = next((c for c in df.columns if '바코드' in c), None)
         if not bc_col:
             messagebox.showerror("오류", "'바코드' 컬럼을 찾을 수 없습니다.")
             return {}
         wh_col = next((c for c in df.columns if '창고' in c), None)
+        loc_col = next((c for c in df.columns if '로케이션' in c or '다중로케' in c), None)
         for _, row in df.iterrows():
             bc = str(row.get(bc_col, '')).strip()
             if not bc or len(bc) < 5 or bc == 'nan':
                 continue
             warehouse = str(row.get(wh_col, '') if wh_col else '').strip()
-            # 키: 바코드 (같은 바코드 다른 창고면 수량 합산)
-            if bc in data:
-                # 기존 데이터에 수량 합산
-                try:
-                    old_qty = int(float(data[bc].get('qty', 0)))
-                    new_qty = int(float(row.get(next((c for c in df.columns if '재고수량' in c), ''), '0') or 0))
-                    data[bc]['qty'] = str(old_qty + new_qty)
-                    old_avail = int(float(data[bc].get('available', 0)))
-                    new_avail = int(float(row.get(next((c for c in df.columns if '가용재고' in c or '가용' in c), ''), '0') or 0))
-                    data[bc]['available'] = str(old_avail + new_avail)
-                    # 로케이션 추가
-                    loc = str(row.get(next((c for c in df.columns if '로케이션' in c or '다중로케' in c), ''), '')).strip()
-                    if loc and loc not in data[bc].get('location', ''):
-                        data[bc]['location'] = data[bc].get('location', '') + '/' + loc
-                    # 창고 추가
-                    if warehouse and warehouse not in data[bc].get('warehouse', ''):
-                        data[bc]['warehouse'] = data[bc].get('warehouse', '') + '/' + warehouse
-                except:
-                    pass
-            else:
-                data[bc] = {
-                    'name': str(row.get(next((c for c in df.columns if '상품명' in c), ''), '')).strip(),
-                    'brand': str(row.get(next((c for c in df.columns if '브랜드' in c), ''), '')).strip(),
-                    'color': str(row.get(next((c for c in df.columns if '색상' in c), ''), '')).strip(),
-                    'size': str(row.get(next((c for c in df.columns if '사이즈' in c), ''), '')).strip(),
-                    'warehouse': warehouse,
-                    'location': str(row.get(next((c for c in df.columns if '로케이션' in c or '다중로케' in c), ''), '')).strip(),
-                    'qty': str(int(float(row.get(next((c for c in df.columns if '재고수량' in c), ''), '0') or 0))),
-                    'available': str(int(float(row.get(next((c for c in df.columns if '가용재고' in c or '가용' in c), ''), '0') or 0))),
-                    'waiting': str(int(float(row.get(next((c for c in df.columns if '배송대기' in c or '대기' in c), ''), '0') or 0))),
-                    'updated': int(datetime.now().timestamp()),
-                }
+            location = str(row.get(loc_col, '') if loc_col else '').strip()
+            key = f"{bc}__{warehouse}__{location}".replace('/', '_').replace(' ', '')
+            try:
+                qty = int(float(row.get(next((c for c in df.columns if '재고수량' in c), ''), '0') or 0))
+                avail = int(float(row.get(next((c for c in df.columns if '가용재고' in c or '가용' in c), ''), '0') or 0))
+                waiting = int(float(row.get(next((c for c in df.columns if '배송대기' in c or '대기' in c), ''), '0') or 0))
+            except:
+                qty, avail, waiting = 0, 0, 0
+            data[key] = {
+                'barcode': bc,
+                'name': str(row.get(next((c for c in df.columns if '상품명' in c), ''), '')).strip(),
+                'brand': str(row.get(next((c for c in df.columns if '브랜드' in c), ''), '')).strip(),
+                'color': str(row.get(next((c for c in df.columns if '색상' in c), ''), '')).strip(),
+                'size': str(row.get(next((c for c in df.columns if '사이즈' in c), ''), '')).strip(),
+                'warehouse': warehouse,
+                'location': location,
+                'qty': str(qty),
+                'available': str(avail),
+                'waiting': str(waiting),
+                'updated': int(datetime.now().timestamp()),
+            }
         return data
 
 if __name__ == "__main__":
