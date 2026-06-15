@@ -3909,7 +3909,7 @@
                     <div class="loc">📍 ${escapeHtml(it.location || '?')}</div>
                 </div>
                 <div class="qty" onclick="editScanQty(${realIdx})" style="cursor:pointer; user-select:none;">x${it.qty}</div>
-                <button class="del-btn" onclick="deleteScanItem(${realIdx})" title="이 행 삭제">✕</button>
+                <button class="del-btn" onclick="editScanQty(${realIdx})" title="수량 수정 (0=삭제)">✎</button>
             </div>`;
         });
         if (totalCount > showItems.length) {
