@@ -1888,6 +1888,11 @@
                 </div>
                 <div style="font-weight:bold; font-size:15px;">${escapeHtml(data.title || '')}${data.edited ? ' <span style="color:#999;font-size:11px;font-weight:normal;">(수정됨)</span>' : ''}</div>
                 <div style="font-size:13px; color:#666; margin-top:5px; white-space:pre-wrap;">${escapeHtml(data.text || '')}</div>
+                ${data.source === 'scan' && data.scan_session_id ? `
+                <button onclick="viewScanDetail('${data.scan_session_id}')" 
+                    style="background:#EFF6FF; border:1px solid #BFDBFE; color:#1877F2; border-radius:6px; padding:6px 12px; font-size:13px; font-weight:bold; margin-top:8px; cursor:pointer;">
+                    📋 스캔 내역 보기 (${data.scan_item_count || '?'}건)
+                </button>` : ''}
                 ${photosHtml}
                 <button onclick="toggleComments('${data.id}')" style="background:none;border:none;color:#1a73e8;font-size:13px;font-weight:bold;margin-top:10px;display:block; padding:0;">
                     💬 대화 보기 <span id="count-${data.id}">(...)</span><span id="new-${data.id}"></span>
@@ -1907,6 +1912,57 @@
             loadComments(data.id);
         });
         if (docs.length === 0) listDiv.innerHTML = "<p style='color:#999; font-size:13px; text-align:center; padding:20px 0;'>표시할 작업이 없습니다.</p>";
+    }
+
+    // 작업자용 스캔 내역 보기
+    async function viewScanDetail(sessionId) {
+        try {
+            const doc = await db.collection("scan_sessions").doc(sessionId).get();
+            if (!doc.exists) {
+                alert("스캔 데이터가 삭제되었거나 없습니다.");
+                return;
+            }
+            const sdata = doc.data();
+            const items = sdata.items || [];
+            if (items.length === 0) {
+                alert("스캔 데이터가 비어있습니다.");
+                return;
+            }
+
+            // 로케이션별 그룹
+            const byLoc = {};
+            items.forEach(it => {
+                const loc = it.location || '?';
+                if (!byLoc[loc]) byLoc[loc] = [];
+                byLoc[loc].push(it);
+            });
+
+            let html = `<div style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:9999; display:flex; align-items:center; justify-content:center;" onclick="if(event.target===this)this.remove()">
+                <div style="background:white; border-radius:12px; max-width:95vw; max-height:85vh; overflow-y:auto; padding:20px; width:400px;" onclick="event.stopPropagation()">
+                <h3 style="margin:0 0 4px;">📋 스캔 내역</h3>
+                <p style="color:#666; font-size:12px; margin:0 0 12px;">총 ${items.length}건 · 로케 ${Object.keys(byLoc).length}곳</p>`;
+
+            Object.keys(byLoc).sort().forEach(loc => {
+                const locItems = byLoc[loc];
+                html += `<div style="background:#F9FAFB; border-radius:8px; padding:8px 10px; margin-bottom:8px;">
+                    <div style="font-weight:bold; color:#1877F2; font-size:13px; margin-bottom:4px;">📍 ${escapeHtml(loc)} (${locItems.length}건)</div>`;
+                locItems.forEach(it => {
+                    html += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:12px; border-bottom:1px solid #eee;">
+                        <span style="color:#333;">${escapeHtml(it.barcode || '')}</span>
+                        <span style="color:#666; font-weight:bold;">x${it.qty || 1}</span>
+                    </div>`;
+                });
+                html += `</div>`;
+            });
+
+            html += `<button onclick="this.closest('[style*=fixed]').remove()" 
+                style="width:100%; padding:10px; background:#1877F2; color:white; border:none; border-radius:8px; font-size:14px; font-weight:bold; margin-top:8px; cursor:pointer;">닫기</button>
+                </div></div>`;
+
+            document.body.insertAdjacentHTML('beforeend', html);
+        } catch(e) {
+            alert("스캔 내역 로드 실패: " + e.message);
+        }
     }
 
     function loadComments(docId) {
