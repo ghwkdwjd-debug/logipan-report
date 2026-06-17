@@ -7927,20 +7927,19 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         else:
             self.save_csv_return()
 
-        # 4) 재고 반영
-        try:
-            if items:
-                self._update_inventory(items, f'{inbound_type}입고', warehouse)
-                messagebox.showinfo("📦 재고 반영",
-                    f"✅ {len(items)}건 재고 반영 완료\n"
-                    f"유형: {inbound_type}입고\n창고: {warehouse}\n\n"
-                    f"예시: {items[0]['barcode']} (+{items[0]['qty']})")
-            else:
-                messagebox.showwarning("📦 재고 반영",
-                    "⚠️ 추출된 아이템이 없어서 재고 반영을 건너뛰었습니다.\n\n"
-                    "브랜드수량 또는 스캔수량에 데이터가 있는지 확인해주세요.")
-        except Exception as e:
-            messagebox.showerror("📦 재고 반영 실패", str(e))
+        # 4) 재고 반영 (임시 비활성화 - 추후 활성화)
+        # try:
+        #     if items:
+        #         self._update_inventory(items, f'{inbound_type}입고', warehouse)
+        #         messagebox.showinfo("📦 재고 반영",
+        #             f"✅ {len(items)}건 재고 반영 완료\n"
+        #             f"유형: {inbound_type}입고\n창고: {warehouse}\n\n"
+        #             f"예시: {items[0]['barcode']} (+{items[0]['qty']})")
+        #     else:
+        #         messagebox.showwarning("📦 재고 반영",
+        #             "⚠️ 추출된 아이템이 없어서 재고 반영을 건너뛰었습니다.")
+        # except Exception as e:
+        #     messagebox.showerror("📦 재고 반영 실패", str(e))
 
     def _extract_from_inbound_df(self, warehouse='정상창고'):
         """입고파일 DataFrame(_last_inbound_df)에서 바코드+수량 추출"""
@@ -10678,6 +10677,14 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             if scan_session_id:
                 scan_btn_frame = tk.Frame(content, bg=card_bg)
                 scan_btn_frame.pack(fill="x", anchor="w", pady=(6, 0))
+
+                # 체크박스 (일괄 추출용)
+                chk_var = tk.BooleanVar(value=False)
+                tk.Checkbutton(scan_btn_frame, variable=chk_var, bg=card_bg,
+                               command=lambda sid=scan_session_id, v=chk_var:
+                                   self._on_done_scan_check(sid, v)
+                               ).pack(side="left")
+
                 tk.Button(scan_btn_frame,
                           text="스캔 내역 보기",
                           bg="#E5E7EB", fg="#374151",
@@ -11575,6 +11582,94 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             f"📦 {len(session_ids)}건 합쳐서 {total}개 가져옴.\n\n"
             f"브랜드명, 담당MD 입력 후\n"
             f"대조 분석 → Jira 상신 또는 반품 저장 진행하세요.")
+
+    _done_scan_selected = set()  # 완료 카드 선택된 scan_session_ids
+
+    def _on_done_scan_check(self, session_id, var):
+        """완료 스캔 카드 체크 토글"""
+        if var.get():
+            self._done_scan_selected.add(session_id)
+        else:
+            self._done_scan_selected.discard(session_id)
+        # 액션 바 갱신
+        self._update_done_scan_action_bar()
+
+    def _update_done_scan_action_bar(self):
+        """완료 스캔 선택 시 액션 바 표시"""
+        bar = getattr(self, '_done_scan_bar', None)
+        if not bar:
+            bar = tk.Frame(self.t_field, bg="#1877F2")
+            self._done_scan_bar = bar
+        for w in bar.winfo_children():
+            w.destroy()
+
+        n = len(self._done_scan_selected)
+        if n == 0:
+            bar.pack_forget()
+            return
+
+        bar.pack(fill="x", side="bottom", pady=0)
+        tk.Label(bar, text=f"☑ {n}건 선택됨", bg="#1877F2", fg="white",
+                 font=("맑은 고딕", 10, "bold")).pack(side="left", padx=12, pady=6)
+        tk.Button(bar, text="📊 선택 스캔 엑셀 추출",
+                  bg="white", fg="#1877F2",
+                  font=("맑은 고딕", 9, "bold"), bd=0, padx=12, pady=4,
+                  cursor="hand2", command=self._export_selected_done_scans
+                  ).pack(side="left", padx=4, pady=4)
+        tk.Button(bar, text="전체 해제",
+                  bg="#1877F2", fg="#BFDBFE",
+                  font=("맑은 고딕", 9), bd=0, padx=8, pady=4,
+                  cursor="hand2",
+                  command=lambda: (self._done_scan_selected.clear(), self._update_done_scan_action_bar())
+                  ).pack(side="right", padx=12, pady=4)
+
+    def _export_selected_done_scans(self):
+        """선택된 완료 스캔 세션들 모아서 엑셀 추출"""
+        if not self._done_scan_selected:
+            return
+        all_items = []
+        errors = []
+        for sid in self._done_scan_selected:
+            try:
+                doc = self.db.collection('scan_sessions').document(sid).get()
+                if doc.exists:
+                    sdata = doc.to_dict()
+                    label = sdata.get('label', '')
+                    for it in sdata.get('items', []):
+                        all_items.append({
+                            '작업명': label,
+                            '바코드': it.get('barcode', ''),
+                            '로케이션': it.get('location', ''),
+                            '수량': it.get('qty', 1),
+                        })
+                else:
+                    errors.append(sid[:12])
+            except Exception as e:
+                errors.append(f"{sid[:8]}: {e}")
+
+        if not all_items:
+            messagebox.showwarning("없음", "추출할 스캔 데이터가 없습니다." +
+                                    (f"\n삭제된 세션: {', '.join(errors)}" if errors else ""))
+            return
+
+        df = pd.DataFrame(all_items)
+        today = datetime.now().strftime('%y%m%d')
+        save_path = filedialog.asksaveasfilename(
+            title="스캔 데이터 추출",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialfile=f"{today}_완료스캔_{len(self._done_scan_selected)}건_{len(all_items)}행.xlsx",
+            initialdir=getattr(self, 'save_dir', None))
+        if not save_path:
+            return
+        try:
+            df.to_excel(save_path, index=False, engine='openpyxl')
+            msg = f"✅ {len(self._done_scan_selected)}건 / {len(all_items)}행 추출 완료"
+            if errors:
+                msg += f"\n⚠️ 누락: {', '.join(errors)}"
+            messagebox.showinfo("추출 완료", msg)
+        except Exception as e:
+            messagebox.showerror("오류", str(e))
 
     def _export_scan_session_to_excel(self, scan_session_id):
         """스캔 세션 ID로 Firestore에서 데이터 가져와서 엑셀 추출"""
@@ -14533,6 +14628,12 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
         tk.Label(hdr, text="상품 마스터 + 실시간 재고",
                  font=("맑은 고딕", 10), bg="#F5F6F8", fg="#9CA3AF").pack(side="left", padx=(12, 0))
 
+        tk.Button(hdr, text="🔄 RTDB 동기화",
+                  bg="#3B82F6", fg="white",
+                  font=("맑은 고딕", 9, "bold"), bd=0, padx=12, pady=4,
+                  cursor="hand2", command=lambda: threading.Thread(target=self._wms_sync_rtdb, daemon=True).start()
+                  ).pack(side="right")
+
         # 서브탭
         sub_nb = ttk.Notebook(container)
         sub_nb.pack(fill="both", expand=True, padx=18, pady=(0, 12))
@@ -14733,9 +14834,8 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             tree.bind("<Button-3>", _on_inv_right_click)
 
     def _wms_load_cache(self):
-        """RTDB에서 WMS 데이터 로컬 캐시 로드"""
+        """WMS 로컬 캐시만 로드 (RTDB 동기화는 수동)"""
         try:
-            # 로컬 파일 캐시 먼저
             import json
             cache_dir = os.path.join(os.path.expanduser("~"), ".logipan")
             os.makedirs(cache_dir, exist_ok=True)
@@ -14749,23 +14849,37 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                 print(f"⚡ WMS 로컬 캐시 로드: 상품 {len(self._wms_cache.get('products', {}))}건, "
                       f"옵션 {len(self._wms_cache.get('options', {}))}건, "
                       f"재고 {len(self._wms_cache.get('inventory', {}))}건")
+            else:
+                self._wms_cache['loaded'] = True
+                print("WMS 로컬 캐시 없음 (재고관리 탭에서 RTDB 동기화 필요)")
+        except Exception as e:
+            print(f"WMS 캐시 로드 실패: {e}")
 
-            # RTDB 동기화
+    def _wms_sync_rtdb(self):
+        """RTDB에서 WMS 데이터 수동 동기화"""
+        try:
+            messagebox.showinfo("동기화", "RTDB에서 데이터를 가져옵니다.\n잠시 기다려주세요...")
             for key in ['products', 'product_options', 'inventory']:
                 ref = rtdb.reference(key)
                 data = ref.get()
                 if data:
                     cache_key = 'options' if key == 'product_options' else key
                     self._wms_cache[cache_key] = data
-            self._wms_cache['loaded'] = True
 
             # 로컬 캐시 저장
+            import json
+            cache_dir = os.path.join(os.path.expanduser("~"), ".logipan")
+            cache_path = os.path.join(cache_dir, "wms_cache.json")
             save_data = {k: v for k, v in self._wms_cache.items() if k != 'loaded'}
             with open(cache_path, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, ensure_ascii=False)
-            print(f"✅ WMS RTDB 동기화 완료")
+
+            messagebox.showinfo("✅ 동기화 완료",
+                f"상품 {len(self._wms_cache.get('products', {}))}건\n"
+                f"옵션 {len(self._wms_cache.get('options', {}))}건\n"
+                f"재고 {len(self._wms_cache.get('inventory', {}))}건")
         except Exception as e:
-            print(f"WMS 캐시 로드 실패: {e}")
+            messagebox.showerror("동기화 실패", str(e))
 
     def _wms_search(self, data_key, keyword, tree):
         """WMS 데이터 검색"""
