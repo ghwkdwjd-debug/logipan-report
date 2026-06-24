@@ -11007,16 +11007,33 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
                     body={'requests': requests}
                 ).execute()
-                # 헤더 추가
+                # 헤더 추가 (M열 입고제목 = 브랜드명, 웹과 동일)
                 headers = [['처리일시', '발송일시', '작업자', '작업명', '브랜드코드', '브랜드명',
-                           '바코드', '로케이션', '수량', '정상/불량', 'JIRA티켓', '관리자']]
+                           '바코드', '로케이션', '수량', '정상/불량', 'JIRA티켓', '관리자', '입고제목']]
                 service.spreadsheets().values().update(
                     spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
-                    range=f"{tab_name}!A1:L1",
+                    range=f"{tab_name}!A1:M1",
                     valueInputOption='USER_ENTERED',
                     body={'values': headers}
                 ).execute()
                 print(f"✅ 새 탭 생성: {tab_name}")
+            else:
+                # 기존 탭에 입고제목 헤더 없으면 보완 (M열)
+                try:
+                    hr = service.spreadsheets().values().get(
+                        spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
+                        range=f"{tab_name}!1:1"
+                    ).execute().get('values', [[]])
+                    header_row = hr[0] if hr else []
+                    if '입고제목' not in header_row:
+                        service.spreadsheets().values().update(
+                            spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
+                            range=f"{tab_name}!M1",
+                            valueInputOption='USER_ENTERED',
+                            body={'values': [['입고제목']]}
+                        ).execute()
+                except Exception as _e:
+                    print(f"[WARN] 입고제목 헤더 보완 실패: {_e}")
 
             # 4) row 데이터 생성
             items = pending.get('items', [])
@@ -11066,6 +11083,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
                     quality_text,           # J: 정상/불량
                     jira_key,               # K: JIRA티켓
                     admin,                  # L: 관리자
+                    brand or '',            # M: 입고제목 (= 브랜드명)
                 ])
 
             if not rows:
@@ -11074,7 +11092,7 @@ class LogiPanApp(SlackIntegrationMixin, JiraIntegrationMixin, FirebaseUtilsMixin
             # 5) 시트에 append
             service.spreadsheets().values().append(
                 spreadsheetId=self.SCAN_HISTORY_SHEET_ID,
-                range=f"{tab_name}!A:L",
+                range=f"{tab_name}!A:M",
                 valueInputOption='USER_ENTERED',
                 insertDataOption='INSERT_ROWS',
                 body={'values': rows}
