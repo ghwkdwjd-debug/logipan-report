@@ -4397,6 +4397,10 @@ if ('serviceWorker' in navigator) {
       // 상품 바코드 스캔 → 즉시 확정 (FROM/TO 고정돼 있어야 함)
       if (!moveState.from) { showMoveRecent('error', value, '① 반출 FROM을 먼저 스캔'); feedbackError('반출 먼저'); speak('반출 먼저'); return; }
       if (!moveState.to) { showMoveRecent('error', value, '② 반입 TO를 스캔하세요'); feedbackError('반입 먼저'); speak('반입 먼저'); return; }
+      // 바코드 형식 검증 — 로케도 아니고 정상 바코드도 아니면 등록 안 함
+      if (typeof isValidProductBarcode === 'function' && !isValidProductBarcode(value)) {
+        showMoveRecent('error', value, '⛔ 잘못된 바코드 형식 (등록 안 됨)'); feedbackError('잘못된 바코드'); speak('잘못된 바코드'); return;
+      }
       var ex = moveState.items.find(function (it) {
         return it.barcode === value && it.from_loc === moveState.from && it.to_loc === moveState.to;
       });
@@ -4474,6 +4478,9 @@ if ('serviceWorker' in navigator) {
     processPdaScan = function (raw, fromPda) {
       if (scanState && scanState.mode === 'move') {
         var value = (raw || '').trim(); if (!value) return;
+        // 입고 경로와 동일하게 한영변환 + 대문자 통일 (바코드 매칭/검증 일관성)
+        if (typeof koreanToEnglishKeyboard === 'function') value = koreanToEnglishKeyboard(value);
+        value = value.toUpperCase();
         if (fromPda && typeof pdaReverseEnabled !== 'undefined' && pdaReverseEnabled && !isLocationBarcode(value)) {
           value = value.split('').reverse().join('');
         }
