@@ -4292,7 +4292,7 @@ if ('serviceWorker' in navigator) {
 }
 </script>
 
-<!-- ===== 🔄 재고이동 모드 (반출로케 → 상품 개별 스캔 → 반입로케 → 전송) ===== -->
+<!-- ===== 🔄 재고이동 모드 (① 반출 FROM → ② 반입 TO 고정 → ③ 상품 바코드 연속 스캔 → 전송) ===== -->
 <script>
 (function () {
   function boot() {
@@ -4311,26 +4311,31 @@ if ('serviceWorker' in navigator) {
       div.innerHTML =
         '<label>📦 작업명(선택)</label>' +
         '<input type="text" id="move-label" placeholder="예: AA구역 정리">' +
-        '<div class="loc-display empty" id="move-from-display">' +
-        '  <div class="lbl">반출 로케이션 (FROM)</div>' +
-        '  <div class="val" id="move-from-value">반출 로케를 먼저 스캔</div>' +
+        '<div style="display:flex; gap:8px; margin-top:6px;">' +
+        '  <div class="loc-display empty" id="move-from-display" style="flex:1; padding:14px 8px;">' +
+        '    <div class="lbl">① 반출 FROM</div>' +
+        '    <div class="val" id="move-from-value" style="font-size:20px; letter-spacing:1px;">먼저 스캔</div>' +
+        '  </div>' +
+        '  <div class="loc-display empty" id="move-to-display" style="flex:1; padding:14px 8px;">' +
+        '    <div class="lbl">② 반입 TO</div>' +
+        '    <div class="val" id="move-to-value" style="font-size:20px; letter-spacing:1px;">다음 스캔</div>' +
+        '  </div>' +
         '</div>' +
         '<div class="pda-recent idle" id="move-recent">' +
         '  <div class="top">최근 스캔</div><div class="bc">아직 스캔 전</div><div class="sub"></div>' +
         '</div>' +
         '<div class="pda-status" id="move-status">' +
-        '  <div class="dot"></div><span>반출로케 → 상품들 → 반입로케 순서로 스캔</span>' +
+        '  <div class="dot"></div><span>① 반출 FROM → ② 반입 TO → ③ 상품들 연속 스캔</span>' +
+        '</div>' +
+        '<div style="margin-top:6px; text-align:right;">' +
+        '  <button onclick="moveResetRoute()" style="background:none;border:1px solid #ddd;color:#888;padding:6px 12px;border-radius:14px;font-size:12px;cursor:pointer;">🔁 경로 다시 지정</button>' +
         '</div>' +
         '<div style="margin-top:14px;">' +
         '  <div class="scan-list-header">' +
-        '    <span>🛒 현재 반출(<span id="move-from-label">-</span>) 담은 것 (<span id="move-buffer-count">0</span>)</span>' +
+        '    <span>✅ 이동 목록 (<span id="move-done-count">0</span>건)</span>' +
         '    <button onclick="moveUndo()" style="background:none;border:none;color:#1877F2;font-size:13px;font-weight:bold;cursor:pointer;">↶ 마지막 취소</button>' +
         '  </div>' +
-        '  <div class="scan-list-box" id="move-buffer-box"><div class="scan-empty">반출로케 스캔 후 상품을 찍으세요</div></div>' +
-        '</div>' +
-        '<div style="margin-top:14px;">' +
-        '  <div class="scan-list-header"><span>✅ 확정 이동 (<span id="move-done-count">0</span>건)</span></div>' +
-        '  <div class="scan-list-box" id="move-done-box"><div class="scan-empty">반입로케를 찍으면 확정됩니다</div></div>' +
+        '  <div class="scan-list-box" id="move-done-box"><div class="scan-empty">반출→반입 지정 후 상품을 찍으세요</div></div>' +
         '</div>' +
         '<button class="send-btn" id="move-send-btn" onclick="sendMoveSession()" disabled>📤 관리자에게 전송 (0건)</button>' +
         '<button class="clear-btn" onclick="moveClear()">🗑️ 전체 초기화</button>';
@@ -4338,7 +4343,9 @@ if ('serviceWorker' in navigator) {
     }
 
     // 3) 상태 + 핸들러
-    var moveState = { from: '', buffer: [], items: [] };
+    //  흐름: ① 반출 FROM 스캔(고정) → ② 반입 TO 스캔(고정) → ③ 상품 바코드만 쭉 스캔(즉시 확정)
+    //  경로(FROM→TO) 바꾸려면 로케를 다시 스캔(첫 로케=새 FROM) 하거나 '경로 다시 지정' 버튼.
+    var moveState = { from: '', to: '', items: [] };
 
     function showMoveRecent(type, code, sub) {
       var el = document.getElementById('move-recent'); if (!el) return;
@@ -4348,72 +4355,85 @@ if ('serviceWorker' in navigator) {
       el.querySelector('.bc').textContent = code;
       el.querySelector('.sub').textContent = sub || '';
     }
-    function updateMoveFrom() {
-      var box = document.getElementById('move-from-display'), val = document.getElementById('move-from-value');
-      var lbl = document.getElementById('move-from-label');
-      if (moveState.from) { box.classList.remove('empty'); val.textContent = moveState.from; }
-      else { box.classList.add('empty'); val.textContent = '반출 로케를 먼저 스캔'; }
-      if (lbl) lbl.textContent = moveState.from || '-';
-    }
-    function renderMoveBuffer() {
-      var box = document.getElementById('move-buffer-box');
-      document.getElementById('move-buffer-count').textContent = moveState.buffer.length;
-      if (!moveState.buffer.length) { box.innerHTML = '<div class="scan-empty">반출로케 스캔 후 상품을 찍으세요</div>'; return; }
-      box.innerHTML = moveState.buffer.slice().reverse().map(function (b) {
-        return '<div class="scan-item"><div class="barcode">' + escapeHtml(b.barcode) + '</div><div class="qty">x' + b.qty + '</div></div>';
-      }).join('');
+    function updateMoveLocs() {
+      var fb = document.getElementById('move-from-display'), fv = document.getElementById('move-from-value');
+      var tb = document.getElementById('move-to-display'), tv = document.getElementById('move-to-value');
+      if (moveState.from) { fb.classList.remove('empty'); fv.textContent = moveState.from; }
+      else { fb.classList.add('empty'); fv.textContent = '먼저 스캔'; }
+      if (moveState.to) { tb.classList.remove('empty'); tv.textContent = moveState.to; }
+      else { tb.classList.add('empty'); tv.textContent = '다음 스캔'; }
     }
     function renderMoveDone() {
       var box = document.getElementById('move-done-box'), btn = document.getElementById('move-send-btn');
       document.getElementById('move-done-count').textContent = moveState.items.length;
       btn.disabled = moveState.items.length === 0;
       btn.textContent = '📤 관리자에게 전송 (' + moveState.items.length + '건)';
-      if (!moveState.items.length) { box.innerHTML = '<div class="scan-empty">반입로케를 찍으면 확정됩니다</div>'; return; }
+      if (!moveState.items.length) { box.innerHTML = '<div class="scan-empty">반출→반입 지정 후 상품을 찍으세요</div>'; return; }
       box.innerHTML = moveState.items.slice().reverse().map(function (it) {
         return '<div class="scan-item"><div style="flex:1;min-width:0;"><div class="barcode">' + escapeHtml(it.barcode) +
           '</div><div class="loc">' + escapeHtml(it.from_loc) + ' → ' + escapeHtml(it.to_loc) + '</div></div><div class="qty">x' + it.qty + '</div></div>';
       }).join('');
     }
     function handleMoveScan(value) {
+      // 로케 스캔 → FROM/TO 지정
       if (isLocationBarcode(value)) {
         var loc = value.toUpperCase();
-        if (!moveState.from || moveState.buffer.length === 0) {
-          moveState.from = loc; updateMoveFrom(); renderMoveBuffer();
-          showMoveRecent('loc', loc, '반출 로케'); feedbackLocChanged(loc); return;
+        if (!moveState.from) {
+          moveState.from = loc; updateMoveLocs();
+          showMoveRecent('loc', loc, '① 반출 FROM 고정 · 이제 반입 TO를 찍으세요');
+          feedbackLocChanged(loc); return;
         }
-        var moved = moveState.buffer.reduce(function (s, b) { return s + b.qty; }, 0);
-        moveState.buffer.forEach(function (b) {
-          moveState.items.push({ barcode: b.barcode, qty: b.qty, from_loc: moveState.from, to_loc: loc });
-        });
-        showMoveRecent('success', loc, '반입 확정 · ' + moved + '개 (' + moveState.from + '→' + loc + ')');
-        beep(1000, 100); vibrate(50); speak('반입 확정');
-        moveState.buffer = []; moveState.from = '';
-        updateMoveFrom(); renderMoveBuffer(); renderMoveDone(); return;
+        if (!moveState.to) {
+          if (loc === moveState.from) { showMoveRecent('error', loc, '반출과 반입이 같습니다'); feedbackError('같은 로케'); return; }
+          moveState.to = loc; updateMoveLocs();
+          showMoveRecent('loc', loc, '② 반입 TO 고정 · 이제 상품 바코드를 쭉 찍으세요');
+          feedbackLocChanged(loc); return;
+        }
+        // FROM/TO 둘 다 고정된 상태에서 로케 다시 스캔 = 새 경로 시작 (첫 로케 = 새 FROM)
+        moveState.from = loc; moveState.to = ''; updateMoveLocs();
+        showMoveRecent('loc', loc, '새 경로 · ① 반출 FROM 고정 · 반입 TO를 찍으세요');
+        feedbackLocChanged(loc); return;
       }
-      if (!moveState.from) { showMoveRecent('error', value, '반출 로케를 먼저 스캔'); feedbackError('반출 로케 먼저'); return; }
-      var ex = moveState.buffer.find(function (b) { return b.barcode === value; });
-      if (ex) { ex.qty++; showMoveRecent('duplicate', value, '수량 ' + ex.qty); beep(600, 60); vibrate([30, 30, 30]); speak('중복'); }
-      else { moveState.buffer.push({ barcode: value, qty: 1 }); showMoveRecent('success', value, moveState.from + ' 담음'); feedbackScanSuccess(value); }
-      renderMoveBuffer();
+      // 상품 바코드 스캔 → 즉시 확정 (FROM/TO 고정돼 있어야 함)
+      if (!moveState.from) { showMoveRecent('error', value, '① 반출 FROM을 먼저 스캔'); feedbackError('반출 먼저'); speak('반출 먼저'); return; }
+      if (!moveState.to) { showMoveRecent('error', value, '② 반입 TO를 스캔하세요'); feedbackError('반입 먼저'); speak('반입 먼저'); return; }
+      var ex = moveState.items.find(function (it) {
+        return it.barcode === value && it.from_loc === moveState.from && it.to_loc === moveState.to;
+      });
+      if (ex) {
+        ex.qty++;
+        showMoveRecent('duplicate', value, '수량 ' + ex.qty + ' (' + moveState.from + '→' + moveState.to + ')');
+        beep(600, 60); vibrate([30, 30, 30]); speak('중복');
+      } else {
+        moveState.items.push({ barcode: value, qty: 1, from_loc: moveState.from, to_loc: moveState.to });
+        showMoveRecent('success', value, moveState.from + ' → ' + moveState.to);
+        feedbackScanSuccess(value);
+      }
+      renderMoveDone();
     }
     function moveUndo() {
-      if (!moveState.buffer.length) { feedbackError('취소할 항목 없음'); return; }
-      var last = moveState.buffer[moveState.buffer.length - 1];
-      if (last.qty > 1) last.qty--; else moveState.buffer.pop();
-      renderMoveBuffer(); beep(600, 80); vibrate(30); speak('취소');
+      if (!moveState.items.length) { feedbackError('취소할 항목 없음'); return; }
+      var last = moveState.items[moveState.items.length - 1];
+      if (last.qty > 1) last.qty--; else moveState.items.pop();
+      renderMoveDone(); beep(600, 80); vibrate(30); speak('취소');
+    }
+    // 경로(FROM/TO)만 해제 — 이미 확정된 이동 목록은 그대로 유지
+    function moveResetRoute() {
+      moveState.from = ''; moveState.to = '';
+      updateMoveLocs();
+      showMoveRecent('idle', '경로 해제됨', '반출 FROM부터 다시 스캔하세요');
     }
     function moveClear(silent) {
-      if (silent !== true && (moveState.buffer.length || moveState.items.length)) {
+      if (silent !== true && (moveState.from || moveState.to || moveState.items.length)) {
         if (!confirm('재고이동 스캔을 전부 초기화할까요?')) return;
       }
-      moveState = { from: '', buffer: [], items: [] };
+      moveState = { from: '', to: '', items: [] };
       var lb = document.getElementById('move-label'); if (lb) lb.value = '';
-      updateMoveFrom(); renderMoveBuffer(); renderMoveDone(); showMoveRecent('idle', '초기화됨', '');
+      updateMoveLocs(); renderMoveDone(); showMoveRecent('idle', '초기화됨', '');
     }
     async function sendMoveSession() {
       var name = localStorage.getItem('logipan_user_name');
       if (!name) { feedbackError('작업자 이름 등록 먼저'); return; }
-      if (moveState.buffer.length) { feedbackError('반입로케까지 찍어 확정하세요 (담은 것 남음)'); return; }
       if (!moveState.items.length) { feedbackError('확정된 이동이 없어요'); return; }
       var label = (document.getElementById('move-label').value || '').trim();
       var btn = document.getElementById('move-send-btn'); btn.disabled = true; btn.textContent = '📤 전송 중...';
@@ -4431,6 +4451,7 @@ if ('serviceWorker' in navigator) {
 
     window.moveUndo = moveUndo;
     window.moveClear = moveClear;
+    window.moveResetRoute = moveResetRoute;
     window.sendMoveSession = sendMoveSession;
 
     // 4) selectScanMode 패치 (move 추가)
