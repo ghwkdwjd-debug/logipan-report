@@ -4441,14 +4441,26 @@ if ('serviceWorker' in navigator) {
         if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       }, 50);
     }
-    // 박스 탭 → 그 칸만 비우고 "다시 스캔 대기". 반대쪽 칸·이동 목록은 그대로 유지.
-    //  (예: 반입만 바꾸고 싶으면 반입 박스 탭 → 비워짐 → 새 반입 로케 스캔)
+    // 박스 탭 → 수동 수정 (입력창). 비우고 확인하면 그 칸만 해제. 반대쪽·이동 목록은 유지.
     function moveEditLoc(slot) {
       var labelKo = slot === 'from' ? '반출(FROM)' : '반입(TO)';
-      moveState[slot] = '';
-      updateMoveLocs();
-      showMoveRecent('idle', '👆 ' + labelKo + ' 비움', labelKo + ' 로케를 다시 스캔하세요');
-      beep(800, 80); vibrate(30);
+      var cur = moveState[slot] || '';
+      var v = window.prompt('📍 ' + labelKo + ' 로케 수정\n(비우고 확인 → 그 칸 해제)', cur);
+      if (v === null) { moveBlurSoon(); return; }   // 취소 → 그대로
+      v = v.trim().toUpperCase();
+      if (v) {
+        if (!isLocationBarcode(v)) { feedbackError('로케 형식 아님 (AA-00-00-00)'); moveBlurSoon(); return; }
+        if (slot === 'from' && v === moveState.to) { feedbackError('반출과 반입이 같습니다'); moveBlurSoon(); return; }
+        if (slot === 'to' && v === moveState.from) { feedbackError('반출과 반입이 같습니다'); moveBlurSoon(); return; }
+        moveState[slot] = v;
+        updateMoveLocs();
+        showMoveRecent('loc', v, labelKo + ' 변경됨');
+        feedbackLocChanged(v);
+      } else {
+        moveState[slot] = '';
+        updateMoveLocs();
+        showMoveRecent('idle', labelKo + ' 비움', labelKo + ' 로케를 다시 스캔하세요');
+      }
       moveBlurSoon();
     }
     function moveEditFrom() { moveEditLoc('from'); }
@@ -4474,11 +4486,25 @@ if ('serviceWorker' in navigator) {
       var label = (document.getElementById('move-label').value || '').trim();
       var btn = document.getElementById('move-send-btn'); btn.disabled = true; btn.textContent = '📤 전송 중...';
       try {
-        await db.collection('scan_sessions').add({
+        var totalQty = moveState.items.reduce(function (s, it) { return s + (it.qty || 1); }, 0);
+        // 1) scan_sessions 저장 (이동 데이터)
+        var sessionRef = await db.collection('scan_sessions').add({
           user: name, mode: 'move', label: label || ('재고이동 ' + name),
           items: moveState.items.map(function (it) { return { barcode: it.barcode, qty: it.qty, from_loc: it.from_loc, to_loc: it.to_loc }; }),
           item_count: moveState.items.length, status: 'pending',
           created_at: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        // 2) 작업보고 카드 생성 (관리자 작업보고에서 보이도록 · 입고 스캔과 동일 패턴)
+        await db.collection('field_reports').add({
+          user: name,
+          title: '[재고이동] ' + (label || ('재고이동 ' + name)),
+          work_category: '재고이동',
+          text: '재고이동 스캔 ' + moveState.items.length + '건 / 총 ' + totalQty + '개',
+          date: getFormattedDate(),
+          imageUrl: '', status: '⏳ 처리중', comment_count: 0, has_attached_image: false,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+          source: 'scan', scan_mode: 'move', scan_session_id: sessionRef.id,
+          scan_item_count: moveState.items.length, scan_quality: 'move'
         });
         feedbackSent(); showToast('✅ 이동 ' + moveState.items.length + '건 전송!');
         moveClear(true);
