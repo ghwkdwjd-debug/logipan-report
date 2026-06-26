@@ -4312,12 +4312,12 @@ if ('serviceWorker' in navigator) {
         '<label>📦 작업명(선택)</label>' +
         '<input type="text" id="move-label" placeholder="예: AA구역 정리">' +
         '<div style="display:flex; gap:8px; margin-top:6px;">' +
-        '  <div class="loc-display empty" id="move-from-display" style="flex:1; padding:14px 8px;">' +
-        '    <div class="lbl">① 반출 FROM</div>' +
+        '  <div class="loc-display empty" id="move-from-display" onclick="moveEditFrom()" style="flex:1; padding:14px 8px; cursor:pointer;">' +
+        '    <div class="lbl">① 반출 FROM ✎</div>' +
         '    <div class="val" id="move-from-value" style="font-size:20px; letter-spacing:1px;">먼저 스캔</div>' +
         '  </div>' +
-        '  <div class="loc-display empty" id="move-to-display" style="flex:1; padding:14px 8px;">' +
-        '    <div class="lbl">② 반입 TO</div>' +
+        '  <div class="loc-display empty" id="move-to-display" onclick="moveEditTo()" style="flex:1; padding:14px 8px; cursor:pointer;">' +
+        '    <div class="lbl">② 반입 TO ✎</div>' +
         '    <div class="val" id="move-to-value" style="font-size:20px; letter-spacing:1px;">다음 스캔</div>' +
         '  </div>' +
         '</div>' +
@@ -4421,6 +4421,35 @@ if ('serviceWorker' in navigator) {
       if (last.qty > 1) last.qty--; else moveState.items.pop();
       renderMoveDone(); beep(600, 80); vibrate(30); speak('취소');
     }
+    // 박스 탭 → 그 칸만 변경 (직접 입력 또는 비우고 다시 스캔). 반대쪽은 유지.
+    function moveBlurSoon() {
+      setTimeout(function () {
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      }, 50);
+    }
+    function moveEditLoc(slot) {
+      var labelKo = slot === 'from' ? '반출(FROM)' : '반입(TO)';
+      var cur = moveState[slot] || '';
+      var v = window.prompt('📍 ' + labelKo + ' 로케 입력\n(비우고 확인 → 그 칸만 다시 스캔 대기)', cur);
+      if (v === null) { moveBlurSoon(); return; }   // 취소 → 그대로
+      v = v.trim().toUpperCase();
+      if (v) {
+        if (!isLocationBarcode(v)) { feedbackError('로케 형식 아님 (AA-00-00-00)'); moveBlurSoon(); return; }
+        if (slot === 'from' && v === moveState.to) { feedbackError('반출과 반입이 같습니다'); moveBlurSoon(); return; }
+        if (slot === 'to' && v === moveState.from) { feedbackError('반출과 반입이 같습니다'); moveBlurSoon(); return; }
+        moveState[slot] = v;
+        updateMoveLocs();
+        showMoveRecent('loc', v, labelKo + ' 변경됨');
+        feedbackLocChanged(v);
+      } else {
+        moveState[slot] = '';
+        updateMoveLocs();
+        showMoveRecent('idle', labelKo + ' 비움', labelKo + ' 로케를 다시 스캔하세요');
+      }
+      moveBlurSoon();
+    }
+    function moveEditFrom() { moveEditLoc('from'); }
+    function moveEditTo() { moveEditLoc('to'); }
     // 경로(FROM/TO)만 해제 — 이미 확정된 이동 목록은 그대로 유지
     function moveResetRoute() {
       moveState.from = ''; moveState.to = '';
