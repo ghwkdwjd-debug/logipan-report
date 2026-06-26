@@ -4312,11 +4312,11 @@ if ('serviceWorker' in navigator) {
         '<label>📦 작업명(선택)</label>' +
         '<input type="text" id="move-label" placeholder="예: AA구역 정리">' +
         '<div style="display:flex; gap:8px; margin-top:6px;">' +
-        '  <div class="loc-display empty" id="move-from-display" onclick="moveEditFrom()" style="flex:1; padding:14px 8px; cursor:pointer;">' +
+        '  <div class="loc-display empty" id="move-from-display" onclick="moveEditFrom()" style="flex:1; padding:14px 8px; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;">' +
         '    <div class="lbl">① 반출 FROM ✎</div>' +
         '    <div class="val" id="move-from-value" style="font-size:20px; letter-spacing:1px;">먼저 스캔</div>' +
         '  </div>' +
-        '  <div class="loc-display empty" id="move-to-display" onclick="moveEditTo()" style="flex:1; padding:14px 8px; cursor:pointer;">' +
+        '  <div class="loc-display empty" id="move-to-display" onclick="moveEditTo()" style="flex:1; padding:14px 8px; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;">' +
         '    <div class="lbl">② 반입 TO ✎</div>' +
         '    <div class="val" id="move-to-value" style="font-size:20px; letter-spacing:1px;">다음 스캔</div>' +
         '  </div>' +
@@ -4369,10 +4369,25 @@ if ('serviceWorker' in navigator) {
       btn.disabled = moveState.items.length === 0;
       btn.textContent = '📤 관리자에게 전송 (' + moveState.items.length + '건)';
       if (!moveState.items.length) { box.innerHTML = '<div class="scan-empty">반출→반입 지정 후 상품을 찍으세요</div>'; return; }
-      box.innerHTML = moveState.items.slice().reverse().map(function (it) {
+      box.innerHTML = moveState.items.slice().reverse().map(function (it, i) {
+        var realIdx = moveState.items.length - 1 - i;
         return '<div class="scan-item"><div style="flex:1;min-width:0;"><div class="barcode">' + escapeHtml(it.barcode) +
-          '</div><div class="loc">' + escapeHtml(it.from_loc) + ' → ' + escapeHtml(it.to_loc) + '</div></div><div class="qty">x' + it.qty + '</div></div>';
+          '</div><div class="loc">' + escapeHtml(it.from_loc) + ' → ' + escapeHtml(it.to_loc) + '</div></div>' +
+          '<div class="qty" onclick="moveEditQty(' + realIdx + ')" style="cursor:pointer;user-select:none;">x' + it.qty + ' ✎</div></div>';
       }).join('');
+    }
+    // 수량 클릭 수정 (0 = 삭제)
+    function moveEditQty(idx) {
+      if (idx < 0 || idx >= moveState.items.length) return;
+      var it = moveState.items[idx];
+      var v = window.prompt(it.barcode + '\n수량 변경 (현재 ' + it.qty + ' · 0이면 삭제)', it.qty);
+      if (v === null) { moveBlurSoon(); return; }
+      var n = parseInt(v, 10);
+      if (isNaN(n) || n < 0) { feedbackError('숫자를 입력하세요'); moveBlurSoon(); return; }
+      if (n === 0) moveState.items.splice(idx, 1);
+      else it.qty = n;
+      renderMoveDone();
+      moveBlurSoon();
     }
     function handleMoveScan(value) {
       // 로케 스캔 → FROM/TO 지정
@@ -4485,6 +4500,9 @@ if ('serviceWorker' in navigator) {
     window.moveUndo = moveUndo;
     window.moveClear = moveClear;
     window.moveResetRoute = moveResetRoute;
+    window.moveEditFrom = moveEditFrom;
+    window.moveEditTo = moveEditTo;
+    window.moveEditQty = moveEditQty;
     window.sendMoveSession = sendMoveSession;
 
     // 4) selectScanMode 패치 (move 추가)
