@@ -863,6 +863,7 @@
             <button class="scan-mode-btn active" data-mode="inbound" onclick="selectScanMode('inbound')">📥 입고</button>
             <button class="scan-mode-btn" data-mode="move" onclick="selectScanMode('move')" disabled title="준비 중">🔄 재고이동</button>
             <button class="scan-mode-btn" data-mode="audit" onclick="selectScanMode('audit')">📋 재고조사</button>
+            <button class="scan-mode-btn" data-mode="outbound" onclick="selectScanMode('outbound')" disabled title="준비 중">📤 출고</button>
         </div>
 
         <!-- ═══════════ 📥 입고 모드 UI ═══════════ -->
@@ -4538,6 +4539,340 @@ if ('serviceWorker' in navigator) {
     };
 
     console.log('✅ 재고이동 모드 활성화됨');
+  }
+  boot();
+})();
+</script>
+
+<!-- ===== 📤 출고 모드 (운송장 스캔 → 품목 검수 → 박스 분할 즉시차감 + 박스 인보이스 인쇄) ===== -->
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+<script>
+(function () {
+  // 백엔드 주소 — 기본은 운영. 개발 중엔 localStorage.logipan_api_base 로 덮어쓰기 가능.
+  var API_BASE = (localStorage.getItem('logipan_api_base') || 'https://logipan.duckdns.org').replace(/\/+$/, '');
+
+  function boot() {
+    if (typeof scanState === 'undefined') { setTimeout(boot, 200); return; } // 메인 스크립트 로드 대기
+
+    // 1) 출고 버튼 활성화
+    var obBtn = document.querySelector('.scan-mode-btn[data-mode="outbound"]');
+    if (obBtn) { obBtn.disabled = false; obBtn.removeAttribute('title'); }
+
+    // 2) 출고 UI 주입
+    var section = document.getElementById('section-scan');
+    if (section && !document.getElementById('outbound-mode-ui')) {
+      var div = document.createElement('div');
+      div.id = 'outbound-mode-ui';
+      div.style.display = 'none';
+      div.innerHTML =
+        '<div class="loc-display empty" id="ob-invoice-display" style="padding:14px 8px; user-select:none;">' +
+        '  <div class="lbl">📮 운송장</div>' +
+        '  <div class="val" id="ob-invoice-value" style="font-size:20px; letter-spacing:1px;">운송장을 스캔하세요</div>' +
+        '  <div class="sub" id="ob-invoice-sub" style="font-size:12px; color:#888; margin-top:2px;"></div>' +
+        '</div>' +
+        '<div class="pda-recent idle" id="ob-recent">' +
+        '  <div class="top">최근 스캔</div><div class="bc">운송장부터 스캔</div><div class="sub"></div>' +
+        '</div>' +
+        '<div class="pda-status" id="ob-status">' +
+        '  <div class="dot"></div><span>① 운송장 → ② 상품 스캔 → ③ 박스 다 차면 분할</span>' +
+        '</div>' +
+        '<div style="margin-top:12px;">' +
+        '  <div class="scan-list-header"><span>📋 품목 (현박스 / 예상)</span>' +
+        '    <span id="ob-progress" style="font-size:12px; color:#888;"></span></div>' +
+        '  <div class="scan-list-box" id="ob-items-box"><div class="scan-empty">운송장을 스캔하면 품목이 뜹니다</div></div>' +
+        '</div>' +
+        '<div style="margin-top:12px;">' +
+        '  <div class="scan-list-header"><span>📦 현재 박스 (<span id="ob-box-count">0</span>개 담김)</span>' +
+        '    <button onclick="obUndo()" style="background:none;border:none;color:#1877F2;font-size:13px;font-weight:bold;cursor:pointer;">↶ 마지막 취소</button></div>' +
+        '  <div class="scan-list-box" id="ob-box-box"><div class="scan-empty">상품을 담으세요</div></div>' +
+        '</div>' +
+        '<button class="send-btn" id="ob-split-btn" onclick="obSplitBox()" disabled>✂️ 분할 (이 박스 확정 · 인보이스 출력)</button>' +
+        '<button class="clear-btn" onclick="obResetAll()">🗑️ 전체 초기화</button>';
+      section.appendChild(div);
+    }
+
+    // 3) 상태
+    //  expected[nb] = { qty(예상), shipped(이미 나감), name, raw(원바코드) }
+    //  box[nb] = 현재 박스에 담긴 수량
+    var obState = { pid: '', invoice: '', recipient: '', batch: 0, expected: {}, order: [], box: {}, boxCount: 0, sending: false, pendingToken: '' };
+
+    // 바코드 정규화 — 백엔드 normalize_barcode 와 동일(11자리 숫자 → 1-xxxx, 그 외 대문자)
+    function obNorm(bc) {
+      var s = String(bc || '').trim().toUpperCase();
+      if (/^\d{11}$/.test(s)) return s[0] + '-' + s.slice(1);
+      return s;
+    }
+    function isInvoiceCode(v) { return /^T\d{8,}(-\d+)?$/i.test(String(v || '').trim()); }
+
+    function showObRecent(type, code, sub) {
+      var el = document.getElementById('ob-recent'); if (!el) return;
+      el.className = 'pda-recent ' + type;
+      var m = { success: '✅ 담음', duplicate: '🔁 수량+1', error: '❌ 오류', loc: '📮 운송장', idle: '대기' };
+      el.querySelector('.top').textContent = m[type] || '최근 스캔';
+      el.querySelector('.bc').textContent = code;
+      el.querySelector('.sub').textContent = sub || '';
+    }
+
+    function renderInvoice() {
+      var d = document.getElementById('ob-invoice-display');
+      var v = document.getElementById('ob-invoice-value');
+      var s = document.getElementById('ob-invoice-sub');
+      if (obState.invoice) {
+        d.classList.remove('empty'); v.textContent = obState.invoice;
+        s.textContent = (obState.recipient || '') + (obState.batch ? ' · ' + String(obState.batch).padStart(3, '0') + '차' : '');
+      } else {
+        d.classList.add('empty'); v.textContent = '운송장을 스캔하세요'; s.textContent = '';
+      }
+    }
+    function renderItems() {
+      var box = document.getElementById('ob-items-box');
+      var prog = document.getElementById('ob-progress');
+      if (!obState.order.length) {
+        box.innerHTML = '<div class="scan-empty">운송장을 스캔하면 품목이 뜹니다</div>'; prog.textContent = ''; return;
+      }
+      var totExp = 0, totShip = 0;
+      box.innerHTML = obState.order.map(function (nb) {
+        var e = obState.expected[nb];
+        var inBox = obState.box[nb] || 0;
+        var acc = (e.shipped || 0) + inBox;             // 누적(이미나감 + 현박스)
+        var done = acc >= e.qty;
+        totExp += e.qty; totShip += (e.shipped || 0);
+        var color = done ? '#52c41a' : (inBox > 0 ? '#1877F2' : '#999');
+        return '<div class="scan-item"><div style="flex:1;min-width:0;">' +
+          '<div class="barcode">' + escapeHtml(e.raw) + '</div>' +
+          '<div class="loc">' + escapeHtml(e.name || '') + '</div></div>' +
+          '<div class="qty" style="color:' + color + ';">' + inBox + ' / ' + e.qty +
+          (e.shipped ? ' <span style="font-size:11px;color:#aaa;">(-' + e.shipped + ')</span>' : '') + '</div></div>';
+      }).join('');
+      prog.textContent = '누적 ' + totShip + ' / ' + totExp + ' 차감';
+    }
+    function renderBox() {
+      var box = document.getElementById('ob-box-box');
+      var btn = document.getElementById('ob-split-btn');
+      var cnt = document.getElementById('ob-box-count');
+      var keys = obState.order.filter(function (nb) { return (obState.box[nb] || 0) > 0; });
+      var total = keys.reduce(function (s, nb) { return s + obState.box[nb]; }, 0);
+      cnt.textContent = total;
+      btn.disabled = obState.sending || total === 0;
+      if (!keys.length) { box.innerHTML = '<div class="scan-empty">상품을 담으세요</div>'; return; }
+      box.innerHTML = keys.map(function (nb) {
+        var e = obState.expected[nb];
+        return '<div class="scan-item"><div style="flex:1;min-width:0;">' +
+          '<div class="barcode">' + escapeHtml(e.raw) + '</div>' +
+          '<div class="loc">' + escapeHtml(e.name || '') + '</div></div>' +
+          '<div class="qty" onclick="obEditQty(\'' + nb + '\')" style="cursor:pointer;">x' + obState.box[nb] + ' ✎</div></div>';
+      }).join('');
+    }
+    function renderAll() { renderInvoice(); renderItems(); renderBox(); }
+
+    // ── 백엔드 호출 ──
+    function obGet(path) {
+      return fetch(API_BASE + path).then(function (r) {
+        return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
+      });
+    }
+    function obPost(path, body) {
+      return fetch(API_BASE + path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && j.detail) || ('HTTP ' + r.status));
+          return j;
+        });
+      });
+    }
+
+    function loadInvoice(code) {
+      showObRecent('loc', code, '조회 중…');
+      obGet('/api/pwa/outbound/lookup?invoice=' + encodeURIComponent(code)).then(function (r) {
+        if (!r || !r.ok) { showObRecent('error', code, (r && r.error) || '조회 실패'); feedbackError('조회 실패'); speak('조회 실패'); return; }
+        obState.pid = r.pid; obState.invoice = r.invoice; obState.recipient = r.recipient || '';
+        obState.batch = r.batch || 0; obState.expected = {}; obState.order = []; obState.box = {};
+        obState.boxCount = r.box_count || 0;
+        (r.items || []).forEach(function (it) {
+          var nb = obNorm(it.barcode);
+          if (!nb) return;
+          if (!obState.expected[nb]) obState.order.push(nb);
+          obState.expected[nb] = { qty: Number(it.qty) || 0, shipped: Number(it.shipped) || 0, name: it.name || '', raw: it.barcode };
+        });
+        renderAll();
+        showObRecent('loc', r.invoice, (r.recipient || '') + ' · ' + obState.order.length + '품목 · 상품을 스캔하세요');
+        if (typeof feedbackLocChanged === 'function') feedbackLocChanged(r.invoice); else beep(880, 80);
+      }).catch(function (e) { showObRecent('error', code, e.message || '조회 실패'); feedbackError('조회 실패'); });
+    }
+
+    function handleOutboundScan(value) {
+      // 운송장 미로드 → 무조건 운송장 조회 시도
+      if (!obState.invoice) { loadInvoice(value); return; }
+      // 로드된 상태에서 운송장 형식 재스캔 → 교체
+      if (isInvoiceCode(value)) {
+        if (value.toUpperCase() === obState.invoice.toUpperCase()) { showObRecent('loc', value, '이미 이 운송장입니다'); return; }
+        var hasBox = Object.keys(obState.box).some(function (k) { return obState.box[k] > 0; });
+        if (hasBox && !confirm('현재 박스에 담긴 상품이 있습니다.\n분할하지 않고 다른 운송장으로 바꿀까요? (현재 박스는 버려집니다)')) return;
+        loadInvoice(value); return;
+      }
+      // 상품 바코드
+      if (typeof isValidProductBarcode === 'function' && !isValidProductBarcode(value)) {
+        showObRecent('error', value, '⛔ 잘못된 바코드 형식'); feedbackError('잘못된 바코드'); speak('잘못된 바코드'); return;
+      }
+      var nb = obNorm(value);
+      var e = obState.expected[nb];
+      if (!e) { showObRecent('error', value, '❌ 이 배송건 목록에 없는 바코드'); feedbackError('목록에 없음'); speak('목록에 없음'); return; }
+      var acc = (e.shipped || 0) + (obState.box[nb] || 0);
+      if (acc >= e.qty) { showObRecent('error', value, '⛔ 예상수량 초과 (' + e.qty + '개)'); feedbackError('수량 초과'); speak('수량 초과'); return; }
+      var wasNew = !(obState.box[nb] > 0);
+      obState.box[nb] = (obState.box[nb] || 0) + 1;
+      showObRecent(wasNew ? 'success' : 'duplicate', e.raw, (e.name || '') + ' · 박스 ' + obState.box[nb] + '개');
+      if (typeof feedbackScanSuccess === 'function') feedbackScanSuccess(value); else beep(1200, 60);
+      renderItems(); renderBox();
+    }
+
+    function obEditQty(nb) {
+      var e = obState.expected[nb]; if (!e) return;
+      var cur = obState.box[nb] || 0;
+      var v = window.prompt(e.raw + '\n박스 수량 변경 (현재 ' + cur + ' · 0이면 제거)', cur);
+      if (v === null) return;
+      var n = parseInt(v, 10);
+      if (isNaN(n) || n < 0) { feedbackError('숫자를 입력하세요'); return; }
+      var max = e.qty - (e.shipped || 0);
+      if (n > max) { feedbackError('예상 초과 (최대 ' + max + ')'); return; }
+      if (n === 0) delete obState.box[nb]; else obState.box[nb] = n;
+      renderItems(); renderBox();
+    }
+    function obUndo() {
+      // 마지막으로 담긴 품목 1개 취소 (박스에 담긴 것 중 마지막 order역순)
+      for (var i = obState.order.length - 1; i >= 0; i--) {
+        var nb = obState.order[i];
+        if (obState.box[nb] > 0) {
+          obState.box[nb]--; if (obState.box[nb] === 0) delete obState.box[nb];
+          beep(600, 80); vibrate(30); renderItems(); renderBox(); return;
+        }
+      }
+      feedbackError('취소할 항목 없음');
+    }
+    function obClearBox() { obState.box = {}; renderItems(); renderBox(); }
+
+    function obSplitBox() {
+      if (obState.sending) return;
+      var items = obState.order.filter(function (nb) { return obState.box[nb] > 0; })
+        .map(function (nb) { return { barcode: obState.expected[nb].raw, qty: obState.box[nb] }; });
+      if (!items.length) { feedbackError('박스가 비었습니다'); return; }
+      var worker = localStorage.getItem('logipan_user_name');
+      if (!worker) { feedbackError('작업자 이름 등록 먼저'); return; }
+      // 이 박스 시도용 토큰 — 재시도 시 같은 토큰 재사용(서버 멱등 → 응답유실 후 재시도도 이중차감 없음).
+      //   성공했을 때만 비운다(=다음 박스는 새 토큰).
+      if (!obState.pendingToken) {
+        obState.pendingToken = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2));
+      }
+      var token = obState.pendingToken;
+      obState.sending = true;
+      var btn = document.getElementById('ob-split-btn'); btn.disabled = true; btn.textContent = '⏳ 차감 중…';
+      obPost('/api/pwa/outbound/ship-box', { pid: obState.pid, worker: worker, items: items, box_token: token }).then(function (r) {
+        // 차감 성공 → 기출고 누적 갱신 + 현재 박스 비우기
+        items.forEach(function (it) { var nb = obNorm(it.barcode); if (obState.expected[nb]) obState.expected[nb].shipped += it.qty; });
+        obState.box = {}; obState.pendingToken = ''; obState.boxCount = (r.box_no || obState.boxCount + 1);
+        printBoxInvoice(r.invoice_rows || [], r.box_invoice || '');
+        if (r.done) {
+          showToast('✅ 출고완료 — 전량 차감됨 (' + (r.box_invoice || '') + ')');
+          resetDelivery();
+        } else {
+          showToast('📦 박스 ' + (r.box_no || '') + ' 차감 · 남은 ' + (r.remaining != null ? r.remaining : '?') + '개');
+          renderAll();
+        }
+      }).catch(function (e) {
+        feedbackError('차감 실패: ' + (e.message || e)); alert('차감 실패\n' + (e.message || e) + '\n\n박스 내용은 유지됩니다. 다시 분할을 눌러 재시도하세요.');
+      }).then(function () {
+        obState.sending = false;
+        var b = document.getElementById('ob-split-btn'); if (b) { b.textContent = '✂️ 분할 (이 박스 확정 · 인보이스 출력)'; }
+        renderBox();
+      });
+    }
+
+    function resetDelivery() {
+      obState = { pid: '', invoice: '', recipient: '', batch: 0, expected: {}, order: [], box: {}, boxCount: 0, sending: false, pendingToken: '' };
+      renderAll(); showObRecent('idle', '완료', '다음 운송장을 스캔하세요');
+    }
+    function obResetAll() {
+      var hasWork = obState.invoice || Object.keys(obState.box).length;
+      if (hasWork && !confirm('출고 스캔을 전부 초기화할까요? (담긴 박스 내용은 버려집니다)')) return;
+      resetDelivery();
+    }
+
+    // ── 박스 인보이스 인쇄 (DeliveryPending 피킹 인쇄 스타일 축약) ──
+    function bcDataUrl(value) {
+      if (!value || typeof JsBarcode === 'undefined') return '';
+      try { var c = document.createElement('canvas'); JsBarcode(c, value, { format: 'CODE128', width: 1.6, height: 44, displayValue: false, margin: 2 }); return c.toDataURL('image/png'); }
+      catch (e) { return ''; }
+    }
+    function printBoxInvoice(rows, boxInvoice) {
+      var COLS = [['recipient', '수령자'], ['brand', '브랜드'], ['product_code', '상품코드'], ['name', '상품명'], ['size', '사이즈'], ['barcode', '바코드'], ['qty', '수량']];
+      var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+      var totQty = rows.reduce(function (s, r) { return s + (Number(r.qty) || 0); }, 0);
+      var thead = '<tr>' + COLS.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
+      var tbody = rows.map(function (r) {
+        return '<tr>' + COLS.map(function (c) {
+          var v = esc(r[c[0]]);
+          var cls = (c[0] === 'barcode' || c[0] === 'product_code') ? 'sky' : '';
+          if (c[0] === 'qty') cls = 'qty ctr';
+          if (c[0] === 'barcode') cls += ' big';
+          return '<td class="' + cls + '">' + v + '</td>';
+        }).join('') + '</tr>';
+      }).join('');
+      var tfoot = '<tr class="tot"><td colspan="' + (COLS.length - 1) + '">합계</td><td class="ctr">' + totQty + '</td></tr>';
+      var img = bcDataUrl(boxInvoice);
+      var html = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(boxInvoice) + '</title><style>' +
+        '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
+        '@page{size:A4;margin:10mm;} html,body{margin:0;} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;}' +
+        'h3{margin:0 0 6px;font-size:15px;} .inv{text-align:center;margin:4px 0 10px;} .inv img{height:52px;} .inv div{font-size:14px;font-weight:bold;letter-spacing:1px;}' +
+        'table{width:100%;border-collapse:collapse;font-size:11px;} th,td{border:1px solid #999;padding:3px 6px;white-space:nowrap;} th{background:#D9D9D9!important;text-align:center;}' +
+        'td.ctr{text-align:center;} td.sky{background:#DDEBF7!important;} td.big{font-size:12px;font-weight:600;} td.qty{font-weight:bold;} tr.tot td{background:#D9D9D9!important;font-weight:bold;text-align:center;} td:nth-child(4){white-space:normal;}' +
+        '</style></head><body>' +
+        '<h3>출고 인보이스 · ' + esc(boxInvoice) + ' · 총 ' + totQty + ' PCS</h3>' +
+        '<div class="inv">' + (img ? '<img src="' + img + '"/>' : '') + '<div>' + esc(boxInvoice) + '</div></div>' +
+        '<table><thead>' + thead + '</thead><tbody>' + tbody + tfoot + '</tbody></table>' +
+        '<script>window.onload=function(){setTimeout(function(){window.print();},200);};<\/script></body></html>';
+      var w = window.open('', '_blank');
+      if (!w) { alert('팝업이 차단되었습니다. 브라우저에서 팝업을 허용한 뒤 인보이스를 다시 인쇄하세요.\n(운송장: ' + boxInvoice + ')'); return; }
+      w.document.write(html); w.document.close();
+    }
+
+    // onclick 전역 노출
+    window.obUndo = obUndo;
+    window.obClearBox = obClearBox;
+    window.obSplitBox = obSplitBox;
+    window.obResetAll = obResetAll;
+    window.obEditQty = obEditQty;
+
+    // 4) selectScanMode 패치 (outbound 추가)
+    var _origSelect = selectScanMode;
+    selectScanMode = function (mode) {
+      if (mode === 'outbound') {
+        scanState.mode = 'outbound';
+        document.querySelectorAll('.scan-mode-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === 'outbound'); });
+        ['inbound-mode-ui', 'audit-mode-ui', 'move-mode-ui'].forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; });
+        document.getElementById('outbound-mode-ui').style.display = 'block';
+        return;
+      }
+      var ob = document.getElementById('outbound-mode-ui'); if (ob) ob.style.display = 'none';
+      return _origSelect.apply(this, arguments);
+    };
+
+    // 5) processPdaScan 패치 (outbound 모드 분기)
+    var _origProcess = processPdaScan;
+    processPdaScan = function (raw, fromPda) {
+      if (scanState && scanState.mode === 'outbound') {
+        var value = (raw || '').trim(); if (!value) return;
+        if (typeof koreanToEnglishKeyboard === 'function') value = koreanToEnglishKeyboard(value);
+        value = value.toUpperCase();
+        if (fromPda && typeof pdaReverseEnabled !== 'undefined' && pdaReverseEnabled && !isInvoiceCode(value)) {
+          value = value.split('').reverse().join('');
+        }
+        handleOutboundScan(value); return;
+      }
+      return _origProcess.apply(this, arguments);
+    };
+
+    console.log('✅ 출고 모드 활성화됨 (운송장 검수 → 박스 분할 차감, API ' + API_BASE + ')');
   }
   boot();
 })();
