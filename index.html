@@ -4623,10 +4623,13 @@ if ('serviceWorker' in navigator) {
     function obLiveWrite() {
       if (!obState.pid || typeof rtdb === 'undefined') return;
       var cnt = obState.order.reduce(function (s, nb) { return s + (obState.box[nb] || 0); }, 0);
+      // 현재 박스(분할 전) 내용 — 웹에서 '스캔중' 품목별 실시간 표시용
+      var boxArr = obState.order.filter(function (nb) { return obState.box[nb] > 0; })
+        .map(function (nb) { return { barcode: obState.expected[nb].raw, qty: obState.box[nb] }; });
       try {
         rtdb.ref('outbound_live/' + obState.pid).set({
           worker: localStorage.getItem('logipan_user_name') || '', invoice: obState.invoice,
-          recipient: obState.recipient, count: cnt, last: obState.lastRaw || '', ts: Date.now()
+          recipient: obState.recipient, count: cnt, last: obState.lastRaw || '', ts: Date.now(), box: boxArr
         });
       } catch (e) {}
     }
