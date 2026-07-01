@@ -4594,7 +4594,7 @@ if ('serviceWorker' in navigator) {
     // 3) 상태
     //  expected[nb] = { qty(예상), shipped(이미 나감), name, raw(원바코드) }
     //  box[nb] = 현재 박스에 담긴 수량
-    var obState = { pid: '', invoice: '', recipient: '', batch: 0, expected: {}, order: [], box: {}, boxCount: 0, sending: false, pendingToken: '' };
+    var obState = { pid: '', invoice: '', recipient: '', batch: 0, expected: {}, order: [], box: {}, boxCount: 0, sending: false, pendingToken: '', lastRaw: '' };
 
     // 바코드 정규화 — 백엔드 normalize_barcode 와 동일(11자리 숫자 → 1-xxxx, 그 외 대문자)
     function obNorm(bc) {
@@ -4603,6 +4603,22 @@ if ('serviceWorker' in navigator) {
       return s;
     }
     function isInvoiceCode(v) { return /^T\d{8,}(-\d+)?$/i.test(String(v || '').trim()); }
+
+    // 실시간 상태: 웹 관리자가 "지금 스캔/담는 중"을 바로 보게 outbound_live/{pid}에 기록(공개노드).
+    function obLiveWrite() {
+      if (!obState.pid || typeof rtdb === 'undefined') return;
+      var cnt = obState.order.reduce(function (s, nb) { return s + (obState.box[nb] || 0); }, 0);
+      try {
+        rtdb.ref('outbound_live/' + obState.pid).set({
+          worker: localStorage.getItem('logipan_user_name') || '', invoice: obState.invoice,
+          recipient: obState.recipient, count: cnt, last: obState.lastRaw || '', ts: Date.now()
+        });
+      } catch (e) {}
+    }
+    function obLiveClear(pid) {
+      var id = pid || obState.pid; if (!id || typeof rtdb === 'undefined') return;
+      try { rtdb.ref('outbound_live/' + id).remove(); } catch (e) {}
+    }
 
     function showObRecent(type, code, sub) {
       var el = document.getElementById('ob-recent'); if (!el) return;
@@ -4686,6 +4702,7 @@ if ('serviceWorker' in navigator) {
       showObRecent('loc', code, '조회 중…');
       obGet('/api/pwa/outbound/lookup?invoice=' + encodeURIComponent(code)).then(function (r) {
         if (!r || !r.ok) { showObRecent('error', code, (r && r.error) || '조회 실패'); feedbackError('조회 실패'); speak('조회 실패'); return; }
+        obLiveClear();   // 이전 운송장 진행중 표시 해제
         obState.pid = r.pid; obState.invoice = r.invoice; obState.recipient = r.recipient || '';
         obState.batch = r.batch || 0; obState.expected = {}; obState.order = []; obState.box = {};
         obState.boxCount = r.box_count || 0;
@@ -4724,6 +4741,7 @@ if ('serviceWorker' in navigator) {
       obState.box[nb] = (obState.box[nb] || 0) + 1;
       showObRecent(wasNew ? 'success' : 'duplicate', e.raw, (e.name || '') + ' · 박스 ' + obState.box[nb] + '개');
       if (typeof feedbackScanSuccess === 'function') feedbackScanSuccess(value); else beep(1200, 60);
+      obState.lastRaw = e.raw; obLiveWrite();   // 웹에 실시간 반영
       renderItems(); renderBox();
     }
 
@@ -4737,6 +4755,7 @@ if ('serviceWorker' in navigator) {
       var max = e.qty - (e.shipped || 0);
       if (n > max) { feedbackError('예상 초과 (최대 ' + max + ')'); return; }
       if (n === 0) delete obState.box[nb]; else obState.box[nb] = n;
+      obLiveWrite();
       renderItems(); renderBox();
     }
     function obUndo() {
@@ -4745,7 +4764,7 @@ if ('serviceWorker' in navigator) {
         var nb = obState.order[i];
         if (obState.box[nb] > 0) {
           obState.box[nb]--; if (obState.box[nb] === 0) delete obState.box[nb];
-          beep(600, 80); vibrate(30); renderItems(); renderBox(); return;
+          beep(600, 80); vibrate(30); obLiveWrite(); renderItems(); renderBox(); return;
         }
       }
       feedbackError('취소할 항목 없음');
@@ -4771,6 +4790,7 @@ if ('serviceWorker' in navigator) {
         // 차감 성공 → 기출고 누적 갱신 + 현재 박스 비우기
         items.forEach(function (it) { var nb = obNorm(it.barcode); if (obState.expected[nb]) obState.expected[nb].shipped += it.qty; });
         obState.box = {}; obState.pendingToken = ''; obState.boxCount = (r.box_no || obState.boxCount + 1);
+        obLiveClear();   // 현재 박스 비워짐 → 스캔중 표시 해제
         printBoxInvoice(r.invoice_rows || [], r.box_invoice || '');
         if (r.done) {
           showToast('✅ 출고완료 — 전량 차감됨 (' + (r.box_invoice || '') + ')');
@@ -4789,7 +4809,8 @@ if ('serviceWorker' in navigator) {
     }
 
     function resetDelivery() {
-      obState = { pid: '', invoice: '', recipient: '', batch: 0, expected: {}, order: [], box: {}, boxCount: 0, sending: false, pendingToken: '' };
+      obLiveClear();   // 진행중 표시 해제
+      obState = { pid: '', invoice: '', recipient: '', batch: 0, expected: {}, order: [], box: {}, boxCount: 0, sending: false, pendingToken: '', lastRaw: '' };
       renderAll(); showObRecent('idle', '완료', '다음 운송장을 스캔하세요');
     }
     function obResetAll() {
@@ -4805,53 +4826,47 @@ if ('serviceWorker' in navigator) {
       catch (e) { return ''; }
     }
     function printBoxInvoice(rows, boxInvoice) {
-      // 웹 출고 인보이스(build_invoice_xlsx)와 동일 서식: 배정차수/운송장/수령자/브랜드/상품코드/상품명/사이즈명/바코드/수량
-      //   색: 헤더·총합 연회색 · 운송장 연살구 · 상품코드/바코드 연하늘 · 수량 굵게 · 그룹헤더 연연두 · 맑은고딕 Semilight · 가로 폭맞춤
-      var COLS = [['batch', '배정차수'], ['box_invoice', '운송장'], ['recipient', '수령자'], ['brand', '브랜드'],
-                  ['product_code', '상품코드'], ['name', '상품명'], ['size', '사이즈명'], ['barcode', '바코드'], ['qty', '수량']];
+      // 웹 '운송장 배정현황' 인보이스(invoicePrint.printInvoice, subLabel='')와 동일 서식:
+      //   배정차수 그룹 h3(연연두, 우측 수령자) + 표(배정차수/수령자/브랜드/상품코드/상품명/사이즈명/바코드/수량) + 소계.
+      //   안드로이드 가로 위해 세로 A4에 회전 + 박스1=한 페이지 자동축소 + 2매.
       var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+      var defs = [['배정차수', 'batch', 'c'], ['수령자', 'recipient', 'c'], ['브랜드', 'brand', ''],
+                  ['상품코드', 'product_code', 'sky'], ['상품명', 'name', ''], ['사이즈명', 'size', 'c'],
+                  ['바코드', 'barcode', 'sky c'], ['수량', 'qty', 'q']];
       var totQty = rows.reduce(function (s, r) { return s + (Number(r.qty) || 0); }, 0);
-      var batch = rows.length ? (rows[0].batch || '-') : '-';
-      var cls = function (f) {
-        var c = (f === 'batch' || f === 'box_invoice' || f === 'size' || f === 'qty' || f === 'barcode') ? 'ctr' : '';
-        if (f === 'box_invoice') c += ' peach';
-        if (f === 'product_code' || f === 'barcode') c += ' sky';
-        if (f === 'qty') c += ' qty';
-        return c.trim();
-      };
-      var thead = '<tr>' + COLS.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
-      var grp = '<tr class="grp"><td colspan="' + COLS.length + '">배정차수 ' + esc(batch) + '  ·  운송장 ' + esc(boxInvoice) + '</td></tr>';
-      var tbody = rows.map(function (r) {
-        return '<tr>' + COLS.map(function (c) { return '<td class="' + cls(c[0]) + '">' + esc(r[c[0]]) + '</td>'; }).join('') + '</tr>';
+      var g0 = rows[0] || {};
+      var thead = '<tr>' + defs.map(function (d) { return '<th>' + esc(d[0]) + '</th>'; }).join('') + '</tr>';
+      var body = rows.map(function (it) {
+        return '<tr>' + defs.map(function (d) {
+          var val = d[1] === 'qty' ? (Number(it.qty) || 0) : it[d[1]];
+          return '<td class="' + d[2] + '">' + esc(val) + '</td>';
+        }).join('') + '</tr>';
       }).join('');
-      var tfoot = '<tr class="tot"><td colspan="' + (COLS.length - 1) + '">총 합계</td><td class="ctr">' + totQty + '</td></tr>';
-      var img = bcDataUrl(boxInvoice);
-      // 세로 A4에 '가로로 회전' 인쇄 → 안드로이드에서 방향 안 눌러도 가로. 박스 하나=한 페이지(넘치면 자동 축소). 2매(사본 페이지분리).
-      var inner =
-        '<div class="fit">' +
-        '<div class="invbar">' + (img ? '<img src="' + img + '"/>' : '') + '<div>' + esc(boxInvoice) + '</div></div>' +
-        '<table><thead>' + thead + '</thead><tbody>' + grp + tbody + tfoot + '</tbody></table>' +
-        '</div>';
-      var html = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(boxInvoice) + '</title><style>' +
-        '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
-        '@page{size:A4;margin:0;} html,body{margin:0;padding:0;} body{font-family:"맑은 고딕 Semilight","Malgun Gothic Semilight","Malgun Gothic",sans-serif;color:#000;}' +
+      var subRow = '<tr class="sub"><td colspan="' + (defs.length - 1) + '">소계</td><td class="q">' + totQty + '</td></tr>';
+      var head = '배정차수 ' + esc(g0.batch || '-') + '<span class="r">수령자 ' + esc(g0.recipient || '-') + '</span>';
+      var inner = '<div class="fit"><section class="pg"><h3>' + head + '</h3>' +
+        '<table><thead>' + thead + '</thead><tbody>' + body + subRow + '</tbody></table></section></div>';
+      var html = '<!doctype html><html><head><meta charset="utf-8"><title>출고 인보이스</title><style>' +
+        '*{font-family:"맑은 고딕 Semilight","Malgun Gothic",sans-serif;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;box-sizing:border-box;}' +
+        '@page{size:A4;margin:0;} html,body{margin:0;padding:0;color:#1f2937;}' +
         '.sheet{position:relative;width:210mm;height:297mm;overflow:hidden;page-break-after:always;}' +
         '.sheet:last-child{page-break-after:auto;}' +
-        '.rot{position:absolute;top:0;left:210mm;width:297mm;height:210mm;padding:7mm 9mm;transform:rotate(90deg);transform-origin:top left;}' +
-        '.fit{transform-origin:top left;}' +   // JS가 한 페이지에 맞게 축소 배율 넣음
-        '.invbar{text-align:center;margin:0 0 6px;} .invbar img{height:46px;} .invbar div{font-size:13px;font-weight:bold;letter-spacing:1px;}' +
-        'table{width:100%;border-collapse:collapse;font-size:12px;table-layout:auto;}' +
-        'th,td{border:1px solid #bbb;padding:3px 6px;white-space:nowrap;}' +
-        'th{background:#D9D9D9!important;text-align:center;font-weight:bold;}' +
-        'td.ctr{text-align:center;} td.peach{background:#FCE4D6!important;} td.sky{background:#DDEBF7!important;} td.qty{font-weight:bold;}' +
-        'tr.grp td{background:#E2EFDA!important;font-weight:bold;}' +
-        'tr.tot td{background:#D9D9D9!important;font-weight:bold;text-align:center;}' +
-        'td:nth-child(6){white-space:normal;}' +
+        '.rot{position:absolute;top:0;left:210mm;width:297mm;height:210mm;padding:8mm;transform:rotate(90deg);transform-origin:top left;}' +
+        '.fit{transform-origin:top left;}' +
+        '.pg{padding:0;}' +
+        'h3{font-size:15px;margin:0 0 8px;background:#e2efda;border:1px solid #cfe0bd;padding:7px 10px;border-radius:4px;}' +
+        'h3 .r{float:right;font-weight:normal;color:#374151;}' +
+        'table{width:100%;border-collapse:collapse;table-layout:fixed;}' +
+        'th,td{border:1px solid #c9c9c9;padding:4px 6px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+        'th{background:#d9d9d9;text-align:center;}' +
+        'td.c{text-align:center;} td.q{text-align:center;font-weight:bold;} td.sky{background:#ddebf7;}' +
+        'tr.sub td{background:#d9d9d9;font-weight:bold;text-align:center;}' +
+        'thead{display:table-header-group;} tr{page-break-inside:avoid;}' +
         '</style></head><body>' +
         '<div class="sheet"><div class="rot">' + inner + '</div></div>' +
         '<div class="sheet"><div class="rot">' + inner + '</div></div>' +
         '<script>' +
-        'function fitAll(){var mm=96/25.4,aw=(297-18)*mm,ah=(210-14)*mm;' +
+        'function fitAll(){var mm=96/25.4,aw=(297-16)*mm,ah=(210-16)*mm;' +
         'Array.prototype.forEach.call(document.querySelectorAll(".fit"),function(f){f.style.transform="none";' +
         'var s=Math.min(aw/f.scrollWidth,ah/f.scrollHeight,1);f.style.transform="scale("+s+")";});}' +
         'window.onload=function(){fitAll();setTimeout(function(){window.print();},250);};' +
