@@ -4826,10 +4826,20 @@ if ('serviceWorker' in navigator) {
       }).join('');
       var tfoot = '<tr class="tot"><td colspan="' + (COLS.length - 1) + '">총 합계</td><td class="ctr">' + totQty + '</td></tr>';
       var img = bcDataUrl(boxInvoice);
+      // 세로 A4에 '가로로 회전' 인쇄 → 안드로이드에서 방향 안 눌러도 가로. 박스 하나=한 페이지(넘치면 자동 축소). 2매(사본 페이지분리).
+      var inner =
+        '<div class="fit">' +
+        '<div class="invbar">' + (img ? '<img src="' + img + '"/>' : '') + '<div>' + esc(boxInvoice) + '</div></div>' +
+        '<table><thead>' + thead + '</thead><tbody>' + grp + tbody + tfoot + '</tbody></table>' +
+        '</div>';
       var html = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(boxInvoice) + '</title><style>' +
         '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
-        '@page{size:A4 landscape;margin:8mm 10mm;} html,body{margin:0;width:100%;} body{font-family:"맑은 고딕 Semilight","Malgun Gothic Semilight","Malgun Gothic",sans-serif;color:#000;}' +
-        '.invbar{text-align:center;margin:2px 0 8px;} .invbar img{height:50px;} .invbar div{font-size:13px;font-weight:bold;letter-spacing:1px;}' +
+        '@page{size:A4;margin:0;} html,body{margin:0;padding:0;} body{font-family:"맑은 고딕 Semilight","Malgun Gothic Semilight","Malgun Gothic",sans-serif;color:#000;}' +
+        '.sheet{position:relative;width:210mm;height:297mm;overflow:hidden;page-break-after:always;}' +
+        '.sheet:last-child{page-break-after:auto;}' +
+        '.rot{position:absolute;top:0;left:210mm;width:297mm;height:210mm;padding:7mm 9mm;transform:rotate(90deg);transform-origin:top left;}' +
+        '.fit{transform-origin:top left;}' +   // JS가 한 페이지에 맞게 축소 배율 넣음
+        '.invbar{text-align:center;margin:0 0 6px;} .invbar img{height:46px;} .invbar div{font-size:13px;font-weight:bold;letter-spacing:1px;}' +
         'table{width:100%;border-collapse:collapse;font-size:12px;table-layout:auto;}' +
         'th,td{border:1px solid #bbb;padding:3px 6px;white-space:nowrap;}' +
         'th{background:#D9D9D9!important;text-align:center;font-weight:bold;}' +
@@ -4838,9 +4848,14 @@ if ('serviceWorker' in navigator) {
         'tr.tot td{background:#D9D9D9!important;font-weight:bold;text-align:center;}' +
         'td:nth-child(6){white-space:normal;}' +
         '</style></head><body>' +
-        '<div class="invbar">' + (img ? '<img src="' + img + '"/>' : '') + '<div>' + esc(boxInvoice) + '</div></div>' +
-        '<table><thead>' + thead + '</thead><tbody>' + grp + tbody + tfoot + '</tbody></table>' +
-        '<script>window.onload=function(){setTimeout(function(){window.print();},200);};<\/script></body></html>';
+        '<div class="sheet"><div class="rot">' + inner + '</div></div>' +
+        '<div class="sheet"><div class="rot">' + inner + '</div></div>' +
+        '<script>' +
+        'function fitAll(){var mm=96/25.4,aw=(297-18)*mm,ah=(210-14)*mm;' +
+        'Array.prototype.forEach.call(document.querySelectorAll(".fit"),function(f){f.style.transform="none";' +
+        'var s=Math.min(aw/f.scrollWidth,ah/f.scrollHeight,1);f.style.transform="scale("+s+")";});}' +
+        'window.onload=function(){fitAll();setTimeout(function(){window.print();},250);};' +
+        '<\/script></body></html>';
       var w = window.open('', '_blank');
       if (!w) { alert('팝업이 차단되었습니다. 브라우저에서 팝업을 허용한 뒤 인보이스를 다시 인쇄하세요.\n(운송장: ' + boxInvoice + ')'); return; }
       w.document.write(html); w.document.close();
