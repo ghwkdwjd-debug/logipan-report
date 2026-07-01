@@ -4486,25 +4486,12 @@ if ('serviceWorker' in navigator) {
       var label = (document.getElementById('move-label').value || '').trim();
       var btn = document.getElementById('move-send-btn'); btn.disabled = true; btn.textContent = '📤 전송 중...';
       try {
-        var totalQty = moveState.items.reduce(function (s, it) { return s + (it.qty || 1); }, 0);
-        // 1) scan_sessions 저장 (이동 데이터)
-        var sessionRef = await db.collection('scan_sessions').add({
+        // scan_sessions 저장 (이동 데이터). 작업보고 카드 + 대기 이동건 합류는 관리자 서버가 자동 처리.
+        await db.collection('scan_sessions').add({
           user: name, mode: 'move', label: label || ('재고이동 ' + name),
           items: moveState.items.map(function (it) { return { barcode: it.barcode, qty: it.qty, from_loc: it.from_loc, to_loc: it.to_loc }; }),
           item_count: moveState.items.length, status: 'pending',
           created_at: firebase.firestore.FieldValue.serverTimestamp()
-        });
-        // 2) 작업보고 카드 생성 (관리자 작업보고에서 보이도록 · 입고 스캔과 동일 패턴)
-        await db.collection('field_reports').add({
-          user: name,
-          title: '[재고이동] ' + (label || ('재고이동 ' + name)),
-          work_category: '재고이동',
-          text: '재고이동 스캔 ' + moveState.items.length + '건 / 총 ' + totalQty + '개',
-          date: getFormattedDate(),
-          imageUrl: '', status: '⏳ 처리중', comment_count: 0, has_attached_image: false,
-          timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-          source: 'scan', scan_mode: 'move', scan_session_id: sessionRef.id,
-          scan_item_count: moveState.items.length, scan_quality: 'move'
         });
         feedbackSent(); showToast('✅ 이동 ' + moveState.items.length + '건 전송!');
         moveClear(true);
