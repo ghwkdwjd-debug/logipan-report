@@ -4805,31 +4805,41 @@ if ('serviceWorker' in navigator) {
       catch (e) { return ''; }
     }
     function printBoxInvoice(rows, boxInvoice) {
-      var COLS = [['recipient', '수령자'], ['brand', '브랜드'], ['product_code', '상품코드'], ['name', '상품명'], ['size', '사이즈'], ['barcode', '바코드'], ['qty', '수량']];
+      // 웹 출고 인보이스(build_invoice_xlsx)와 동일 서식: 배정차수/운송장/수령자/브랜드/상품코드/상품명/사이즈명/바코드/수량
+      //   색: 헤더·총합 연회색 · 운송장 연살구 · 상품코드/바코드 연하늘 · 수량 굵게 · 그룹헤더 연연두 · 맑은고딕 Semilight · 가로 폭맞춤
+      var COLS = [['batch', '배정차수'], ['box_invoice', '운송장'], ['recipient', '수령자'], ['brand', '브랜드'],
+                  ['product_code', '상품코드'], ['name', '상품명'], ['size', '사이즈명'], ['barcode', '바코드'], ['qty', '수량']];
       var esc = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
       var totQty = rows.reduce(function (s, r) { return s + (Number(r.qty) || 0); }, 0);
+      var batch = rows.length ? (rows[0].batch || '-') : '-';
+      var cls = function (f) {
+        var c = (f === 'batch' || f === 'box_invoice' || f === 'size' || f === 'qty' || f === 'barcode') ? 'ctr' : '';
+        if (f === 'box_invoice') c += ' peach';
+        if (f === 'product_code' || f === 'barcode') c += ' sky';
+        if (f === 'qty') c += ' qty';
+        return c.trim();
+      };
       var thead = '<tr>' + COLS.map(function (c) { return '<th>' + c[1] + '</th>'; }).join('') + '</tr>';
+      var grp = '<tr class="grp"><td colspan="' + COLS.length + '">배정차수 ' + esc(batch) + '  ·  운송장 ' + esc(boxInvoice) + '</td></tr>';
       var tbody = rows.map(function (r) {
-        return '<tr>' + COLS.map(function (c) {
-          var v = esc(r[c[0]]);
-          var cls = (c[0] === 'barcode' || c[0] === 'product_code') ? 'sky' : '';
-          if (c[0] === 'qty') cls = 'qty ctr';
-          if (c[0] === 'barcode') cls += ' big';
-          return '<td class="' + cls + '">' + v + '</td>';
-        }).join('') + '</tr>';
+        return '<tr>' + COLS.map(function (c) { return '<td class="' + cls(c[0]) + '">' + esc(r[c[0]]) + '</td>'; }).join('') + '</tr>';
       }).join('');
-      var tfoot = '<tr class="tot"><td colspan="' + (COLS.length - 1) + '">합계</td><td class="ctr">' + totQty + '</td></tr>';
+      var tfoot = '<tr class="tot"><td colspan="' + (COLS.length - 1) + '">총 합계</td><td class="ctr">' + totQty + '</td></tr>';
       var img = bcDataUrl(boxInvoice);
       var html = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(boxInvoice) + '</title><style>' +
         '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
-        '@page{size:A4;margin:10mm;} html,body{margin:0;} body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;color:#000;}' +
-        'h3{margin:0 0 6px;font-size:15px;} .inv{text-align:center;margin:4px 0 10px;} .inv img{height:52px;} .inv div{font-size:14px;font-weight:bold;letter-spacing:1px;}' +
-        'table{width:100%;border-collapse:collapse;font-size:11px;} th,td{border:1px solid #999;padding:3px 6px;white-space:nowrap;} th{background:#D9D9D9!important;text-align:center;}' +
-        'td.ctr{text-align:center;} td.sky{background:#DDEBF7!important;} td.big{font-size:12px;font-weight:600;} td.qty{font-weight:bold;} tr.tot td{background:#D9D9D9!important;font-weight:bold;text-align:center;} td:nth-child(4){white-space:normal;}' +
+        '@page{size:A4 landscape;margin:8mm 10mm;} html,body{margin:0;width:100%;} body{font-family:"맑은 고딕 Semilight","Malgun Gothic Semilight","Malgun Gothic",sans-serif;color:#000;}' +
+        '.invbar{text-align:center;margin:2px 0 8px;} .invbar img{height:50px;} .invbar div{font-size:13px;font-weight:bold;letter-spacing:1px;}' +
+        'table{width:100%;border-collapse:collapse;font-size:12px;table-layout:auto;}' +
+        'th,td{border:1px solid #bbb;padding:3px 6px;white-space:nowrap;}' +
+        'th{background:#D9D9D9!important;text-align:center;font-weight:bold;}' +
+        'td.ctr{text-align:center;} td.peach{background:#FCE4D6!important;} td.sky{background:#DDEBF7!important;} td.qty{font-weight:bold;}' +
+        'tr.grp td{background:#E2EFDA!important;font-weight:bold;}' +
+        'tr.tot td{background:#D9D9D9!important;font-weight:bold;text-align:center;}' +
+        'td:nth-child(6){white-space:normal;}' +
         '</style></head><body>' +
-        '<h3>출고 인보이스 · ' + esc(boxInvoice) + ' · 총 ' + totQty + ' PCS</h3>' +
-        '<div class="inv">' + (img ? '<img src="' + img + '"/>' : '') + '<div>' + esc(boxInvoice) + '</div></div>' +
-        '<table><thead>' + thead + '</thead><tbody>' + tbody + tfoot + '</tbody></table>' +
+        '<div class="invbar">' + (img ? '<img src="' + img + '"/>' : '') + '<div>' + esc(boxInvoice) + '</div></div>' +
+        '<table><thead>' + thead + '</thead><tbody>' + grp + tbody + tfoot + '</tbody></table>' +
         '<script>window.onload=function(){setTimeout(function(){window.print();},200);};<\/script></body></html>';
       var w = window.open('', '_blank');
       if (!w) { alert('팝업이 차단되었습니다. 브라우저에서 팝업을 허용한 뒤 인보이스를 다시 인쇄하세요.\n(운송장: ' + boxInvoice + ')'); return; }
